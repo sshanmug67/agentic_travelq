@@ -1,0 +1,108 @@
+# ============================================================================
+# Agentic Travel Dashboard - Application Configuration Example
+# ============================================================================
+# Location: AGENTIC_TRAVELQ/app_config.example.yaml
+#
+# INSTRUCTIONS:
+# 1. Copy this file to app_config.yaml
+# 2. Fill in your API keys in app_config.yaml
+# 3. Add app_config.yaml to .gitignore (NOT this example file)
+#
+# SECURITY NOTE:
+# - This example file should be committed to git (no secrets)
+# - The actual app_config.yaml should NEVER be committed
+# ============================================================================
+
+# --- Application ---
+app:
+  name: "Agentic Travel Dashboard"
+  environment: "development"    # development | staging | production
+  debug: true
+  log_level: "INFO"             # DEBUG | INFO | WARNING | ERROR
+
+# --- API Server ---
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: true                  # Auto-reload on code changes (dev only)
+  prefix: "/api"
+
+# --- CORS ---
+cors:
+  origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+
+# --- Supabase ---
+# Get from: https://supabase.com/dashboard/project/_/settings/api
+supabase:
+  url: null                     # Example: https://xxxxx.supabase.co
+  anon_key: null                # Example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+# --- OpenAI ---
+# Get from: https://platform.openai.com/api-keys
+openai:
+  api_key: null                 # Example: sk-proj-xxxxx
+  llm_model: "gpt-4o-mini"
+  embedding_model: "text-embedding-3-small"
+
+# --- Weather API ---
+# Get from: https://openweathermap.org/api
+weather:
+  api_key: null                 # Example: xxxxxxxxx
+  provider: "openweather"       # openweather | weatherapi
+
+# --- Amadeus API (Flights) ---
+# Get from: https://developers.amadeus.com/
+amadeus:
+  client_id: null               # Example: xxxxx
+  client_secret: null           # Example: xxxxx
+
+# --- Optional External APIs ---
+external_apis:
+  # Get from: https://developers.google.com/maps/documentation/places
+  google_places_key: null
+  
+  # Get from: https://developer.ticketmaster.com/
+  ticketmaster_key: null
+
+# --- Autogen Configuration ---
+autogen:
+  config_list: []               # List of LLM configurations for Autogen
+  cache_seed: 42                # Seed for caching
+  timeout: 120                  # Timeout in seconds
+
+# --- Agent Configuration ---
+agents:
+  flight:
+    enabled: true
+    max_results: 10             # Max flight results to return
+    
+  weather:
+    enabled: true
+    forecast_days: 5            # Number of days to forecast
+    
+  events:
+    enabled: true
+    max_results: 20             # Max events to return
+    
+  places:
+    enabled: true
+    max_results: 20             # Max places to return
+    
+  orchestrator:
+    enabled: true
+    parallel_execution: true    # Run agents in parallel
+
+# --- Rate Limiting ---
+rate_limit:
+  enabled: false
+  requests_per_minute: 60
+  
+# --- Caching ---
+cache:
+  enabled: true
+  ttl_seconds: 300              # 5 minutes default cache
+  flight_ttl: 1800              # 30 minutes for flight data
+  weather_ttl: 3600             # 1 hour for weather data
+  events_ttl: 86400             # 24 hours for events

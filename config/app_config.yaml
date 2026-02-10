@@ -1,0 +1,96 @@
+# ============================================================================
+# Agentic Travel Dashboard - Application Configuration
+# ============================================================================
+# Location: AGENTIC_TRAVELQ/app_config.yaml
+#
+# IMPORTANT: This file may contain secrets (API keys).
+#            Add to .gitignore: app_config.yaml
+#            Use app_config.example.yaml as a template for others.
+# ============================================================================
+
+# --- Application ---
+app:
+  name: "Agentic Travel Dashboard"
+  environment: "development"    # development | staging | production
+  debug: true
+  log_level: "INFO"             # DEBUG | INFO | WARNING | ERROR
+
+# --- API Server ---
+api:
+  host: "0.0.0.0"
+  port: 8000
+  reload: true                  # Auto-reload on code changes (dev only)
+  prefix: "/api"
+
+# --- CORS ---
+cors:
+  origins:
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+
+# --- Supabase ---
+supabase:
+  url: null
+  anon_key: null
+
+# --- OpenAI ---
+openai:
+  api_key: null
+  llm_model: "gpt-4o-mini"
+  embedding_model: "text-embedding-3-small"
+
+# --- Weather API ---
+weather:
+  api_key: null
+  provider: "openweather"       # openweather | weatherapi
+
+# --- Amadeus API (Flights) ---
+amadeus:
+  client_id: null               # Also accepts AMADEUS_API_Key from env
+  client_secret: null           # Also accepts AMADEUS_API_Secret from env
+
+# --- Optional External APIs ---
+external_apis:
+  google_places_key: null
+  ticketmaster_key: null
+
+# --- Autogen Configuration ---
+autogen:
+  config_list: []               # List of LLM configurations for Autogen
+  cache_seed: 42                # Seed for caching
+  timeout: 120                  # Timeout in seconds
+
+# --- Agent Configuration ---
+agents:
+  flight:
+    enabled: true
+    max_results: 10             # Max flight results to return
+    
+  weather:
+    enabled: true
+    forecast_days: 5            # Number of days to forecast
+    
+  events:
+    enabled: true
+    max_results: 20             # Max events to return
+    
+  places:
+    enabled: true
+    max_results: 20             # Max places to return
+    
+  orchestrator:
+    enabled: true
+    parallel_execution: true    # Run agents in parallel
+
+# --- Rate Limiting ---
+rate_limit:
+  enabled: false
+  requests_per_minute: 60
+  
+# --- Caching ---
+cache:
+  enabled: true
+  ttl_seconds: 300              # 5 minutes default cache
+  flight_ttl: 1800              # 30 minutes for flight data
+  weather_ttl: 3600             # 1 hour for weather data
+  events_ttl: 86400             # 24 hours for events

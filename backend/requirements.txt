@@ -1,0 +1,24 @@
+fastapi==0.109.0
+uvicorn[standard]==0.27.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+pyautogen==0.2.0
+requests==2.31.0
+aiohttp==3.9.0
+python-multipart==0.0.6
+amadeus==8.0.0
+httpx==0.26.0
+autogen
+aiohttp
+python-dateutil>=2.8.2
+openai
+
+# Configuration management
+pyyaml==6.0.1
+
+# Optional: For production deployment
+gunicorn==21.2.0
+
+# Optional: For enhanced logging
+colorlog==6.8.0

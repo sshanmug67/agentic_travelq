@@ -1,0 +1,162 @@
+# User provides preferences
+user_preferences = {
+    "destination": "Tokyo",
+    "dates": "March 15-20, 2026",
+    "budget": "$3000",
+    "flight_prefs": {
+        "carriers": ["ANA", "JAL"],
+        "max_hops": 1,
+        "prefer": "daytime"
+    },
+    "hotel_prefs": {
+        "location": "near Shibuya",
+        "rating": "4+ stars"
+    },
+    "activities": ["historical temples", "modern tech areas", "local food tours"],
+    "entertainment_hours_per_day": 6,
+    "transport_pref": "metro > cab"
+}
+
+# Create GroupChat
+groupchat = GroupChat(
+    agents=[user_proxy, orchestrator, flight_agent, hotel_agent, 
+            activity_agent, weather_agent, transport_agent],
+    messages=[],
+    max_round=30,
+    speaker_selection_method="auto"
+)
+
+manager = GroupChatManager(groupchat=groupchat)
+
+# Start planning
+user_proxy.initiate_chat(
+    manager,
+    message=f"Plan my trip with these preferences: {user_preferences}"
+)
+```
+
+### **Conversation Flow:**
+```
+1. User → Orchestrator: "Plan my Tokyo trip with these preferences..."
+
+2. Orchestrator → FlightAgent: "Find flights to Tokyo March 15-20, 
+   prefer ANA/JAL, daytime, max 1 hop, budget ~$800"
+
+3. FlightAgent: [calls flight_search_tool]
+   Returns: "3 flight options: ANA direct $750, JAL 1-stop $680..."
+
+4. Orchestrator → HotelAgent: "Find hotels near Shibuya, 4+ stars,
+   check-in March 15 (considering flight arrival time), 5 nights, budget ~$800"
+
+5. HotelAgent: [calls hotel_search_tool]
+   Returns: "3 hotel options: Hotel A $160/night, Hotel B $140/night..."
+
+6. Orchestrator → WeatherAgent: "What's Tokyo weather March 15-20?"
+
+7. WeatherAgent: [calls weather_tool]
+   Returns: "March temps 10-15°C, light rain expected March 17-18..."
+
+8. Orchestrator → ActivityAgent: "Find historical temples, tech areas,
+   food tours. Need 6 hours activities/day. Avoid outdoor activities March 17-18 (rain)"
+
+9. ActivityAgent: [calls places_search_tool, theater_booking_tool]
+   Returns: "Senso-ji Temple (2hrs), Akihabara tech district (3hrs)..."
+
+10. Orchestrator → TransportAgent: "How to get between Shibuya hotel,
+    Senso-ji, Akihabara? Prefer metro."
+
+11. TransportAgent: [calls transit_routes_tool]
+    Returns: "Shibuya→Senso-ji: Metro Ginza Line, 30min, $2..."
+
+12. Orchestrator: [synthesizes all information]
+    Creates final itinerary respecting:
+    - Flight arrival/departure times
+    - Hotel location and check-in
+    - Weather (indoor activities on rainy days)
+    - Daily 6-hour entertainment limit
+    - Transportation preferences
+    - Budget allocation
+
+13. Orchestrator → User: "Here's your complete itinerary..."
+
+
+flight_agent = AssistantAgent(
+    name="FlightAgent",
+    system_message="""You are a flight booking expert. 
+    Use flight search tools to find options matching:
+    - Preferred carriers
+    - Maximum hops
+    - Day/night preferences
+    - Budget constraints
+    Return top 3 flight options with prices, durations, and layovers.""",
+    llm_config={
+        "model": "gpt-4",
+        "functions": [flight_search_tool, check_flight_prices_tool]
+    }
+)
+
+
+hotel_agent = AssistantAgent(
+    name="HotelAgent",
+    system_message="""You are a hotel booking expert.
+    Consider: location, price range, amenities, proximity to attractions.
+    Return hotel options with prices, ratings, and distance from city center.""",
+    llm_config={
+        "model": "gpt-4",
+        "functions": [hotel_search_tool, check_availability_tool]
+    }
+)
+
+
+activity_agent = AssistantAgent(
+    name="ActivityAgent",
+    system_message="""You are a local activities expert.
+    Find: historical sites, theaters, museums, local attractions.
+    Consider: opening hours, ticket prices, time needed for each.
+    Respect user's available entertainment time per day.""",
+    llm_config={
+        "model": "gpt-4",
+        "functions": [places_search_tool, theater_booking_tool, attractions_tool]
+    }
+)
+
+
+weather_agent = AssistantAgent(
+    name="WeatherAgent",
+    system_message="""You provide weather insights.
+    Advise on: what to pack, best times for outdoor activities,
+    weather-dependent activity recommendations.""",
+    llm_config={
+        "model": "gpt-4",
+        "functions": [weather_forecast_tool]
+    }
+)
+
+
+transport_agent = AssistantAgent(
+    name="TransportAgent",
+    system_message="""You are a local transportation expert.
+    Recommend: metro/bus routes, cab estimates, walking distances.
+    Match user's transportation preferences.""",
+    llm_config={
+        "model": "gpt-4",
+        "functions": [transit_routes_tool, cab_pricing_tool]
+    }
+)
+
+orchestrator = AssistantAgent(
+    name="TravelOrchestrator",
+    system_message="""You are the master travel planner.
+    
+    Your job:
+    1. Analyze user preferences and constraints
+    2. Coordinate with specialized agents to gather information
+    3. Ensure all choices work together (flight times → hotel check-in, activities fit in schedule)
+    4. Optimize the itinerary for budget and time
+    5. Handle conflicts (e.g., flight arrives too late for planned activity)
+    6. Create a coherent day-by-day itinerary
+    
+    You DO NOT call tools directly - you delegate to specialist agents.
+    You synthesize their responses into a final plan.""",
+    llm_config={"model": "gpt-4"}
+)

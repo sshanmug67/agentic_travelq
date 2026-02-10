@@ -1,0 +1,205 @@
+travel-dashboard/
+│
+├── backend/                          # Python/Autogen backend
+│   ├── agents/                       # Autogen agents
+│   │   ├── __init__.py
+│   │   ├── base_agent.py            # Base agent class
+│   │   ├── flight_agent.py          # Amadeus flight searches
+│   │   ├── weather_agent.py         # Weather forecasts
+│   │   ├── events_agent.py          # Event searches
+│   │   ├── places_agent.py          # Maps & places
+│   │   ├── orchestrator_agent.py    # Main coordinator
+│   │   └── budget_agent.py          # Optional: cost optimization
+│   │
+│   ├── services/                     # API integrations
+│   │   ├── __init__.py
+│   │   ├── amadeus_service.py       # Amadeus client wrapper
+│   │   ├── weather_service.py       # OpenWeather/WeatherAPI
+│   │   ├── events_service.py        # Ticketmaster/Eventbrite
+│   │   ├── places_service.py        # Google Places/Mapbox
+│   │   └── cache_service.py         # Redis/in-memory cache
+│   │
+│   ├── api/                          # FastAPI/Flask routes
+│   │   ├── __init__.py
+│   │   ├── main.py                  # API entry point
+│   │   ├── routes/
+│   │   │   ├── __init__.py
+│   │   │   ├── trips.py             # Trip endpoints
+│   │   │   ├── search.py            # Search endpoints
+│   │   │   ├── websocket.py         # Real-time updates
+│   │   │   └── health.py            # Health checks
+│   │   └── middleware/
+│   │       ├── __init__.py
+│   │       ├── auth.py              # Authentication
+│   │       └── rate_limit.py        # Rate limiting
+│   │
+│   ├── models/                       # Data models
+│   │   ├── __init__.py
+│   │   ├── trip.py                  # Trip data structure
+│   │   ├── flight.py                # Flight model
+│   │   ├── weather.py               # Weather model
+│   │   ├── event.py                 # Event model
+│   │   └── place.py                 # Place model
+│   │
+│   ├── utils/                        # Utility functions
+│   │   ├── __init__.py
+│   │   ├── async_helpers.py         # Async utilities
+│   │   ├── date_helpers.py          # Date formatting
+│   │   ├── validators.py            # Input validation
+│   │   └── formatters.py            # Response formatting
+│   │
+│   ├── config/                       # Configuration
+│   │   ├── __init__.py
+│   │   ├── settings.py              # App settings
+│   │   └── agents_config.py         # Agent configurations
+│   │
+│   ├── tests/                        # Backend tests
+│   │   ├── __init__.py
+│   │   ├── test_agents/
+│   │   ├── test_services/
+│   │   └── test_api/
+│   │
+│   ├── requirements.txt              # Python dependencies
+│   ├── pyproject.toml               # Poetry config (optional)
+│   └── main.py                      # Backend entry point
+│
+├── frontend/                         # React frontend
+│   ├── public/
+│   │   ├── index.html
+│   │   ├── favicon.ico
+│   │   └── assets/
+│   │       └── images/
+│   │
+│   ├── src/
+│   │   ├── components/              # Reusable components
+│   │   │   ├── common/              # Shared UI components
+│   │   │   │   ├── Button.jsx
+│   │   │   │   ├── Card.jsx
+│   │   │   │   ├── Loading.jsx
+│   │   │   │   └── ErrorBoundary.jsx
+│   │   │   │
+│   │   │   ├── flight/              # Flight components
+│   │   │   │   ├── FlightCard.jsx
+│   │   │   │   ├── FlightSearch.jsx
+│   │   │   │   └── FlightTimeline.jsx
+│   │   │   │
+│   │   │   ├── weather/             # Weather components
+│   │   │   │   ├── WeatherCard.jsx
+│   │   │   │   ├── WeatherTimeline.jsx
+│   │   │   │   └── WeatherIcon.jsx
+│   │   │   │
+│   │   │   ├── events/              # Events components
+│   │   │   │   ├── EventCard.jsx
+│   │   │   │   ├── EventCarousel.jsx
+│   │   │   │   └── EventFilter.jsx
+│   │   │   │
+│   │   │   ├── map/                 # Map components
+│   │   │   │   ├── InteractiveMap.jsx
+│   │   │   │   ├── MapMarker.jsx
+│   │   │   │   └── RouteLayer.jsx
+│   │   │   │
+│   │   │   └── itinerary/           # Itinerary components
+│   │   │       ├── ItineraryView.jsx
+│   │   │       ├── DayPlan.jsx
+│   │   │       └── SuggestionCard.jsx
+│   │   │
+│   │   ├── pages/                   # Page components
+│   │   │   ├── Home.jsx
+│   │   │   ├── Dashboard.jsx
+│   │   │   ├── Search.jsx
+│   │   │   ├── TripDetails.jsx
+│   │   │   └── NotFound.jsx
+│   │   │
+│   │   ├── layouts/                 # Layout components
+│   │   │   ├── MainLayout.jsx
+│   │   │   ├── DashboardLayout.jsx
+│   │   │   └── AuthLayout.jsx
+│   │   │
+│   │   ├── hooks/                   # Custom React hooks
+│   │   │   ├── useWebSocket.js
+│   │   │   ├── useTripData.js
+│   │   │   ├── useWeather.js
+│   │   │   ├── useEvents.js
+│   │   │   └── useMap.js
+│   │   │
+│   │   ├── services/                # API client services
+│   │   │   ├── api.js               # Axios/fetch config
+│   │   │   ├── tripService.js
+│   │   │   ├── searchService.js
+│   │   │   └── websocketService.js
+│   │   │
+│   │   ├── store/                   # State management (Redux/Zustand)
+│   │   │   ├── index.js
+│   │   │   ├── slices/
+│   │   │   │   ├── tripSlice.js
+│   │   │   │   ├── weatherSlice.js
+│   │   │   │   ├── eventsSlice.js
+│   │   │   │   └── userSlice.js
+│   │   │   └── middleware/
+│   │   │
+│   │   ├── utils/                   # Utility functions
+│   │   │   ├── dateFormatter.js
+│   │   │   ├── priceFormatter.js
+│   │   │   ├── mapHelpers.js
+│   │   │   └── validators.js
+│   │   │
+│   │   ├── styles/                  # Global styles
+│   │   │   ├── globals.css
+│   │   │   ├── variables.css
+│   │   │   └── tailwind.css
+│   │   │
+│   │   ├── constants/               # Constants
+│   │   │   ├── api.js
+│   │   │   ├── routes.js
+│   │   │   └── config.js
+│   │   │
+│   │   ├── types/                   # TypeScript types (if using TS)
+│   │   │   ├── trip.ts
+│   │   │   ├── flight.ts
+│   │   │   ├── weather.ts
+│   │   │   └── event.ts
+│   │   │
+│   │   ├── App.jsx                  # Main App component
+│   │   ├── main.jsx                 # Entry point
+│   │   └── router.jsx               # Route configuration
+│   │
+│   ├── package.json
+│   ├── vite.config.js               # or webpack.config.js
+│   ├── tailwind.config.js
+│   ├── postcss.config.js
+│   └── .env.example
+│
+├── shared/                           # Shared code (optional)
+│   ├── schemas/                     # JSON schemas
+│   │   ├── trip.json
+│   │   └── event.json
+│   └── types/                       # Shared TypeScript types
+│
+├── docs/                            # Documentation
+│   ├── api/                         # API documentation
+│   │   ├── endpoints.md
+│   │   └── websocket.md
+│   ├── agents/                      # Agent documentation
+│   │   └── architecture.md
+│   └── setup.md                     # Setup instructions
+│
+├── scripts/                         # Utility scripts
+│   ├── setup.sh                     # Initial setup
+│   ├── seed_data.py                 # Seed test data
+│   └── deploy.sh                    # Deployment script
+│
+├── docker/                          # Docker configuration
+│   ├── backend.Dockerfile
+│   ├── frontend.Dockerfile
+│   └── nginx.conf
+│
+├── .github/                         # GitHub workflows
+│   └── workflows/
+│       ├── backend-tests.yml
+│       └── frontend-tests.yml
+│
+├── docker-compose.yml               # Docker compose for local dev
+├── .gitignore
+├── .env.example                     # Environment variables template
+├── README.md
+└── LICENSE
