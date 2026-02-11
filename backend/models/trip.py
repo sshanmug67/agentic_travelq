@@ -122,6 +122,63 @@ class Flight(BaseModel):
         description="Cabin baggage allowance"
     )
 
+
+# ============================================================================
+# HOTEL MODELS
+# ============================================================================
+
+class HotelAmenities(BaseModel):
+    """Hotel amenities details"""
+    wifi: bool = False
+    parking: bool = False
+    pool: bool = False
+    gym: bool = False
+    restaurant: bool = False
+    room_service: bool = False
+    air_conditioning: bool = False
+    spa: bool = False
+    bar: bool = False
+    breakfast: bool = False
+
+class Hotel(BaseModel):
+    """Hotel information model"""
+    id: str
+    name: str
+    hotel_code: str
+    
+    # Location
+    latitude: float
+    longitude: float
+    address: str
+    city: Optional[str] = None
+    distance_from_center: Optional[float] = None  # km
+    
+    # Ratings & Reviews
+    rating: Optional[float] = None  # 0-5 stars
+    review_count: Optional[int] = None
+    
+    # Pricing
+    price_per_night: float
+    total_price: float
+    currency: str = "USD"
+    
+    # Stay details
+    check_in_date: str
+    check_out_date: str
+    num_nights: int
+    room_type: Optional[str] = None
+    
+    # Details
+    amenities: Optional[HotelAmenities] = None
+    description: Optional[str] = None
+    photos: Optional[List[str]] = []
+    booking_url: Optional[str] = None
+    
+    # Additional info
+    property_type: Optional[str] = None  # hotel, apartment, resort, etc.
+    
+
+
 class Weather(BaseModel):
     """Weather forecast model"""
     date: str

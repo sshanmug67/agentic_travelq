@@ -290,6 +290,271 @@ class AmadeusService:
         
         return mock_flights
 
+    #------------------------------------------------------------------#
+    #      HOTELS API                                                  #
+    #------------------------------------------------------------------#
+
+    def search_hotels(
+        self,
+        city_code: str,
+        check_in_date: str,
+        check_out_date: str,
+        adults: int = 1,
+        radius: int = 5,
+        radius_unit: str = "KM",
+        ratings: Optional[List[str]] = None,
+        max_results: int = 20
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for hotels in a city using Amadeus Hotel Search API
+        
+        Args:
+            city_code: City IATA code (e.g., 'LON' for London)
+            check_in_date: Check-in date (YYYY-MM-DD)
+            check_out_date: Check-out date (YYYY-MM-DD)
+            adults: Number of adults
+            radius: Search radius
+            radius_unit: Unit for radius (KM or MILE)
+            ratings: Hotel star ratings to filter (e.g., ['3', '4', '5'])
+            max_results: Maximum number of results
+            
+        Returns:
+            List of hotel dictionaries
+        """
+        if not self.client:
+            logger.warning("⚠️ Amadeus client not available - returning mock hotels")
+            return self._get_mock_hotels(city_code, check_in_date, check_out_date)
+        
+        try:
+            logger.info(f"🏨 Searching hotels in {city_code} ({check_in_date} to {check_out_date})")
+            
+            # Build API parameters
+            params = {
+                "cityCode": city_code,
+                "checkInDate": check_in_date,
+                "checkOutDate": check_out_date,
+                "adults": adults,
+                "radius": radius,
+                "radiusUnit": radius_unit,
+                "currency": "USD",
+                "bestRateOnly": True
+            }
+            
+            # Add ratings filter if provided
+            if ratings:
+                params["ratings"] = ratings
+            
+            # Call Amadeus Hotel Search API
+            response = self.client.shopping.hotel_offers_search.get(**params)
+            
+            logger.info(f"✅ Amadeus Hotels API returned {len(response.data)} offers")
+            
+            # Parse response
+            hotels = self._parse_hotel_response(
+                response.data,
+                check_in_date,
+                check_out_date
+            )
+            
+            # Limit results
+            return hotels[:max_results]
+            
+        except Exception as e:
+            logger.error(f"❌ Amadeus Hotels API error: {e}")
+            logger.exception("Full traceback:")
+            logger.info("⚠️ Falling back to mock hotel data")
+            return self._get_mock_hotels(city_code, check_in_date, check_out_date)
+
+    def _parse_hotel_response(
+        self,
+        data: List[Dict],
+        check_in: str,
+        check_out: str
+    ) -> List[Dict[str, Any]]:
+        """Parse Amadeus hotel response into simplified format"""
+        if not data:
+            return []
+        
+        from datetime import datetime
+        
+        # Calculate number of nights
+        check_in_dt = datetime.fromisoformat(check_in)
+        check_out_dt = datetime.fromisoformat(check_out)
+        num_nights = (check_out_dt - check_in_dt).days
+        
+        hotels = []
+        
+        for offer in data:
+            try:
+                hotel_info = offer.get('hotel', {})
+                offer_info = offer.get('offers', [{}])[0]
+                price_info = offer_info.get('price', {})
+                
+                # Extract amenities
+                amenities_raw = hotel_info.get('amenities', [])
+                amenities = {
+                    "wifi": "WIFI" in amenities_raw or "INTERNET" in amenities_raw,
+                    "parking": "PARKING" in amenities_raw,
+                    "pool": "SWIMMING_POOL" in amenities_raw or "POOL" in amenities_raw,
+                    "gym": "FITNESS_CENTER" in amenities_raw or "GYM" in amenities_raw,
+                    "restaurant": "RESTAURANT" in amenities_raw,
+                    "room_service": "ROOM_SERVICE" in amenities_raw,
+                    "air_conditioning": "AIR_CONDITIONING" in amenities_raw,
+                    "spa": "SPA" in amenities_raw,
+                    "bar": "BAR" in amenities_raw,
+                    "breakfast": "BREAKFAST" in amenities_raw
+                }
+                
+                hotel = {
+                    "id": offer.get('id', str(uuid.uuid4())),
+                    "name": hotel_info.get('name', 'Unknown Hotel'),
+                    "hotel_code": hotel_info.get('hotelId', ''),
+                    "latitude": float(hotel_info.get('latitude', 0)),
+                    "longitude": float(hotel_info.get('longitude', 0)),
+                    "address": hotel_info.get('address', {}).get('lines', [''])[0] if hotel_info.get('address') else '',
+                    "city": hotel_info.get('address', {}).get('cityName', ''),
+                    "distance_from_center": hotel_info.get('distanceFromCenter'),
+                    "rating": hotel_info.get('rating'),
+                    "price_per_night": float(price_info.get('total', 0)) / num_nights if num_nights > 0 else 0,
+                    "total_price": float(price_info.get('total', 0)),
+                    "currency": price_info.get('currency', 'USD'),
+                    "check_in_date": check_in,
+                    "check_out_date": check_out,
+                    "num_nights": num_nights,
+                    "room_type": offer_info.get('room', {}).get('typeEstimated', {}).get('category'),
+                    "amenities": amenities,
+                    "description": offer_info.get('room', {}).get('description', {}).get('text'),
+                    "property_type": hotel_info.get('type')
+                }
+                
+                hotels.append(hotel)
+                logger.info(f"   ✓ {hotel['name']} - ${hotel['total_price']:.2f} ({num_nights} nights)")
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Error parsing hotel offer: {e}")
+                continue
+        
+        return hotels
+
+    def _get_mock_hotels(
+        self,
+        city_code: str,
+        check_in: str,
+        check_out: str
+    ) -> List[Dict[str, Any]]:
+        """Generate mock hotel data"""
+        from datetime import datetime
+        
+        logger.info("📝 Generating mock hotel data")
+        
+        # Calculate nights
+        check_in_dt = datetime.fromisoformat(check_in)
+        check_out_dt = datetime.fromisoformat(check_out)
+        num_nights = (check_out_dt - check_in_dt).days
+        
+        mock_hotels = [
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Grand Plaza Hotel",
+                "hotel_code": "HOTEL001",
+                "latitude": 51.5074,
+                "longitude": -0.1278,
+                "address": "123 Main Street",
+                "city": city_code,
+                "distance_from_center": 2.5,
+                "rating": 4.5,
+                "price_per_night": 150.0,
+                "total_price": 150.0 * num_nights,
+                "currency": "USD",
+                "check_in_date": check_in,
+                "check_out_date": check_out,
+                "num_nights": num_nights,
+                "room_type": "Deluxe Room",
+                "amenities": {
+                    "wifi": True,
+                    "parking": True,
+                    "pool": True,
+                    "gym": True,
+                    "restaurant": True,
+                    "room_service": True,
+                    "air_conditioning": True,
+                    "spa": False,
+                    "bar": True,
+                    "breakfast": True
+                },
+                "description": "Luxury hotel in the heart of the city",
+                "property_type": "HOTEL"
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "City View Inn",
+                "hotel_code": "HOTEL002",
+                "latitude": 51.5074,
+                "longitude": -0.1278,
+                "address": "456 Park Avenue",
+                "city": city_code,
+                "distance_from_center": 1.2,
+                "rating": 4.0,
+                "price_per_night": 120.0,
+                "total_price": 120.0 * num_nights,
+                "currency": "USD",
+                "check_in_date": check_in,
+                "check_out_date": check_out,
+                "num_nights": num_nights,
+                "room_type": "Standard Room",
+                "amenities": {
+                    "wifi": True,
+                    "parking": False,
+                    "pool": False,
+                    "gym": True,
+                    "restaurant": True,
+                    "room_service": False,
+                    "air_conditioning": True,
+                    "spa": False,
+                    "bar": False,
+                    "breakfast": True
+                },
+                "description": "Modern hotel with city views",
+                "property_type": "HOTEL"
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "name": "Budget Stay Suites",
+                "hotel_code": "HOTEL003",
+                "latitude": 51.5074,
+                "longitude": -0.1278,
+                "address": "789 Budget Street",
+                "city": city_code,
+                "distance_from_center": 5.0,
+                "rating": 3.5,
+                "price_per_night": 80.0,
+                "total_price": 80.0 * num_nights,
+                "currency": "USD",
+                "check_in_date": check_in,
+                "check_out_date": check_out,
+                "num_nights": num_nights,
+                "room_type": "Economy Room",
+                "amenities": {
+                    "wifi": True,
+                    "parking": True,
+                    "pool": False,
+                    "gym": False,
+                    "restaurant": False,
+                    "room_service": False,
+                    "air_conditioning": True,
+                    "spa": False,
+                    "bar": False,
+                    "breakfast": False
+                },
+                "description": "Affordable accommodation",
+                "property_type": "HOTEL"
+            }
+        ]
+        
+        logger.info(f"✅ Generated {len(mock_hotels)} mock hotels")
+        return mock_hotels
+
+
 
 # ============================================================================
 # SINGLETON INSTANCE - LAZY INITIALIZATION

@@ -15,6 +15,8 @@ import openai
 
 from autogen import GroupChat, GroupChatManager
 
+from agents.flight_agent import create_flight_agent
+from agents.hotel_agent import create_hotel_agent
 
 class TravelOrchestratorAgent(TravelQBaseAgent):
     """
@@ -61,6 +63,8 @@ Instead, you delegate to specialized agents and coordinate their results.
         
         agents_needed = []
         
+        trip_duration = self.calculate_trip_duration(preferences)
+
         # Weather: Always useful if enabled
         if settings.weather_agent_enabled:
             agents_needed.append("weather")
@@ -73,8 +77,16 @@ Instead, you delegate to specialized agents and coordinate their results.
         else:
             log_agent_raw("  ✗ Flight agent: SKIPPED (short trip or disabled)", agent_name="OrchestratorAgent")
         
+
+        # Hotels: Needed for overnight stays
+        if settings.hotel_agent_enabled and trip_duration >= 1:
+            agents_needed.append("hotel")
+            log_agent_raw(f"  ✓ Hotel agent: NEEDED ({trip_duration} night stay)", agent_name="OrchestratorAgent")
+        else:
+            log_agent_raw("  ✗ Hotel agent: SKIPPED (day trip or disabled)", agent_name="OrchestratorAgent")
+
+
         # Events: Useful for trips >= 3 days
-        trip_duration = self.calculate_trip_duration(preferences)
         if settings.events_agent_enabled and trip_duration >= 3:
             agents_needed.append("events")
             log_agent_raw(f"  ✓ Events agent: NEEDED ({trip_duration} day trip)", agent_name="OrchestratorAgent")
@@ -116,10 +128,14 @@ Instead, you delegate to specialized agents and coordinate their results.
         agents = []
         
         if "flight" in agents_needed:
-            from agents.flight_agent import create_flight_agent
             agents.append(create_flight_agent(trip_id=trip_id, trip_storage=trip_storage))
             log_agent_raw("  ✓ FlightAgent created with storage", agent_name="OrchestratorAgent")
         
+        if "hotel" in agents_needed:
+            agents.append(create_hotel_agent(trip_id=trip_id, trip_storage=trip_storage))
+            log_agent_raw("  ✓ HotelAgent created with storage", agent_name="OrchestratorAgent")
+
+
         # if "weather" in agents_needed:
         #     from agents.weather_agent import create_weather_agent
         #     agents.append(create_weather_agent())

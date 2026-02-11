@@ -91,6 +91,8 @@ class Settings:
         self.flight_agent_enabled: bool = True
         self.flight_agent_max_results: int = 10
         
+        self.hotel_agent_enabled: bool = True
+        
         self.weather_agent_enabled: bool = True
         self.weather_agent_forecast_days: int = 5
         
