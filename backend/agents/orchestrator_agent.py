@@ -3,8 +3,7 @@ Smart Orchestrator Agent - Dynamic Agent Selection with Storage
 Location: backend/agents/orchestrator_agent.py
 """
 from typing import List, Dict, Any
-from agents.base_agent import TravelQBaseAgent
-from agents.user_proxy_agent import TravelQUserProxy
+
 from services.storage.inmemory_storage import get_trip_storage
 from utils.logging_config import log_agent_raw, log_agent_json
 from config.settings import settings
@@ -15,8 +14,12 @@ import openai
 
 from autogen import GroupChat, GroupChatManager
 
+from agents.base_agent import TravelQBaseAgent
+from agents.user_proxy_agent import TravelQUserProxy
 from agents.flight_agent import create_flight_agent
 from agents.hotel_agent import create_hotel_agent
+from agents.weather_agent import create_weather_agent
+from agents.places_agent import create_places_agent
 
 class TravelOrchestratorAgent(TravelQBaseAgent):
     """
@@ -136,10 +139,13 @@ Instead, you delegate to specialized agents and coordinate their results.
             log_agent_raw("  ✓ HotelAgent created with storage", agent_name="OrchestratorAgent")
 
         if "weather" in agents_needed:
-            from agents.weather_agent import create_weather_agent
             agents.append(create_weather_agent(trip_id=trip_id, trip_storage=trip_storage))
             log_agent_raw("  ✓ WeatherAgent created with storage", agent_name="OrchestratorAgent")
         
+        if "places" in agents_needed:
+            agents.append(create_places_agent(trip_id=trip_id, trip_storage=trip_storage))
+            log_agent_raw("  ✓ PlacesAgent created with storage", agent_name="OrchestratorAgent")
+
         # if "events" in agents_needed:
         #     from agents.events_agent import create_events_agent
         #     agents.append(create_events_agent())

@@ -1,411 +1,421 @@
 """
-Mock Places Agent - Returns Structured Mock Data
+Places Agent - Real Implementation using Google Places API (New)
 Location: backend/agents/places_agent.py
 
-This is a MOCK agent for testing. Returns realistic place/attraction data without calling real APIs.
-Replace with real Google Places API integration later.
+Searches for restaurants, attractions, shopping, museums, parks, etc.
 """
-import json
-from typing import Dict, Any, List
-import random
+import time
+from typing import Dict, Any, List, Optional
+from datetime import datetime
 
 from agents.base_agent import TravelQBaseAgent
+from services.storage.storage_base import TripStorageInterface
+from services.google_places_service import get_google_places_service
 from models.trip import Place
+
 from utils.logging_config import log_agent_raw, log_agent_json
+from config.settings import settings
+import openai
 
 
 class PlacesAgent(TravelQBaseAgent):
     """
-    Mock Places Agent - Returns structured place/attraction data
+    Places Agent - Finds restaurants, attractions, and points of interest
     
-    For testing purposes only. Returns realistic mock places.
+    Uses Google Places API (New) for real data
     """
     
-    def __init__(self, **kwargs):
+    # Category mappings
+    CATEGORY_TYPES = {
+        "restaurants": ["restaurant", "cafe", "bar"],
+        "attractions": ["tourist_attraction", "museum", "art_gallery"],
+        "shopping": ["shopping_mall", "department_store", "market"],
+        "nature": ["park", "botanical_garden", "hiking_area"],
+        "culture": ["museum", "art_gallery", "performing_arts_theater"],
+        "entertainment": ["movie_theater", "amusement_park", "casino"]
+    }
+    
+    def __init__(self, trip_id: str, trip_storage: TripStorageInterface, **kwargs):
         system_message = """
-You are a Places & Attractions Agent specializing in finding interesting locations.
+You are a Places & Attractions Expert helping travelers discover amazing locations.
 
 Your job:
-1. Find restaurants, attractions, landmarks, shopping areas
-2. Consider user interests and trip pace
-3. Include ratings, addresses, opening hours
-4. Provide variety (mix of popular and hidden gems)
+1. Find the best restaurants, attractions, and activities
+2. Consider user interests and preferences
+3. Provide variety (mix of popular and hidden gems)
+4. Include practical details (ratings, hours, prices)
 
-Always return results in structured format with detailed information.
+Be enthusiastic, knowledgeable, and helpful!
 """
+        
         super().__init__(
-            name="PlacesAgent",                    # ✅ Add this
-            llm_config=self.create_llm_config(),        # ✅ Add this
+            name="PlacesAgent",
+            llm_config=TravelQBaseAgent.create_llm_config(),
             agent_type="PlacesAgent",
             system_message=system_message,
-            description="Finds restaurants, attractions, and points of interest",  # ✅ Add this
+            description="Finds restaurants, attractions, and points of interest",
             **kwargs
         )
         
-        log_agent_raw("📍 PlacesAgent initialized (MOCK MODE)", agent_name="PlacesAgent")
+        # Storage
+        self.trip_id = trip_id
+        self.trip_storage = trip_storage
+        
+        # API Service
+        self.google_places = get_google_places_service()
+        
+        log_agent_raw("📍 PlacesAgent initialized", agent_name="PlacesAgent")
+        log_agent_raw("   ✓ Google Places service", agent_name="PlacesAgent")
     
     def generate_reply(
         self,
         messages: List[Dict[str, Any]] = None,
         sender: Any = None,
-        config: Any = None,
-    ) -> str:  # ✅ Fixed return type
-        """
-        Generate place search results
+        config: Any = None
+    ) -> str:
+        """Generate reply with place search results"""
+        log_agent_raw("🔍 PlacesAgent processing request...", agent_name="PlacesAgent")
         
-        Returns structured mock data
-        """
-        log_agent_raw("🔍 Searching for places (mock data)...", agent_name="PlacesAgent")
-        
-        # ✅ ADD THIS - Log incoming message
+        # Log incoming message
         if messages and len(messages) > 0:
             last_message = messages[-1].get("content", "")
             sender_name = sender.name if sender and hasattr(sender, 'name') else "Unknown"
-            self.log_full_conversation(
+            self.log_conversation_message(
                 message_type="INCOMING",
                 content=last_message,
-                sender=sender_name
+                sender=sender_name,
+                truncate=500
             )
+        
+        # Get preferences
+        preferences = self.trip_storage.get_preferences(self.trip_id)
+        
+        if not preferences:
+            error_msg = f"Could not find preferences for trip {self.trip_id}"
+            log_agent_raw(f"❌ {error_msg}", agent_name="PlacesAgent")
+            return self.signal_completion(f"Error: {error_msg}")
+        
+        log_agent_raw(f"✅ Retrieved preferences for trip {self.trip_id}", agent_name="PlacesAgent")
+        
+        try:
+            start_time = time.time()
+            
+            # Determine which categories to search based on interests
+            categories_to_search = self._determine_categories(preferences)
+            
+            # Search places
+            places_by_category = self._search_places_complete(
+                destination=preferences.destination,
+                categories=categories_to_search,
+                min_rating=3.5
+            )
+            
+            api_duration = time.time() - start_time
+            
+            # Flatten all places
+            all_places = []
+            for category_places in places_by_category.values():
+                all_places.extend(category_places)
+            
+            log_agent_raw(f"✅ Search complete: {len(all_places)} places in {api_duration:.2f}s", 
+                         agent_name="PlacesAgent")
+            
+            if not all_places:
+                return self.signal_completion(
+                    "I couldn't find any places matching your interests. "
+                    "Try broadening your search criteria."
+                )
+            
+            # Store ALL places
 
-        # Get preferences from conversation
-        preferences = self._extract_preferences_from_messages(messages)
-        
-        # Generate mock places
-        mock_places = self._generate_mock_places(preferences)
-        
-        # Create structured response
-        response = self._create_structured_response(mock_places, preferences)
-        
-        log_agent_json({
-            "places_found": len(mock_places),
-            "destination": preferences.get("destination", "Unknown"),
-            "categories": list(set(p.category for p in mock_places))
-        }, agent_name="PlacesAgent", label="Mock Places Search")
-        
-        # ✅ ADD THIS - Log outgoing response
-        self.log_full_conversation(
-            message_type="OUTGOING",
-            content=response,
-            sender="chat_manager"
-        )
+            # Segregate places into restaurants and activities
+            restaurants = []
+            activities = []
+            restaurent_count = 0
+            activity_count = 0
+            max_restaurant = 5
+            max_activity = 5
 
-        return self.signal_completion(response)  # ✅ Fixed: return string only
-    
-    def _extract_preferences_from_messages(self, messages: List[Dict]) -> Dict:
-        """Extract preferences from conversation"""
-        return {
-            "destination": "Tokyo",
-            "interests": ["culture", "food", "sightseeing"]
-        }
-    
-    def _generate_mock_places(self, preferences: Dict) -> List[Place]:
-        """Generate realistic mock place data"""
-        
-        places = [
-            # Temples & Shrines
-            Place(
-                id="place_001",
-                name="Senso-ji Temple",
-                address="2-3-1 Asakusa, Taito City, Tokyo 111-0032",
-                latitude=35.7148,
-                longitude=139.7967,
-                rating=4.6,
-                category="Temple & Shrine",
-                description="Tokyo's oldest and most famous Buddhist temple. Beautiful architecture, traditional shopping street (Nakamise), and cultural significance.",
-                photos=[
-                    "https://example.com/photos/sensoji-1.jpg",
-                    "https://example.com/photos/sensoji-2.jpg"
-                ],
-                opening_hours={
-                    "monday": "6:00 AM - 5:00 PM",
-                    "tuesday": "6:00 AM - 5:00 PM",
-                    "everyday": "6:00 AM - 5:00 PM"
-                },
-                price_level=0,
-                website="https://www.senso-ji.jp"
-            ),
-            Place(
-                id="place_002",
-                name="Meiji Shrine",
-                address="1-1 Yoyogikamizonocho, Shibuya City, Tokyo 151-8557",
-                latitude=35.6764,
-                longitude=139.6993,
-                rating=4.7,
-                category="Temple & Shrine",
-                description="Peaceful Shinto shrine set in a beautiful forested area. Walk through impressive torii gates and experience traditional Japanese spirituality.",
-                photos=["https://example.com/photos/meiji.jpg"],
-                opening_hours={
-                    "everyday": "Sunrise to Sunset (varies by season)"
-                },
-                price_level=0,
-                website="https://www.meijijingu.or.jp"
-            ),
-            
-            # Restaurants
-            Place(
-                id="place_003",
-                name="Sukiyabashi Jiro",
-                address="Tsukamoto Sogyo Building B1F, 4-2-15 Ginza, Chuo City, Tokyo",
-                latitude=35.6712,
-                longitude=139.7636,
-                rating=4.8,
-                category="Sushi Restaurant",
-                description="World-famous three-Michelin-star sushi restaurant. Intimate omakase experience with master chef Jiro Ono. Reservations required months in advance.",
-                photos=["https://example.com/photos/jiro.jpg"],
-                opening_hours={
-                    "monday": "Closed",
-                    "tuesday-saturday": "11:30 AM - 2:00 PM, 5:30 PM - 8:30 PM",
-                    "sunday": "Closed"
-                },
-                price_level=4,
-                website="https://example.com/sukiyabashi-jiro"
-            ),
-            Place(
-                id="place_004",
-                name="Ichiran Ramen Shibuya",
-                address="1-22-7 Jinnan, Shibuya City, Tokyo",
-                latitude=35.6627,
-                longitude=139.6989,
-                rating=4.3,
-                category="Ramen Restaurant",
-                description="Famous ramen chain with individual booths for focused eating. Customize your perfect bowl. Great for solo travelers.",
-                photos=["https://example.com/photos/ichiran.jpg"],
-                opening_hours={
-                    "everyday": "24 hours"
-                },
-                price_level=1,
-                website="https://en.ichiran.com"
-            ),
-            Place(
-                id="place_005",
-                name="Tsukiji Outer Market",
-                address="4 Chome Tsukiji, Chuo City, Tokyo",
-                latitude=35.6654,
-                longitude=139.7707,
-                rating=4.5,
-                category="Food Market",
-                description="Historic fish market with hundreds of vendors selling fresh seafood, street food, and cooking supplies. Best visited early morning.",
-                photos=["https://example.com/photos/tsukiji.jpg"],
-                opening_hours={
-                    "everyday": "5:00 AM - 2:00 PM (most shops)",
-                    "note": "Many shops closed on Sundays and Wednesdays"
-                },
-                price_level=2,
-                website=None
-            ),
-            
-            # Attractions & Landmarks
-            Place(
-                id="place_006",
-                name="Tokyo Skytree",
-                address="1-1-2 Oshiage, Sumida City, Tokyo",
-                latitude=35.7101,
-                longitude=139.8107,
-                rating=4.5,
-                category="Observation Tower",
-                description="Tallest structure in Japan at 634 meters. Stunning 360° views of Tokyo from observation decks at 350m and 450m.",
-                photos=["https://example.com/photos/skytree.jpg"],
-                opening_hours={
-                    "everyday": "8:00 AM - 10:00 PM"
-                },
-                price_level=3,
-                website="https://www.tokyo-skytree.jp"
-            ),
-            Place(
-                id="place_007",
-                name="Shibuya Crossing",
-                address="Shibuya City, Tokyo",
-                latitude=35.6595,
-                longitude=139.7004,
-                rating=4.6,
-                category="Landmark",
-                description="World's busiest pedestrian crossing. Iconic Tokyo experience. Best viewed from Starbucks in Tsutaya building for overhead perspective.",
-                photos=["https://example.com/photos/shibuya.jpg"],
-                opening_hours={
-                    "everyday": "24 hours (viewing)"
-                },
-                price_level=0,
-                website=None
-            ),
-            Place(
-                id="place_008",
-                name="teamLab Borderless",
-                address="1-3-8 Aomi, Koto City, Tokyo",
-                latitude=35.6241,
-                longitude=139.7754,
-                rating=4.7,
-                category="Digital Art Museum",
-                description="Immersive digital art museum with interactive installations. Unique blend of technology and art. Very Instagram-worthy!",
-                photos=["https://example.com/photos/teamlab.jpg"],
-                opening_hours={
-                    "monday": "Closed",
-                    "tuesday-sunday": "10:00 AM - 7:00 PM"
-                },
-                price_level=3,
-                website="https://borderless.teamlab.art"
-            ),
-            
-            # Shopping
-            Place(
-                id="place_009",
-                name="Takeshita Street",
-                address="Jingumae, Shibuya City, Tokyo",
-                latitude=35.6707,
-                longitude=139.7058,
-                rating=4.2,
-                category="Shopping Street",
-                description="Trendy shopping street in Harajuku. Fashion boutiques, quirky shops, crepe stands, and people watching. Very crowded on weekends.",
-                photos=["https://example.com/photos/takeshita.jpg"],
-                opening_hours={
-                    "everyday": "10:00 AM - 8:00 PM (varies by shop)"
-                },
-                price_level=2,
-                website=None
-            ),
-            Place(
-                id="place_010",
-                name="Don Quijote Shibuya",
-                address="28-6 Udagawacho, Shibuya City, Tokyo",
-                latitude=35.6617,
-                longitude=139.6981,
-                rating=4.1,
-                category="Shopping & Souvenirs",
-                description="Massive discount store selling everything: snacks, cosmetics, electronics, souvenirs. Open 24 hours. Tourist tax-free shopping available.",
-                photos=["https://example.com/photos/donki.jpg"],
-                opening_hours={
-                    "everyday": "24 hours"
-                },
-                price_level=1,
-                website="https://www.donki.com"
-            ),
-            
-            # Parks & Nature
-            Place(
-                id="place_011",
-                name="Shinjuku Gyoen National Garden",
-                address="11 Naitomachi, Shinjuku City, Tokyo",
-                latitude=35.6852,
-                longitude=139.7100,
-                rating=4.6,
-                category="Park & Garden",
-                description="Beautiful traditional Japanese garden with French and English garden sections. Perfect for hanami (cherry blossoms) and autumn leaves.",
-                photos=["https://example.com/photos/gyoen.jpg"],
-                opening_hours={
-                    "monday": "Closed",
-                    "tuesday-sunday": "9:00 AM - 4:30 PM"
-                },
-                price_level=1,
-                website="https://fng.or.jp/shinjuku"
-            ),
-            
-            # Hidden Gems
-            Place(
-                id="place_012",
-                name="Omoide Yokocho",
-                address="1-2 Nishishinjuku, Shinjuku City, Tokyo",
-                latitude=35.6938,
-                longitude=139.7003,
-                rating=4.4,
-                category="Food Alley",
-                description="Narrow alleyways packed with tiny yakitori restaurants and bars. Authentic local atmosphere. Cash only in most places.",
-                photos=["https://example.com/photos/omoide.jpg"],
-                opening_hours={
-                    "everyday": "5:00 PM - Midnight (most shops)"
-                },
-                price_level=2,
-                website=None
-            ),
-        ]
-        
-        return places
-    
-    def _create_structured_response(self, places: List[Place], preferences: Dict) -> str:
-        """Create response with structured data"""
-        
-        # Convert places to dict for JSON
-        place_data = [place.model_dump() for place in places]
-        
-        # Create structured data block
-        structured = {
-            "agent": "PlacesAgent",
-            "type": "place_results",
-            "data": place_data
-        }
-        
-        # Categorize places
-        categories = {}
-        for place in places:
-            if place.category not in categories:
-                categories[place.category] = []
-            categories[place.category].append(place)
-        
-        # Create natural language summary
-        summary = f"""
-I found {len(places)} amazing places to visit in {preferences.get('destination', 'Tokyo')}!
+            RESTAURANT_KEYWORDS = ['restaurant', 'cafe', 'bar', 'bakery', 'food']
+            EXCLUDED_CATEGORIES = ['hotel', 'lodging', 'motel', 'hostel', 'resort']  # Handled by HotelsAgent
 
-**Top Recommendations by Category:**
-
-"""
-        
-        # Group by category and highlight top picks
-        for category, category_places in sorted(categories.items()):
-            summary += f"\n**{category}:**\n"
-            for place in category_places[:2]:  # Show top 2 per category
-                stars = "⭐" * int(place.rating)
-                price_level_str = "$" * (place.price_level or 0) if place.price_level else "Free"
+            for place in all_places:
+                place_dict = self._place_to_dict(place)
+                category = place.category.lower()
                 
-                summary += f"""
-• **{place.name}** {stars}
-  {place.description[:100]}...
-  📍 {place.address[:50]}...
-  💰 {price_level_str}
-"""
-        
-        # Add curated itinerary suggestions
-        summary += """
+                # Skip excluded categories
+                if category in EXCLUDED_CATEGORIES:
+                    continue
+                
+                # Check if any restaurant keyword appears in the category
+                is_restaurant = any(keyword in category for keyword in RESTAURANT_KEYWORDS)
+                
+                if is_restaurant:
+                    restaurent_count +=1
+                    if(restaurent_count <= max_restaurant):
+                        restaurants.append(place_dict)
+                else:
+                    activity_count +=1
+                    if(activity_count <= max_activity):
+                        activities.append(place_dict)
 
-**Suggested Itinerary Combinations:**
+            # Store separately
+            if restaurants:
+                self.trip_storage.add_restaurants(
+                    trip_id=self.trip_id,
+                    restaurants=restaurants,
+                    metadata={
+                        "destination": preferences.destination,
+                        "search_time": datetime.now().isoformat(),
+                        "total_results": len(restaurants),
+                        "api_duration": api_duration
+                    }
+                )
+                log_agent_raw(f"💾 Stored {len(restaurants)} restaurants", agent_name="PlacesAgent")
 
-**Day 1 - Cultural Immersion:**
-→ Morning: Senso-ji Temple (2 hours)
-→ Lunch: Tsukiji Outer Market
-→ Afternoon: Meiji Shrine (1.5 hours)
-→ Evening: Shibuya Crossing + dinner nearby
+            if activities:
+                self.trip_storage.add_activities(
+                    trip_id=self.trip_id,
+                    activities=activities,
+                    metadata={
+                        "destination": preferences.destination,
+                        "search_time": datetime.now().isoformat(),
+                        "total_results": len(activities),
+                        "api_duration": api_duration
+                    }
+                )
+                log_agent_raw(f"💾 Stored {len(activities)} activities", agent_name="PlacesAgent")
 
-**Day 2 - Food & Shopping:**
-→ Morning: Shinjuku Gyoen Garden
-→ Lunch: Ramen at Ichiran
-→ Afternoon: Shopping at Takeshita Street & Harajuku
-→ Evening: Omoide Yokocho for yakitori
-
-**Day 3 - Modern Tokyo:**
-→ Morning: teamLab Borderless (2-3 hours)
-→ Afternoon: Tokyo Skytree observation deck
-→ Evening: Explore Shibuya nightlife
-
-**Insider Tips:**
-💡 Book teamLab Borderless tickets online in advance - they sell out!
-💡 Visit temples early morning for peaceful experience (6-8 AM)
-💡 Shibuya Crossing is busiest at 6-7 PM on weekdays
-💡 Many shops closed on Sundays/Wednesdays in Tsukiji
-💡 Get a Suica card for easy train travel between locations
-"""
-        
-        summary += f"""
-
-<STRUCTURED_DATA>
-{json.dumps(structured, indent=2)}
-</STRUCTURED_DATA>
-"""
-        
-        return summary
-
-
-def create_places_agent() -> PlacesAgent:
-    """
-    Factory function to create PlacesAgent
+            self.trip_storage.log_api_call(
+                trip_id=self.trip_id,
+                agent_name="PlacesAgent",
+                api_name="GooglePlaces",
+                duration=api_duration
+            )
+            
+            # Generate recommendation
+            recommendation = self._generate_recommendation(places_by_category, preferences)
+            
+            # Log outgoing
+            self.log_conversation_message(
+                message_type="OUTGOING",
+                content=recommendation,
+                sender="chat_manager",
+                truncate=1000
+            )
+            
+            return self.signal_completion(recommendation)
+            
+        except Exception as e:
+            log_agent_raw(f"❌ Places search failed: {str(e)}", agent_name="PlacesAgent")
+            import traceback
+            log_agent_raw(traceback.format_exc(), agent_name="PlacesAgent")
+            error_msg = f"I encountered an error: {str(e)}. Please try again."
+            return self.signal_completion(error_msg)
     
-    Returns:
-        Configured PlacesAgent instance (mock mode)
-    """
-    return PlacesAgent()
+    def _determine_categories(self, preferences) -> List[str]:
+        """Determine which categories to search based on user interests"""
+        interests = preferences.activity_prefs.interests if preferences.activity_prefs.interests else []
+        
+        log_agent_raw(f"📋 User interests: {', '.join(interests) if interests else 'None specified'}", 
+                     agent_name="PlacesAgent")
+        
+        categories = ["restaurants"]  # Always include restaurants
+        
+        # Map interests to categories
+        interest_map = {
+            "food": ["restaurants"],
+            "dining": ["restaurants"],
+            "culture": ["culture", "attractions"],
+            "art": ["culture"],
+            "history": ["attractions", "culture"],
+            "sightseeing": ["attractions"],
+            "shopping": ["shopping"],
+            "nature": ["nature"],
+            "outdoor": ["nature"],
+            "entertainment": ["entertainment"],
+            "nightlife": ["entertainment"]
+        }
+        
+        for interest in interests:
+            interest_lower = interest.lower()
+            for key, cats in interest_map.items():
+                if key in interest_lower:
+                    categories.extend(cats)
+        
+        # Remove duplicates and limit
+        categories = list(set(categories))[:4]  # Max 4 categories
+        
+        # If no specific interests, use default mix
+        if len(categories) == 1:  # Only restaurants
+            categories.extend(["attractions", "culture"])
+        
+        log_agent_raw(f"🎯 Will search categories: {', '.join(categories)}", 
+                     agent_name="PlacesAgent")
+        
+        return categories
+    
+    def _search_places_complete(
+        self,
+        destination: str,
+        categories: List[str],
+        min_rating: float = 3.5
+    ) -> Dict[str, List[Place]]:
+        """
+        Complete places search workflow
+        
+        Returns:
+            Dictionary with category names as keys, lists of Place objects as values
+        """
+        log_agent_raw("=" * 80, agent_name="PlacesAgent")
+        log_agent_raw("🔍 COMPLETE PLACES SEARCH", agent_name="PlacesAgent")
+        log_agent_raw("=" * 80, agent_name="PlacesAgent")
+        
+        if not self.google_places or not self.google_places.client:
+            log_agent_raw("❌ Google Places not available", agent_name="PlacesAgent")
+            return {}
+        
+        # Convert categories to place types
+        place_types = []
+        for category in categories:
+            types = self.CATEGORY_TYPES.get(category, [])
+            place_types.extend(types)
+        
+        # Remove duplicates
+        place_types = list(set(place_types))
+        
+        log_agent_raw(f"📍 Searching for: {', '.join(place_types)}", agent_name="PlacesAgent")
+        
+        # Search
+        results = self.google_places.search_places(
+            location=destination,
+            radius=5000,
+            place_types=place_types,
+            min_rating=min_rating,
+            max_results=10,
+            agent_logger=self.logger
+        )
+        
+        # Convert to Place objects organized by category
+        places_by_category = {}
+        
+        for place_type, place_dicts in results.items():
+            # Map place type back to category
+            category = self._get_category_for_type(place_type)
+            
+            if category not in places_by_category:
+                places_by_category[category] = []
+            
+            for place_dict in place_dicts:
+                place = self._create_place_from_google(place_dict)
+                if place:
+                    places_by_category[category].append(place)
+        
+        log_agent_raw("=" * 80, agent_name="PlacesAgent")
+        
+        return places_by_category
+    
+    def _get_category_for_type(self, place_type: str) -> str:
+        """Map place type back to category name"""
+        for category, types in self.CATEGORY_TYPES.items():
+            if place_type in types:
+                return category
+        return "other"
+    
+    def _create_place_from_google(self, google_data: Dict) -> Optional[Place]:
+        """Create Place object from Google Places data"""
+        try:
+            # Extract opening hours
+            opening_hours = None
+            if google_data.get('currentOpeningHours'):
+                opening_hours = {
+                    'open_now': google_data['currentOpeningHours'].get('openNow'),
+                    'weekday_text': google_data['currentOpeningHours'].get('weekdayDescriptions', [])
+                }
+            
+            return Place(
+                id=google_data.get('place_id', str(time.time())),
+                name=google_data.get('name', 'Unknown Place'),
+                address=google_data.get('address', ''),
+                latitude=google_data.get('latitude'),
+                longitude=google_data.get('longitude'),
+                rating=google_data.get('google_rating'),
+                category=google_data.get('primary_type', 'other'),
+                description=f"Rated {google_data.get('google_rating', 0)}/5 by {google_data.get('user_ratings_total', 0)} reviewers",
+                photos=google_data.get('photos', [])[:5],
+                opening_hours=opening_hours,
+                price_level=google_data.get('price_level'),
+                website=google_data.get('website')
+            )
+        except Exception as e:
+            log_agent_raw(f"⚠️ Failed to create place: {str(e)}", agent_name="PlacesAgent")
+            return None
+    
+    def _place_to_dict(self, place: Place) -> Dict:
+        """Convert Place to dict for storage"""
+        return place.model_dump(mode='json')
+    
+    def _generate_recommendation(
+        self,
+        places_by_category: Dict[str, List[Place]],
+        preferences: Any
+    ) -> str:
+        """Generate LLM recommendation"""
+        
+        if not places_by_category:
+            return "No places found matching your interests."
+        
+        # Build summary
+        summary_parts = []
+        for category, places in places_by_category.items():
+            if places:
+                top_place = max(places, key=lambda p: p.rating or 0)
+                summary_parts.append(f"- {category.title()}: {len(places)} options (top: {top_place.name}, {top_place.rating:.1f}★)")
+        
+        # Build prompt
+        prompt = f"""
+Based on places search results, provide enthusiastic recommendations.
+
+DESTINATION: {preferences.destination}
+SEARCH RESULTS:
+{chr(10).join(summary_parts)}
+
+USER INTERESTS: {', '.join(preferences.activity_prefs.interests) if preferences.activity_prefs.interests else 'General sightseeing'}
+
+Provide a conversational recommendation (4-5 sentences):
+- Mention the variety of options found
+- Highlight 2-3 specific places with names and why they're special
+- Match recommendations to user interests
+- Keep it exciting and encouraging
+
+Be enthusiastic and specific!
+"""
+        
+        # Call LLM
+        try:
+            client = openai.OpenAI(api_key=settings.openai_api_key)
+            
+            response = client.chat.completions.create(
+                model=settings.llm_model,
+                messages=[
+                    {"role": "system", "content": self.system_message},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.8,
+                max_tokens=300
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            log_agent_raw(f"⚠️ LLM recommendation failed: {str(e)}", agent_name="PlacesAgent")
+            
+            # Fallback
+            total_places = sum(len(places) for places in places_by_category.values())
+            return (f"I found {total_places} amazing places in {preferences.destination}! "
+                   f"Check out the full list for restaurants, attractions, and activities.")
+
+
+def create_places_agent(trip_id: str, trip_storage: TripStorageInterface, **kwargs) -> PlacesAgent:
+    """Factory function to create PlacesAgent"""
+    return PlacesAgent(trip_id=trip_id, trip_storage=trip_storage, **kwargs)

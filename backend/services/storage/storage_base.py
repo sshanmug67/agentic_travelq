@@ -33,6 +33,56 @@ class TripStorageInterface(ABC):
         pass
     
     @abstractmethod
+    def add_weather(
+        self, 
+        trip_id: str, 
+        weather: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store weather forecast"""
+        pass
+
+    @abstractmethod
+    def add_restaurants(
+        self, 
+        trip_id: str, 
+        restaurants: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store restaurant options"""
+        pass
+
+    @abstractmethod
+    def add_activities(
+        self, 
+        trip_id: str, 
+        activities: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store activity/attraction options"""
+        pass
+
+    @abstractmethod
+    def add_places(
+        self, 
+        trip_id: str, 
+        places: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store place/attraction options"""
+        pass
+
+    @abstractmethod
+    def get_restaurants(self, trip_id: str) -> List[Dict]:
+        """Get all restaurants for trip"""
+        pass
+
+    @abstractmethod
+    def get_activities(self, trip_id: str) -> List[Dict]:
+        """Get all activities for trip"""
+        pass
+
+    @abstractmethod
     def get_all_options(self, trip_id: str) -> Dict[str, List[Any]]:
         """Get all stored options for a trip"""
         pass
@@ -60,16 +110,6 @@ class TripStorageInterface(ABC):
     @abstractmethod
     def get_preferences(self, trip_id: str) -> Optional[Any]:
         """Get user preferences for the trip"""
-        pass
-
-    @abstractmethod
-    def add_weather(
-        self, 
-        trip_id: str, 
-        weather: List[Dict], 
-        metadata: Optional[Dict] = None
-    ):
-        """Store weather forecast"""
         pass
 
     @abstractmethod

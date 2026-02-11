@@ -71,6 +71,55 @@ class InMemoryTripStorage(TripStorageInterface):
             
             log_info_raw(f"💾 Stored {len(hotels)} hotels for trip {trip_id}")
     
+    def add_restaurants(
+        self, 
+        trip_id: str, 
+        restaurants: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store restaurant options"""
+        with self._lock:
+            if trip_id not in self._storage:
+                self._init_trip(trip_id)
+            
+            self._storage[trip_id]["restaurants"].extend(restaurants)
+            
+            if metadata:
+                self._storage[trip_id]["metadata"]["restaurants"] = metadata
+            
+            log_info_raw(f"💾 Stored {len(restaurants)} restaurants for trip {trip_id}")
+    
+    def add_activities(
+        self, 
+        trip_id: str, 
+        activities: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store activity/attraction options"""
+        with self._lock:
+            if trip_id not in self._storage:
+                self._init_trip(trip_id)
+            
+            self._storage[trip_id]["activities"].extend(activities)
+            
+            if metadata:
+                self._storage[trip_id]["metadata"]["activities"] = metadata
+            
+            log_info_raw(f"💾 Stored {len(activities)} activities for trip {trip_id}")
+    
+    def get_restaurants(self, trip_id: str) -> List[Dict]:
+        """Get all restaurants for trip"""
+        with self._lock:
+            if trip_id in self._storage:
+                return self._storage[trip_id]["restaurants"].copy()
+            return []
+    
+    def get_activities(self, trip_id: str) -> List[Dict]:
+        """Get all activities for trip"""
+        with self._lock:
+            if trip_id in self._storage:
+                return self._storage[trip_id]["activities"].copy()
+            return []
 
     def add_weather(
         self, 
@@ -91,6 +140,25 @@ class InMemoryTripStorage(TripStorageInterface):
             log_info_raw(f"💾 Stored {len(weather)} weather forecasts for trip {trip_id}")
             
 
+    def add_places(
+        self, 
+        trip_id: str, 
+        places: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store place/attraction options (generic fallback)"""
+        with self._lock:
+            if trip_id not in self._storage:
+                self._init_trip(trip_id)
+            
+            self._storage[trip_id]["places"].extend(places)
+            
+            if metadata:
+                self._storage[trip_id]["metadata"]["places"] = metadata
+            
+            log_info_raw(f"💾 Stored {len(places)} places for trip {trip_id}")
+
+
     def get_all_options(self, trip_id: str) -> Dict[str, List[Any]]:
         """Get all stored options"""
         with self._lock:
@@ -103,6 +171,7 @@ class InMemoryTripStorage(TripStorageInterface):
                 "cars": self._storage[trip_id]["cars"].copy(),
                 "restaurants": self._storage[trip_id]["restaurants"].copy(),
                 "activities": self._storage[trip_id]["activities"].copy(),
+                "places": self._storage[trip_id]["places"].copy(),
                 "weather": self._storage[trip_id]["weather"].copy()
             }
     
@@ -149,11 +218,13 @@ class InMemoryTripStorage(TripStorageInterface):
             "cars": [],
             "restaurants": [],
             "activities": [],
+            "places": [],
             "weather": [],
             "metadata": {},
             "api_calls": [],
             "created_at": datetime.now().isoformat()
         }
+    
     
     def _empty_options(self) -> Dict[str, List]:
         """Return empty options structure"""
@@ -163,6 +234,7 @@ class InMemoryTripStorage(TripStorageInterface):
             "cars": [],
             "restaurants": [],
             "activities": [],
+            "places": [],
             "weather": []
         }
 

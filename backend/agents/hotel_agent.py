@@ -194,7 +194,7 @@ Be friendly, concise, and helpful. Focus on value, not just price.
         check_out_date: str,
         adults: int = 2,
         min_rating: float = 3.0,
-        max_results: int = 20
+        max_results: int = 5
     ) -> List[Hotel]:
         """
         Complete hotel search workflow

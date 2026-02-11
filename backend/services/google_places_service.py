@@ -12,6 +12,7 @@ Location: backend/services/google_places_service.py
 import logging
 import requests
 from typing import List, Dict, Any, Optional
+from backend.utils.logging_config import log_agent_json
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -310,6 +311,181 @@ class GooglePlacesService:
             log.error(f"❌ Geocoding exception: {e}")
             return None
     
+
+    def search_places(
+        self,
+        location: str = None,
+        latitude: float = None,
+        longitude: float = None,
+        radius: int = 5000,
+        place_types: List[str] = None,
+        min_rating: float = 3.0,
+        max_results: int = 20,
+        agent_logger: Optional[logging.Logger] = None
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        Search for places by category using Google Places API (New)
+        
+        Args:
+            location: Location name (e.g., "Paris, France")
+            latitude: Latitude coordinate (alternative to location)
+            longitude: Longitude coordinate (alternative to location)
+            radius: Search radius in meters (default: 5000)
+            place_types: List of place types to search for
+            min_rating: Minimum rating (0-5)
+            max_results: Max results per category
+            agent_logger: Optional agent-specific logger
+            
+        Returns:
+            Dictionary with place types as keys, lists of places as values
+            Example: {
+                "restaurant": [{...}, {...}],
+                "tourist_attraction": [{...}, {...}]
+            }
+        """
+        log = agent_logger or logger
+        
+        log.info("=" * 80)
+        log.info("🔍 GooglePlacesService.search_places() - Places API (New)")
+        log.info("=" * 80)
+        
+        if not self.client:
+            log.error("❌ Google Places client not initialized")
+            return {}
+        
+        try:
+            # Resolve location to coordinates if needed
+            if location and not (latitude and longitude):
+                log.info(f"🔍 Geocoding location: {location}")
+                coords = self._geocode_location(location, log)
+                if coords:
+                    latitude, longitude = coords
+                    log.info(f"✓ Resolved to: {latitude}, {longitude}")
+                else:
+                    log.error(f"❌ Could not geocode location: {location}")
+                    return {}
+            
+            if not latitude or not longitude:
+                log.error("❌ Must provide either location name or coordinates")
+                return {}
+            
+            # Default place types if not provided
+            if not place_types:
+                place_types = [
+                    "restaurant",
+                    "tourist_attraction",
+                    "shopping_mall",
+                    "museum",
+                    "park"
+                ]
+            
+            log.info(f"\n📋 Search Parameters:")
+            log.info(f"   Location: {latitude}, {longitude}")
+            log.info(f"   Radius: {radius}m")
+            log.info(f"   Categories: {', '.join(place_types)}")
+            log.info(f"   Min Rating: {min_rating}")
+            log.info(f"   Max per category: {max_results}")
+            
+            results = {}
+            
+            # Search for each place type
+            for place_type in place_types:
+                log.info(f"\n🔎 Searching: {place_type}")
+                log.info("-" * 80)
+                
+                # Build request body
+                request_body = {
+                    "includedTypes": [place_type],
+                    "maxResultCount": max_results,
+                    "locationRestriction": {
+                        "circle": {
+                            "center": {
+                                "latitude": latitude,
+                                "longitude": longitude
+                            },
+                            "radius": radius
+                        }
+                    },
+                    "rankPreference": "POPULARITY"
+                }
+                
+                # Headers
+                headers = {
+                    "Content-Type": "application/json",
+                    "X-Goog-Api-Key": self.api_key,
+                    "X-Goog-FieldMask": (
+                        "places.id,"
+                        "places.displayName,"
+                        "places.formattedAddress,"
+                        "places.location,"
+                        "places.rating,"
+                        "places.userRatingCount,"
+                        "places.priceLevel,"
+                        "places.primaryType,"
+                        "places.photos,"
+                        "places.types,"
+                        "places.currentOpeningHours,"
+                        "places.internationalPhoneNumber,"
+                        "places.websiteUri,"
+                        "places.businessStatus"
+                    )
+                }
+                
+                # Make request
+                url = f"{self.BASE_URL}:searchNearby"
+                response = requests.post(url, json=request_body, headers=headers, timeout=30)
+                
+                if response.status_code != 200:
+                    log.warning(f"   ⚠️  API error: {response.status_code}")
+                    log.warning(f"   Response: {response.text[:200]}")
+                    continue
+                
+                data = response.json()
+                places = data.get('places', [])
+                
+                log.info(f"   ✓ Found {len(places)} results")
+                
+                # Filter by rating
+                filtered_places = []
+                for place in places:
+                    rating = place.get('rating', 0)
+                    
+                    # Skip if no rating or below minimum
+                    if rating == 0 or rating < min_rating:
+                        continue
+                    
+                    parsed = self._parse_place_result(place, log)
+                    
+                    if parsed:
+                        filtered_places.append(parsed)
+                
+                log.info(f"   ✓ After filtering: {len(filtered_places)} places")
+                
+                if filtered_places:
+                    results[place_type] = filtered_places
+            
+            # Summary
+            total_places = sum(len(places) for places in results.values())
+            log.info(f"\n📊 Search Complete:")
+            log.info(f"   Categories found: {len(results)}")
+            log.info(f"   Total places: {total_places}")
+            
+            for category, places in results.items():
+                log.info(f"   - {category}: {len(places)} places")
+            
+            log.info("=" * 80)
+            
+            return results
+            
+        except requests.exceptions.RequestException as e:
+            log.error(f"❌ Request exception: {str(e)}")
+            return {}
+        except Exception as e:
+            log.error(f"❌ Exception: {str(e)}")
+            log.exception("Traceback:")
+            return {}
+
+
     def get_place_details(
         self,
         place_id: str,

@@ -1,29 +1,44 @@
-import axios from 'axios';
-import type { TripRequest, TripResponse } from '@/types/trip';
+// frontend/src/services/api.ts
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+import axios from 'axios';
 
 const api = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: '/api',
+  timeout: 60000, // 60 seconds for AI processing
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-export const tripService = {
-  /**
-   * Search for trip information
-   */
-  searchTrip: async (request: TripRequest): Promise<TripResponse> => {
-    const response = await api.post<TripResponse>('/api/trips/search', request);
+export const tripApi = {
+  // Single endpoint for trip planning
+  planTrip: async (request: {
+    tripId: string | null;
+    userRequest: string;
+    tripDetails: {
+      origin?: string;
+      destination: string;
+      startDate: string;
+      endDate: string;
+      travelers: number;
+      budget: number;
+    };
+    preferences: any;
+    currentItinerary: any;
+  }) => {
+    const response = await api.post('/trip/plan', request);
     return response.data;
   },
 
-  /**
-   * Health check
-   */
-  healthCheck: async (): Promise<{ status: string }> => {
-    const response = await api.get('/api/trips/health');
+  // Save itinerary
+  saveItinerary: async (tripId: string, itinerary: any) => {
+    const response = await api.post(`/trip/${tripId}/itinerary`, itinerary);
+    return response.data;
+  },
+
+  // Get saved trips
+  getMyTrips: async () => {
+    const response = await api.get('/trips');
     return response.data;
   },
 };
