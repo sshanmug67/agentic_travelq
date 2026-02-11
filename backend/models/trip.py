@@ -124,7 +124,7 @@ class Flight(BaseModel):
 
 
 # ============================================================================
-# HOTEL MODELS
+# HOTEL MODELS - Enhanced with Google Places
 # ============================================================================
 
 class HotelAmenities(BaseModel):
@@ -140,8 +140,18 @@ class HotelAmenities(BaseModel):
     bar: bool = False
     breakfast: bool = False
 
+
+class HotelReview(BaseModel):
+    """Individual hotel review from Google Places"""
+    author_name: str
+    rating: float
+    text: str
+    time: Optional[int] = None
+    relative_time_description: Optional[str] = None
+
+
 class Hotel(BaseModel):
-    """Hotel information model"""
+    """Hotel information model - Enhanced with Google Places data"""
     id: str
     name: str
     hotel_code: str
@@ -153,9 +163,15 @@ class Hotel(BaseModel):
     city: Optional[str] = None
     distance_from_center: Optional[float] = None  # km
     
-    # Ratings & Reviews
-    rating: Optional[float] = None  # 0-5 stars
-    review_count: Optional[int] = None
+    # Ratings & Reviews (Amadeus + Google Places)
+    rating: Optional[float] = None  # Amadeus rating (0-5 stars)
+    review_count: Optional[int] = None  # Amadeus review count
+    
+    # Google Places specific ratings
+    place_id: Optional[str] = None  # Google Place ID
+    google_rating: Optional[float] = None  # Google rating (0-5)
+    user_ratings_total: Optional[int] = None  # Total Google reviews
+    reviews: Optional[List[HotelReview]] = []  # Top reviews from Google
     
     # Pricing
     price_per_night: float
@@ -173,6 +189,12 @@ class Hotel(BaseModel):
     description: Optional[str] = None
     photos: Optional[List[str]] = []
     booking_url: Optional[str] = None
+    
+    # Google Places additional info
+    website: Optional[str] = None
+    phone_number: Optional[str] = None
+    google_url: Optional[str] = None  # Google Maps URL
+    business_status: Optional[str] = None
     
     # Additional info
     property_type: Optional[str] = None  # hotel, apartment, resort, etc.

@@ -226,7 +226,7 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                 returnDate=return_date,
                 adults=adults,
                 travelClass=cabin_class_upper,
-                max=20  # Get many options
+                max=5  # Get many options
             )
             
             # ✅ ADD THIS - Log success

@@ -76,6 +76,7 @@ class Settings:
         # Optional External APIs
         # =============================================================
         self.google_places_api_key: Optional[str] = None
+        self.xotelo_api_key: Optional[str] = None
         self.ticketmaster_api_key: Optional[str] = None
         
         # =============================================================
@@ -258,6 +259,7 @@ class Settings:
             if "external_apis" in data:
                 external = data["external_apis"]
                 self.google_places_api_key = external.get("google_places_key", self.google_places_api_key)
+                self.xotelo_api_key = external.get("xotelo_key", self.xotelo_api_key)
                 self.ticketmaster_api_key = external.get("ticketmaster_key", self.ticketmaster_api_key)
             
             # --- Autogen ---
@@ -354,6 +356,26 @@ class Settings:
             self.amadeus_client_secret = os.getenv("AMADEUS_CLIENT_SECRET")
             logger.info("✓ AMADEUS_CLIENT_SECRET: Set from environment")
         
+        # --- Google Places API (THIS WAS MISSING!) ---
+        if os.getenv("GOOGLE_PLACES_API_KEY"):
+            self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
+            # Mask the key for security (show first 10 chars)
+            masked_key = self.google_places_api_key[:10] + "..." if len(self.google_places_api_key) > 10 else "***"
+            logger.info(f"✓ GOOGLE_PLACES_API_KEY: Set from environment ({masked_key})")
+        else:
+            logger.warning("⚠️  GOOGLE_PLACES_API_KEY: NOT set in environment")
+        
+        # --- Xotelo API ---
+        if os.getenv("XOTELO_API_KEY"):
+            self.xotelo_api_key = os.getenv("XOTELO_API_KEY")
+            logger.info("✓ XOTELO_API_KEY: Set from environment")
+        else:
+            logger.info("ℹ️  XOTELO_API_KEY: Not set (optional, using free tier)")
+        
+        # --- Ticketmaster API ---
+        if os.getenv("TICKETMASTER_API_KEY"):
+            self.ticketmaster_api_key = os.getenv("TICKETMASTER_API_KEY")
+            logger.info("✓ TICKETMASTER_API_KEY: Set from environment")
         
         logger.info("✅ Settings: Loaded environment overrides")
     
@@ -364,26 +386,84 @@ class Settings:
     def validate(self) -> bool:
         """Validate configuration"""
         warnings = []
+        errors = []
         
-        # Check for optional but recommended settings
+        # Critical checks (required for core functionality)
+        if not self.openai_api_key:
+            errors.append("OPENAI_API_KEY not set - LLM features will fail")
+        
+        # Optional but recommended
         if not self.weather_api_key:
             warnings.append("WEATHER_API_KEY not set - weather features will be limited")
         
         if not self.amadeus_client_id or not self.amadeus_client_secret:
             warnings.append("AMADEUS API not set - flight features will be limited")
         
-        if not self.openai_api_key:
-            warnings.append("OPENAI_API_KEY not set - LLM features disabled")
+        if not self.google_places_api_key:
+            warnings.append("GOOGLE_PLACES_API_KEY not set - hotel search will use Amadeus fallback only")
         
+        if not self.xotelo_api_key:
+            warnings.append("XOTELO_API_KEY not set - using free tier (limited requests)")
+        
+        # Print errors
+        if errors:
+            logger.error("\n❌ Configuration Errors (Critical):")
+            for error in errors:
+                logger.error(f"   - {error}")
+        
+        # Print warnings
         if warnings:
             logger.warning("\n⚠️  Configuration Warnings:")
             for warning in warnings:
                 logger.warning(f"   - {warning}")
-        else:
-            logger.info("✅ Settings: All recommended settings configured")
         
-        return True
+        if not errors and not warnings:
+            logger.info("✅ Settings: All recommended settings configured")
+        elif not errors:
+            logger.info("✅ Settings: Core settings configured (see warnings above)")
+        
+        return len(errors) == 0
     
+    # =================================================================
+    # Diagnostic Method
+    # =================================================================
+    
+    def print_diagnostics(self):
+        """Print detailed diagnostics for troubleshooting"""
+        logger.info("\n" + "=" * 80)
+        logger.info("🔍 SETTINGS DIAGNOSTICS")
+        logger.info("=" * 80)
+        
+        def mask_key(key: Optional[str]) -> str:
+            if not key:
+                return "❌ NOT SET"
+            if len(key) < 10:
+                return "✅ SET (too short to mask)"
+            return f"✅ SET ({key[:10]}...)"
+        
+        logger.info("\n📋 API Keys Status:")
+        logger.info(f"   OpenAI API Key: {mask_key(self.openai_api_key)}")
+        logger.info(f"   Google Places API Key: {mask_key(self.google_places_api_key)}")
+        logger.info(f"   Xotelo API Key: {mask_key(self.xotelo_api_key)}")
+        logger.info(f"   Amadeus Client ID: {mask_key(self.amadeus_client_id)}")
+        logger.info(f"   Amadeus Client Secret: {mask_key(self.amadeus_client_secret)}")
+        logger.info(f"   Weather API Key: {mask_key(self.weather_api_key)}")
+        logger.info(f"   Ticketmaster API Key: {mask_key(self.ticketmaster_api_key)}")
+        
+        logger.info("\n📋 LLM Configuration:")
+        logger.info(f"   Model: {self.llm_model}")
+        logger.info(f"   Embedding Model: {self.embedding_model}")
+        
+        logger.info("\n📋 Environment:")
+        logger.info(f"   Environment: {self.environment}")
+        logger.info(f"   Debug Mode: {self.debug}")
+        logger.info(f"   Log Level: {self.log_level}")
+        
+        logger.info("\n" + "=" * 80)
+    
+    # =================================================================
+    # Properties
+    # =================================================================
     
     @property
     def WEATHER_API_KEY(self) -> Optional[str]:
@@ -414,6 +494,10 @@ class Settings:
         return self.google_places_api_key
     
     @property
+    def XOTELO_API_KEY(self) -> Optional[str]:
+        return self.xotelo_api_key
+    
+    @property
     def TICKETMASTER_API_KEY(self) -> Optional[str]:
         return self.ticketmaster_api_key
     
@@ -442,3 +526,7 @@ class Settings:
 # Global settings instance
 # =================================================================
 settings = Settings.load()
+
+# Print diagnostics on startup (helps with debugging)
+if __name__ != "__main__":
+    settings.print_diagnostics()

@@ -13,6 +13,7 @@ autogen
 aiohttp
 python-dateutil>=2.8.2
 openai
+googlemaps
 
 # Configuration management
 pyyaml==6.0.1

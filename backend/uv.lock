@@ -217,6 +217,7 @@ dependencies = [
     { name = "autogen" },
     { name = "colorlog" },
     { name = "fastapi" },
+    { name = "googlemaps" },
     { name = "httpx" },
     { name = "nest-asyncio" },
     { name = "openai" },
@@ -228,6 +229,7 @@ dependencies = [
     { name = "python-json-logger" },
     { name = "python-multipart" },
     { name = "pyyaml" },
+    { name = "requests" },
     { name = "sentence-transformers" },
     { name = "supabase" },
     { name = "uvicorn", extra = ["standard"] },
@@ -241,6 +243,7 @@ requires-dist = [
     { name = "autogen", specifier = ">=0.10.5" },
     { name = "colorlog", specifier = ">=6.10.1" },
     { name = "fastapi", specifier = ">=0.128.5" },
+    { name = "googlemaps", specifier = ">=4.10.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "nest-asyncio", specifier = ">=1.6.0" },
     { name = "openai", specifier = ">=2.17.0" },
@@ -252,6 +255,7 @@ requires-dist = [
     { name = "python-json-logger", specifier = ">=4.0.0" },
     { name = "python-multipart", specifier = ">=0.0.22" },
     { name = "pyyaml", specifier = ">=6.0.3" },
+    { name = "requests", specifier = ">=2.32.5" },
     { name = "sentence-transformers", specifier = ">=5.2.2" },
     { name = "supabase", specifier = ">=2.27.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.40.0" },
@@ -673,6 +677,15 @@ sdist = { url = "https://files.pythonhosted.org/packages/51/7c/f60c259dcbf4f0c47
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e6/ab/fb21f4c939bb440104cc2b396d3be1d9b7a9fd3c6c2a53d98c45b3d7c954/fsspec-2026.2.0-py3-none-any.whl", hash = "sha256:98de475b5cb3bd66bedd5c4679e87b4fdfe1a3bf4d707b151b3c07e58c9a2437", size = 202505, upload-time = "2026-02-05T21:50:51.819Z" },
 ]
+
+[[package]]
+name = "googlemaps"
+version = "4.10.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/fe/26/bca4d737a9acea25e94c19940a780bbf0be64a691f7caf3a68467d3a5838/googlemaps-4.10.0.tar.gz", hash = "sha256:3055fcbb1aa262a9159b589b5e6af762b10e80634ae11c59495bd44867e47d88", size = 33056, upload-time = "2023-01-26T16:45:02.501Z" }
 
 [[package]]
 name = "h11"
