@@ -135,11 +135,10 @@ Instead, you delegate to specialized agents and coordinate their results.
             agents.append(create_hotel_agent(trip_id=trip_id, trip_storage=trip_storage))
             log_agent_raw("  ✓ HotelAgent created with storage", agent_name="OrchestratorAgent")
 
-
-        # if "weather" in agents_needed:
-        #     from agents.weather_agent import create_weather_agent
-        #     agents.append(create_weather_agent())
-        #     log_agent_raw("  ✓ WeatherAgent created", agent_name="OrchestratorAgent")
+        if "weather" in agents_needed:
+            from agents.weather_agent import create_weather_agent
+            agents.append(create_weather_agent(trip_id=trip_id, trip_storage=trip_storage))
+            log_agent_raw("  ✓ WeatherAgent created with storage", agent_name="OrchestratorAgent")
         
         # if "events" in agents_needed:
         #     from agents.events_agent import create_events_agent
@@ -396,9 +395,9 @@ Instead, you delegate to specialized agents and coordinate their results.
         agent_descriptions = {
             "flight": f"FlightAgent will find flights from {preferences.origin} to {preferences.destination} within {format_budget(preferences.budget.flight_budget)} budget",
             "hotel": f"HotelAgent will find hotels in {preferences.destination} meeting {preferences.hotel_prefs.min_rating}-star requirement at {format_budget(preferences.budget.hotel_budget_per_night)}/night",
+            "weather": f"WeatherAgent will provide {self.calculate_trip_duration(preferences)}-day weather forecast for {preferences.destination}",  # ✅ ADD THIS
             "events": f"EventsAgent will find events and activities matching interests: {', '.join(preferences.activity_prefs.interests)}",
-            "places": f"PlacesAgent will recommend restaurants and attractions for: {', '.join(preferences.activity_prefs.interests)}",
-            "weather": f"WeatherAgent will provide weather forecast for {preferences.destination}"
+            "places": f"PlacesAgent will recommend restaurants and attractions for: {', '.join(preferences.activity_prefs.interests)}"
         }
         
         active_agents = [agent_descriptions[agent] for agent in agents_needed if agent in agent_descriptions]

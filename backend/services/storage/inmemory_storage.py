@@ -71,6 +71,26 @@ class InMemoryTripStorage(TripStorageInterface):
             
             log_info_raw(f"💾 Stored {len(hotels)} hotels for trip {trip_id}")
     
+
+    def add_weather(
+        self, 
+        trip_id: str, 
+        weather: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store weather forecast"""
+        with self._lock:
+            if trip_id not in self._storage:
+                self._init_trip(trip_id)
+            
+            self._storage[trip_id]["weather"].extend(weather)
+            
+            if metadata:
+                self._storage[trip_id]["metadata"]["weather"] = metadata
+            
+            log_info_raw(f"💾 Stored {len(weather)} weather forecasts for trip {trip_id}")
+            
+
     def get_all_options(self, trip_id: str) -> Dict[str, List[Any]]:
         """Get all stored options"""
         with self._lock:

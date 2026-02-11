@@ -61,7 +61,17 @@ class TripStorageInterface(ABC):
     def get_preferences(self, trip_id: str) -> Optional[Any]:
         """Get user preferences for the trip"""
         pass
-    
+
+    @abstractmethod
+    def add_weather(
+        self, 
+        trip_id: str, 
+        weather: List[Dict], 
+        metadata: Optional[Dict] = None
+    ):
+        """Store weather forecast"""
+        pass
+
     @abstractmethod
     def log_api_call(
         self, 
