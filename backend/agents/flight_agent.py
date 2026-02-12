@@ -203,6 +203,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         
         cabin_class_upper = cabin_class.upper()
 
+        # ✅ Read max results from centralized settings
         max_results = settings.flight_agent_max_results
         
         api_params = {

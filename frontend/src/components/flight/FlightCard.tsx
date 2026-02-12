@@ -90,7 +90,7 @@ export const FlightCard: React.FC<FlightCardProps> = ({
           <span className="font-semibold text-gray-800 w-10 text-right">{flight.outbound?.arrival_airport}</span>
           <span className="text-[15px] text-gray-500 w-16 text-right">{formatTime(flight.outbound?.arrival_time)}</span>
           <span className="text-[15px] text-gray-400 w-14 text-right">{formatDate(flight.outbound?.departure_time)}</span>
-          {flight.outbound?.stops > 0 && flight.outbound?.layovers?.length > 0 && (
+          {(flight.outbound?.stops ?? 0) > 0 && flight.outbound?.layovers && flight.outbound.layovers.length > 0 && (
             <span className="text-[15px] text-gray-400 ml-1">via {flight.outbound.layovers.join(',')}</span>
           )}
         </div>
@@ -111,7 +111,7 @@ export const FlightCard: React.FC<FlightCardProps> = ({
             <span className="font-semibold text-gray-800 w-10 text-right">{flight.return_flight.arrival_airport}</span>
             <span className="text-[15px] text-gray-500 w-16 text-right">{formatTime(flight.return_flight.arrival_time)}</span>
             <span className="text-[15px] text-gray-400 w-14 text-right">{formatDate(flight.return_flight.departure_time)}</span>
-            {flight.return_flight.stops > 0 && flight.return_flight.layovers?.length > 0 && (
+            {flight.return_flight.stops > 0 && flight.return_flight.layovers && flight.return_flight.layovers.length > 0 && (
               <span className="text-[15px] text-gray-400 ml-1">via {flight.return_flight.layovers.join(',')}</span>
             )}
           </div>

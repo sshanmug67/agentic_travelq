@@ -9,8 +9,17 @@ Strategy:
 4. Amadeus → Backup option if Google fails
 5. Booking Links → Direct users to OTAs
 
+Changes (v2):
+  - Removed plain-text recommendation
+  - LLM now picks the recommended hotel ID based on full user preferences
+  - LLM returns structured JSON: { recommended_id, reason, summary }
+  - Summary is the conversational message; recommended_id gets stored
+  - store_recommendation() called so frontend can read recommendations.hotel
+
 Location: backend/agents/hotel_agent.py
 """
+import json
+import re
 import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime
@@ -38,16 +47,15 @@ class HotelAgent(TravelQBaseAgent):
     """
     
     def __init__(self, trip_id: str, trip_storage: TripStorageInterface, **kwargs):
-        system_message = """
-You are a helpful Hotel Search Assistant with access to real hotel data.
+        system_message = """You are a Hotel Search Assistant that recommends hotels based on user preferences.
 
-Your job:
-1. Search hotels using Google Places (reviews, photos, ratings)
-2. Get real pricing from Xotelo API
-3. Provide booking links to major sites
-4. Give personalized recommendations
+You will be given:
+1. A list of available hotels with IDs, prices, ratings, reviews, and locations
+2. The user's preferences (budget, minimum rating, amenities, trip purpose, etc.)
 
-Be friendly, concise, and helpful. Focus on value, not just price.
+Your job is to pick the BEST hotel for this specific user and explain why.
+
+You MUST respond with valid JSON only — no markdown, no backticks, no extra text.
 """
         
         super().__init__(
@@ -167,8 +175,8 @@ Be friendly, concise, and helpful. Focus on value, not just price.
             
             log_agent_raw(f"💾 Stored {len(hotels)} hotels in storage", agent_name="HotelAgent")
             
-            # Generate recommendation
-            recommendation = self._generate_recommendation(hotels, search_params)
+            # LLM picks the best hotel and explains why
+            recommendation = self._generate_recommendation(hotels, preferences)
             
             # Log outgoing
             self.log_conversation_message(
@@ -187,6 +195,10 @@ Be friendly, concise, and helpful. Focus on value, not just price.
             error_msg = f"I encountered an error: {str(e)}. Please try again."
             return self.signal_completion(error_msg)
     
+    # ─────────────────────────────────────────────────────────────────────
+    # HOTEL SEARCH WORKFLOW (unchanged)
+    # ─────────────────────────────────────────────────────────────────────
+
     def _search_hotels_complete(
         self,
         destination: str,
@@ -230,7 +242,7 @@ Be friendly, concise, and helpful. Focus on value, not just price.
         if self.google_places and self.google_places.client:
             google_hotels = self.google_places.search_hotels(
                 location=destination,
-                radius=5000,  # 5km radius
+                radius=5000,
                 min_rating=min_rating,
                 agent_logger=self.logger
             )
@@ -239,10 +251,8 @@ Be friendly, concise, and helpful. Focus on value, not just price.
                 log_agent_raw(f"✅ Google Places: Found {len(google_hotels)} hotels", 
                             agent_name="HotelAgent")
                 
-                # Limit to max_results
                 google_hotels = google_hotels[:max_results]
                 
-                # Enrich with pricing and links
                 enriched_hotels = self._enrich_hotels_with_pricing(
                     google_hotels=google_hotels,
                     destination=destination,
@@ -263,7 +273,6 @@ Be friendly, concise, and helpful. Focus on value, not just price.
         log_agent_raw("-" * 80, agent_name="HotelAgent")
         
         if self.amadeus_service and self.amadeus_service.client:
-            # Resolve city code
             city_code = self._resolve_city_code(destination)
             
             if city_code:
@@ -431,7 +440,6 @@ Be friendly, concise, and helpful. Focus on value, not just price.
         
         base_price = base_prices.get(price_level, 150)
         
-        # Adjust by rating
         if rating >= 4.7:
             multiplier = 1.4
         elif rating >= 4.5:
@@ -466,7 +474,6 @@ Be friendly, concise, and helpful. Focus on value, not just price.
     ) -> Hotel:
         """Create Hotel object from Google Places + pricing + links"""
         
-        # Parse reviews
         reviews = []
         if google_data.get('reviews'):
             for review_dict in google_data['reviews'][:5]:
@@ -479,34 +486,24 @@ Be friendly, concise, and helpful. Focus on value, not just price.
             id=google_data.get('place_id', str(time.time())),
             name=google_data.get('name', 'Unknown Hotel'),
             hotel_code=google_data.get('place_id', ''),
-            
-            # Location
             latitude=google_data.get('latitude', 0.0),
             longitude=google_data.get('longitude', 0.0),
             address=google_data.get('address', ''),
-            
-            # Google Places ratings
             place_id=google_data.get('place_id'),
             google_rating=google_data.get('google_rating'),
             user_ratings_total=google_data.get('user_ratings_total'),
             reviews=reviews,
-            
-            # Pricing
             price_per_night=pricing['price_per_night'],
             total_price=pricing['total_price'],
             currency=pricing['currency'],
             check_in_date=check_in_date,
             check_out_date=check_out_date,
             num_nights=num_nights,
-            
-            # Details
             photos=google_data.get('photos', []),
             website=google_data.get('website'),
             phone_number=google_data.get('phone_number'),
             google_url=google_data.get('google_url'),
             business_status=google_data.get('business_status'),
-            
-            # Booking links
             booking_url=booking_links.get('booking_com', {}).get('url'),
             description=f"Price source: {pricing['price_source']}"
         )
@@ -514,7 +511,6 @@ Be friendly, concise, and helpful. Focus on value, not just price.
     def _parse_hotel_data(self, data: Dict) -> Optional[Hotel]:
         """Parse Amadeus hotel data into Hotel object"""
         try:
-            # Parse amenities
             amenities_dict = data.get("amenities", {})
             amenities = HotelAmenities(**amenities_dict) if amenities_dict else None
             
@@ -548,82 +544,260 @@ Be friendly, concise, and helpful. Focus on value, not just price.
     def _hotel_to_dict(self, hotel: Hotel) -> Dict:
         """Convert Hotel to dict for storage"""
         return hotel.model_dump(mode='json')
-    
+
+    # ─────────────────────────────────────────────────────────────────────
+    # LLM-DRIVEN RECOMMENDATION
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _build_hotels_table(self, hotels: List[Hotel]) -> str:
+        """
+        Build a compact text table of all hotels for the LLM prompt.
+        Each row has the hotel ID so the LLM can reference it.
+        """
+        rows = []
+        for h in hotels:
+            rating = h.google_rating or h.rating or 0
+            reviews = h.user_ratings_total or h.review_count or 0
+            rows.append(
+                f"ID: {h.id} | {h.name} | "
+                f"${h.total_price:.2f} total (${h.price_per_night:.2f}/night, {h.num_nights} nights) | "
+                f"Rating: {rating}★ ({reviews} reviews) | "
+                f"Address: {h.address or 'N/A'}"
+            )
+        return "\n".join(rows)
+
+    def _build_preferences_summary(self, preferences: Any) -> str:
+        """
+        Build a readable summary of user preferences for the LLM.
+        Includes ALL hotel-relevant fields from the preferences object.
+        """
+        lines = []
+        lines.append(f"Hotel budget per night: ${preferences.budget.hotel_budget_per_night}")
+        lines.append(f"Minimum rating: {preferences.hotel_prefs.min_rating} stars")
+        
+        if hasattr(preferences.hotel_prefs, 'amenities') and preferences.hotel_prefs.amenities:
+            lines.append(f"Preferred amenities: {', '.join(preferences.hotel_prefs.amenities)}")
+        
+        if hasattr(preferences.hotel_prefs, 'preferred_location') and preferences.hotel_prefs.preferred_location:
+            loc = preferences.hotel_prefs.preferred_location.replace('_', ' ')
+            lines.append(f"Preferred location: {loc}")
+        
+        if hasattr(preferences.hotel_prefs, 'room_type') and preferences.hotel_prefs.room_type:
+            lines.append(f"Room type: {preferences.hotel_prefs.room_type}")
+        
+        if hasattr(preferences.hotel_prefs, 'price_range') and preferences.hotel_prefs.price_range:
+            lines.append(f"Price range: {preferences.hotel_prefs.price_range}")
+        
+        if hasattr(preferences.hotel_prefs, 'preferred_chains') and preferences.hotel_prefs.preferred_chains:
+            lines.append(f"Preferred chains: {', '.join(preferences.hotel_prefs.preferred_chains)}")
+        
+        lines.append(f"Trip purpose: {preferences.trip_purpose}")
+        lines.append(f"Travelers: {preferences.num_travelers}")
+        lines.append(f"Destination: {preferences.destination}")
+        
+        return "\n".join(lines)
+
+    def _parse_llm_json(self, text: str) -> Optional[Dict]:
+        """
+        Safely parse JSON from LLM response.
+        Strips markdown fences and handles common LLM formatting issues.
+        """
+        # Strip markdown code fences
+        cleaned = re.sub(r'^```(?:json)?\s*', '', text.strip())
+        cleaned = re.sub(r'\s*```$', '', cleaned.strip())
+        
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Try to find JSON object in the text
+            match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+        
+        return None
+
     def _generate_recommendation(
         self,
         hotels: List[Hotel],
-        preferences: Dict[str, Any]
+        preferences: Any
     ) -> str:
-        """Generate LLM recommendation"""
-        
+        """
+        LLM picks the best hotel based on user preferences.
+
+        Returns the conversational summary. The recommended_id is stored
+        in centralized storage for the frontend to consume.
+        """
         if not hotels:
-            return "No hotels found matching your criteria."
-        
-        # Sort by total price
-        hotels_sorted = sorted(hotels, key=lambda h: h.total_price)
-        
-        # Get top options
-        cheapest = hotels_sorted[0]
-        best_rated = max(hotels, key=lambda h: h.google_rating or h.rating or 0)
-        
-        # Build prompt
-        prompt = f"""
-Based on hotel search results, provide a helpful recommendation.
+            return "I couldn't find any hotels matching your criteria."
 
-SEARCH RESULTS:
-- Total hotels: {len(hotels)}
-- Price range: ${hotels_sorted[0].total_price:.2f} - ${hotels_sorted[-1].total_price:.2f} ({cheapest.num_nights} nights)
-- Rating range: {min(h.google_rating or h.rating or 0 for h in hotels):.1f} - {max(h.google_rating or h.rating or 0 for h in hotels):.1f} stars
+        # Build the prompt
+        hotels_table = self._build_hotels_table(hotels)
+        prefs_summary = self._build_preferences_summary(preferences)
+        valid_ids = [str(h.id) for h in hotels]
 
-TOP OPTIONS:
-1. Best Value: {cheapest.name}
-   - Price: ${cheapest.total_price:.2f} ({cheapest.num_nights} nights @ ${cheapest.price_per_night:.2f}/night)
-   - Rating: {cheapest.google_rating or cheapest.rating or 'N/A'} stars
-   - Reviews: {cheapest.user_ratings_total or cheapest.review_count or 0} reviews
+        prompt = f"""Here are the available hotels:
 
-2. Highest Rated: {best_rated.name}
-   - Price: ${best_rated.total_price:.2f}
-   - Rating: {best_rated.google_rating or best_rated.rating or 'N/A'} stars
-   - Reviews: {best_rated.user_ratings_total or best_rated.review_count or 0} reviews
+{hotels_table}
 
-USER PREFERENCES:
-- Budget per night: ${preferences.get('budget_per_night', 'Not specified')}
-- Minimum rating: {preferences.get('min_rating', 3)} stars
+User preferences:
+{prefs_summary}
 
-Provide a conversational recommendation (3-4 sentences):
-- Mention you reviewed all {len(hotels)} options
-- Recommend your top pick with specific name and why
-- Mention the number of reviews
-- Note that users can check current prices on Booking.com, Expedia, etc.
+Pick the single best hotel for this user. Consider their budget per night, minimum rating
+requirements, preferred amenities, preferred location (e.g. city center vs quiet area),
+room type preference, price range expectation, trip purpose, and number of travelers.
+Weigh the tradeoffs — a slightly more expensive hotel with excellent reviews and a central
+location may be better than the cheapest option with poor ratings, especially for a leisure
+trip. A business traveler may value wifi and location over pool access.
 
-Keep it natural and friendly.
+You MUST respond with ONLY a JSON object in this exact format, nothing else:
+{{
+  "recommended_id": "<the hotel ID from the list above>",
+  "reason": "<1-2 sentences explaining why this is the best match for this user's preferences>",
+  "summary": "<3-4 sentence friendly recommendation mentioning how many options you reviewed, why you picked this one, and any notable alternatives>"
+}}
+
+CRITICAL RULES:
+- recommended_id MUST be one of these exact values: {valid_ids}
+- Do NOT invent a hotel ID. Pick from the list above.
+- Respond with valid JSON only. No markdown, no backticks, no extra text.
 """
-        
-        # Call LLM
+
+        log_agent_raw("🤖 Asking LLM to pick best hotel based on preferences...",
+                     agent_name="HotelAgent")
+
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
-            
+
             response = client.chat.completions.create(
                 model=settings.llm_model,
                 messages=[
                     {"role": "system", "content": self.system_message},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                max_tokens=300
+                temperature=0.3,
+                max_tokens=400
             )
-            
-            return response.choices[0].message.content.strip()
-            
+
+            raw_response = response.choices[0].message.content.strip()
+
+            log_agent_raw(f"📥 LLM raw response: {raw_response}", agent_name="HotelAgent")
+
+            # Parse the JSON
+            result = self._parse_llm_json(raw_response)
+
+            if not result:
+                log_agent_raw("⚠️ Failed to parse LLM JSON, using fallback", agent_name="HotelAgent")
+                return self._fallback_recommendation(hotels, preferences)
+
+            recommended_id = str(result.get("recommended_id", ""))
+            reason = result.get("reason", "Best overall match")
+            summary = result.get("summary", "")
+
+            # Validate the ID exists in our hotel list
+            if recommended_id not in valid_ids:
+                log_agent_raw(
+                    f"⚠️ LLM returned invalid ID '{recommended_id}', "
+                    f"valid IDs are {valid_ids}. Using fallback.",
+                    agent_name="HotelAgent"
+                )
+                return self._fallback_recommendation(hotels, preferences)
+
+            # Find the matching hotel for metadata
+            recommended_hotel = next(h for h in hotels if str(h.id) == recommended_id)
+
+            # ✅ Store the recommendation in centralized storage
+            self.trip_storage.store_recommendation(
+                trip_id=self.trip_id,
+                category="hotel",
+                recommended_id=recommended_id,
+                reason=reason,
+                metadata={
+                    "name": recommended_hotel.name,
+                    "total_price": recommended_hotel.total_price,
+                    "price_per_night": recommended_hotel.price_per_night,
+                    "rating": recommended_hotel.google_rating or recommended_hotel.rating,
+                    "reviews": recommended_hotel.user_ratings_total or recommended_hotel.review_count or 0,
+                    "total_options_reviewed": len(hotels)
+                }
+            )
+
+            log_agent_raw(
+                f"⭐ LLM picked hotel {recommended_id} "
+                f"({recommended_hotel.name} ${recommended_hotel.total_price:.2f}): {reason}",
+                agent_name="HotelAgent"
+            )
+
+            return summary if summary else (
+                f"I recommend {recommended_hotel.name} at "
+                f"${recommended_hotel.total_price:.2f} for {recommended_hotel.num_nights} nights. "
+                f"{reason}"
+            )
+
         except Exception as e:
             log_agent_raw(f"⚠️ LLM recommendation failed: {str(e)}", agent_name="HotelAgent")
-            # Fallback
-            return (f"I reviewed {len(hotels)} hotels. My top recommendation is {cheapest.name} "
-                   f"at ${cheapest.total_price:.2f} for {cheapest.num_nights} nights "
-                   f"({cheapest.google_rating or cheapest.rating or 'unrated'} stars with "
-                   f"{cheapest.user_ratings_total or cheapest.review_count or 0} reviews). "
-                   f"You can check current prices on Booking.com, Expedia, and other sites.")
-    
+            return self._fallback_recommendation(hotels, preferences)
+
+    def _fallback_recommendation(self, hotels: List[Hotel], preferences: Any) -> str:
+        """
+        Fallback when LLM fails: pick best-rated hotel within budget, store it, return template.
+        This is the safety net — not the primary path.
+        """
+        budget = getattr(preferences.budget, 'hotel_budget_per_night', None)
+
+        # Filter by budget if available, else use all
+        if budget and budget > 0:
+            within_budget = [h for h in hotels if h.price_per_night <= budget * 1.1]
+            candidates = within_budget if within_budget else hotels
+        else:
+            candidates = hotels
+
+        # Pick highest rated among candidates
+        best = max(
+            candidates,
+            key=lambda h: (h.google_rating or h.rating or 0)
+        )
+
+        self.trip_storage.store_recommendation(
+            trip_id=self.trip_id,
+            category="hotel",
+            recommended_id=str(best.id),
+            reason="Fallback: highest rated within budget (LLM recommendation unavailable)",
+            metadata={
+                "name": best.name,
+                "total_price": best.total_price,
+                "price_per_night": best.price_per_night,
+                "rating": best.google_rating or best.rating,
+                "reviews": best.user_ratings_total or best.review_count or 0,
+                "total_options_reviewed": len(hotels),
+                "is_fallback": True
+            }
+        )
+
+        log_agent_raw(
+            f"⭐ Fallback pick: hotel {best.id} "
+            f"({best.name} ${best.total_price:.2f}, "
+            f"{best.google_rating or best.rating or 'N/A'}★)",
+            agent_name="HotelAgent"
+        )
+
+        rating_str = f"{best.google_rating or best.rating or 'unrated'}★"
+        reviews_count = best.user_ratings_total or best.review_count or 0
+
+        return (
+            f"I reviewed {len(hotels)} hotels for your trip. "
+            f"My top recommendation is {best.name} at "
+            f"${best.total_price:.2f} for {best.num_nights} nights "
+            f"({rating_str} with {reviews_count} reviews). "
+            f"You can check current prices on Booking.com, Expedia, and other sites."
+        )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────
+
     def _resolve_city_code(self, destination: str) -> Optional[str]:
         """Resolve destination to city IATA code for Amadeus"""
         city_map = {
@@ -651,11 +825,9 @@ Keep it natural and friendly.
         
         dest_lower = destination.lower().strip()
         
-        # Check if already a code
         if len(dest_lower) == 3 and dest_lower.isalpha():
             return dest_lower.upper()
         
-        # Look up in map
         for city, code in city_map.items():
             if city in dest_lower:
                 return code
@@ -671,7 +843,6 @@ Keep it natural and friendly.
         """Generate mock hotels when all APIs fail"""
         from datetime import datetime
         
-        # Calculate nights
         check_in_dt = datetime.fromisoformat(check_in)
         check_out_dt = datetime.fromisoformat(check_out)
         num_nights = (check_out_dt - check_in_dt).days
@@ -697,15 +868,9 @@ Keep it natural and friendly.
                 num_nights=num_nights,
                 room_type="Deluxe Room",
                 amenities=HotelAmenities(
-                    wifi=True,
-                    parking=True,
-                    pool=True,
-                    gym=True,
-                    restaurant=True,
-                    room_service=True,
-                    air_conditioning=True,
-                    bar=True,
-                    breakfast=True
+                    wifi=True, parking=True, pool=True, gym=True,
+                    restaurant=True, room_service=True,
+                    air_conditioning=True, bar=True, breakfast=True
                 ),
                 description="Mock data - Luxury hotel",
                 property_type="HOTEL"
@@ -728,11 +893,8 @@ Keep it natural and friendly.
                 num_nights=num_nights,
                 room_type="Standard Room",
                 amenities=HotelAmenities(
-                    wifi=True,
-                    gym=True,
-                    restaurant=True,
-                    air_conditioning=True,
-                    breakfast=True
+                    wifi=True, gym=True, restaurant=True,
+                    air_conditioning=True, breakfast=True
                 ),
                 description="Mock data - Modern hotel",
                 property_type="HOTEL"
@@ -755,9 +917,7 @@ Keep it natural and friendly.
                 num_nights=num_nights,
                 room_type="Economy Room",
                 amenities=HotelAmenities(
-                    wifi=True,
-                    parking=True,
-                    air_conditioning=True
+                    wifi=True, parking=True, air_conditioning=True
                 ),
                 description="Mock data - Affordable accommodation",
                 property_type="HOTEL"

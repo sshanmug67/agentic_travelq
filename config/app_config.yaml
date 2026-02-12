@@ -63,7 +63,7 @@ autogen:
 # --- Agent Configuration ---
 agents:
   flight:
-    enabled: false
+    enabled: true
     max_results: 10             # Max flight results to return
     
   weather:

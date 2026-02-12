@@ -7,14 +7,22 @@
 export interface Flight {
   id: string;
   airline: string;
+  airline_code: string;
+  is_round_trip?: boolean;
   outbound: FlightLeg;
   return_flight?: FlightLeg;
   price: number;
+  currency?: string;
   cabin_class: string;
   total_duration: string;
+  checked_bags?: {
+    quantity: number;
+    weight: number;
+    weight_unit: string;
+  };
   cabin_bags?: {
     quantity: number;
-    weight: string;
+    weight: number;
     weight_unit: string;
   };
   ai_recommended?: boolean;
@@ -29,6 +37,8 @@ export interface FlightLeg {
   departure_time: string;
   arrival_time: string;
   duration: string;
+  airline?: string;
+  airline_code?: string;
   stops: number;
   layovers?: string[];
 }
@@ -76,25 +86,31 @@ export interface Activity {
   estimatedCost?: number;
 }
 
+export interface Event {
+  id: string;
+  name: string;
+  category: string;
+  description?: string;
+  start_time: string;
+  end_time?: string;
+  venue: string;
+  address: string;
+  image_url?: string;
+  price_range?: string;
+  ticket_url?: string;
+}
+
 
 // ============================================================================
-// AI RECOMMENDATIONS — Structured agent picks from backend
+// AI RECOMMENDATIONS
 // ============================================================================
 
-/**
- * A single agent's top-pick recommendation for a category.
- * Stored by each agent via trip_storage.store_recommendation().
- */
 export interface AgentRecommendation {
   recommended_id: string;
   reason: string;
   metadata?: Record<string, any>;
 }
 
-/**
- * All agent recommendations keyed by category.
- * Returned by the orchestrator in the API response.
- */
 export interface AgentRecommendations {
   flight?: AgentRecommendation;
   hotel?: AgentRecommendation;
@@ -104,16 +120,9 @@ export interface AgentRecommendations {
 
 
 // ============================================================================
-// API RESPONSE — What POST /api/trips/search returns
+// API RESPONSE
 // ============================================================================
 
-/**
- * Response from the trip planning backend.
- * Maps to backend TripResponse (models/trip.py).
- *
- * Supports both snake_case (trip_id, final_recommendation) from Python
- * and optional camelCase aliases (tripId) in case a serializer converts them.
- */
 export interface TripPlanResponse {
   status: string;
   trip_id: string;
@@ -145,68 +154,44 @@ export interface TripPlanResponse {
 
 
 // ============================================================================
-// USER PREFERENCES — Matches backend user_preferences.py
+// USER PREFERENCES — camelCase (Dashboard flow, Zustand store)
 // ============================================================================
 
-/**
- * Simple named preference with preferred flag.
- * Used in the PreferencesPanel UI for airlines, hotels, cuisines, activities.
- */
 export interface NamedPreference {
   name: string;
   preferred?: boolean;
 }
 
-/**
- * Flight search preferences.
- * Maps to backend: FlightPreferences in user_preferences.py
- */
 export interface FlightPreferences {
-  preferredCarriers: string[];     // Populated from airlines NamedPreference list
-  maxStops: number;                // 0 = direct only, 1, 2
-  cabinClass: string;              // economy, premium_economy, business, first
-  timePreference: string;          // morning, afternoon, evening, night, flexible
-  seatPreference: string;          // window, aisle, middle
+  preferredCarriers: string[];
+  maxStops: number;
+  cabinClass: string;
+  timePreference: string;
+  seatPreference: string;
 }
 
-/**
- * Hotel search preferences.
- * Maps to backend: HotelPreferences in user_preferences.py
- */
 export interface HotelPreferences {
-  minRating: number;               // 1-5 stars
-  preferredLocation: string;       // city_center, near_attractions, quiet_area
-  amenities: string[];             // wifi, breakfast, gym, pool, spa, etc.
-  roomType: string;                // standard, deluxe, suite
-  priceRange: string;              // budget, moderate, luxury
+  minRating: number;
+  preferredLocation: string;
+  amenities: string[];
+  roomType: string;
+  priceRange: string;
 }
 
-/**
- * Activity search preferences.
- * Maps to backend: ActivityPreferences in user_preferences.py
- */
 export interface ActivityPreferences {
-  interests: string[];             // Populated from activities NamedPreference list
-  pace: string;                    // relaxed, moderate, fast-paced
-  preferredTimes: string[];        // morning, afternoon, evening
+  interests: string[];
+  pace: string;
+  preferredTimes: string[];
   accessibilityNeeds?: string;
-  entertainmentHoursPerDay: number; // 2-12
+  entertainmentHoursPerDay: number;
 }
 
-/**
- * Local transport preferences.
- * Maps to backend: TransportPreferences in user_preferences.py
- */
 export interface TransportPreferences {
-  preferredModes: string[];        // metro, bus, cab, walk, bike
-  maxWalkDistance: number;          // miles
-  comfortLevel: string;            // budget, moderate, premium
+  preferredModes: string[];
+  maxWalkDistance: number;
+  comfortLevel: string;
 }
 
-/**
- * Budget constraints — detailed per-category budgets.
- * Maps to backend: BudgetConstraints in user_preferences.py
- */
 export interface BudgetConstraints {
   totalBudget: number;
   flightBudget: number;
@@ -216,47 +201,21 @@ export interface BudgetConstraints {
   transportBudget: number;
 }
 
-/**
- * Budget tier labels used in the PreferencesPanel UI.
- * These are display strings, not numeric values.
- */
 export interface BudgetTiers {
-  meals: string;                   // "$ (Budget)", "$$ (Mid-range)", "$$$ (Fine dining)"
+  meals: string;
   accommodation: string;
   activities: string;
 }
 
-
-// ============================================================================
-// COMBINED PREFERENCES — What lives in the Zustand store
-// ============================================================================
-
-/**
- * Complete user preferences combining:
- *   1. UI preferences (named lists the user can add/remove/star in PreferencesPanel)
- *   2. Detailed preferences (structured settings, initially from defaults)
- *
- * The UI preferences (airlines, hotelChains, cuisines, activities, budgetTiers)
- * are what the user interacts with in the PreferencesPanel.
- *
- * The detailed preferences (flightPrefs, hotelPrefs, etc.) hold the full
- * settings that match the backend. They're initialized with sensible defaults
- * and will eventually come from a user profile DB.
- *
- * When sending to the backend, the bridge merges them:
- *   - airlines[].name where preferred → flightPrefs.preferredCarriers
- *   - activities[].name where preferred → activityPrefs.interests
- *   - etc.
- */
 export interface UserPreferences {
   // ── UI Preferences (PreferencesPanel) ──────────────────────────────────
   airlines: NamedPreference[];
   hotelChains: NamedPreference[];
   cuisines: NamedPreference[];
   activities: NamedPreference[];
-  budget: BudgetTiers;             // Named "budget" to match PreferencesPanel's interface
+  budget: BudgetTiers;               // ← "budget" — matches useTripData store
 
-  // ── Detailed Preferences (defaults until user changes them) ────────────
+  // ── Detailed Preferences ───────────────────────────────────────────────
   flightPrefs: FlightPreferences;
   hotelPrefs: HotelPreferences;
   activityPrefs: ActivityPreferences;
@@ -264,16 +223,49 @@ export interface UserPreferences {
   budgetConstraints: BudgetConstraints;
 
   // ── Additional ─────────────────────────────────────────────────────────
-  tripPurpose: string;             // leisure, business, adventure, relaxation
+  tripPurpose: string;
   specialRequirements?: string;
 }
 
 
 // ============================================================================
-// LEGACY TYPES — Kept for backward compatibility with TripSearchForm
+// LEGACY TYPES — snake_case (TripSearchForm, direct backend payloads)
 // ============================================================================
 
 export type TripPreset = 'default' | 'budget' | 'luxury' | 'business';
+
+export interface LegacyFlightPrefs {
+  preferred_carriers?: string[];
+  max_stops: number;
+  cabin_class: string;
+  time_preference: string;
+  seat_preference?: string;
+}
+
+export interface LegacyHotelPrefs {
+  min_rating: number;
+  preferred_location: string;
+  amenities?: string[];
+  room_type?: string;
+  price_range?: string;
+}
+
+export interface LegacyActivityPrefs {
+  interests: string[];
+  pace: string;
+  entertainment_hours_per_day: number;
+  preferred_times?: string[];
+}
+
+export interface LegacyBudget {
+  total_budget: number;
+  flight_budget: number;
+  hotel_budget_per_night: number;
+  daily_activity_budget?: number;
+  daily_food_budget?: number;
+  transport_budget?: number;
+  currency?: string;
+}
 
 export interface TripRequest {
   origin: string;
@@ -282,11 +274,11 @@ export interface TripRequest {
   return_date: string;
   num_travelers: number;
   trip_purpose: string;
-  flight_prefs: any;
-  hotel_prefs: any;
-  activity_prefs: any;
+  flight_prefs: LegacyFlightPrefs;
+  hotel_prefs: LegacyHotelPrefs;
+  activity_prefs: LegacyActivityPrefs;
   transport_prefs: any;
-  budget: any;
+  budget: LegacyBudget;
 }
 
 export const TRIP_PRESETS: Array<{ id: TripPreset; name: string; description: string }> = [
@@ -296,18 +288,18 @@ export const TRIP_PRESETS: Array<{ id: TripPreset; name: string; description: st
   { id: 'business', name: 'Business', description: 'Efficient & professional' },
 ];
 
-export function getDefaultFlightPrefs(_preset: TripPreset): any {
+export function getDefaultFlightPrefs(_preset: TripPreset): LegacyFlightPrefs {
   return { max_stops: 1, cabin_class: 'economy', time_preference: 'flexible' };
 }
 
-export function getDefaultHotelPrefs(_preset: TripPreset): any {
+export function getDefaultHotelPrefs(_preset: TripPreset): LegacyHotelPrefs {
   return { min_rating: 3.5, preferred_location: 'city_center' };
 }
 
-export function getDefaultActivityPrefs(_preset: TripPreset): any {
+export function getDefaultActivityPrefs(_preset: TripPreset): LegacyActivityPrefs {
   return { interests: [], pace: 'moderate', entertainment_hours_per_day: 6 };
 }
 
-export function getDefaultBudget(_preset: TripPreset, _days?: number): any {
+export function getDefaultBudget(_preset: TripPreset, _days?: number): LegacyBudget {
   return { total_budget: 4000, flight_budget: 1200, hotel_budget_per_night: 280 };
 }

@@ -7,6 +7,7 @@ import { PreferencesPanel } from '../components/common/PreferencesPanel';
 import { PreferencesSummary } from '../components/common/PreferencesSummary';
 import { TripSummaryBar } from '../components/common/TripSummaryBar';
 import { FlightCard } from '../components/flight/FlightCard';
+import { HotelCard } from '../components/hotel/HotelCard';
 import { useTripData } from '../hooks/useTripData';
 import { useItinerary } from '../hooks/useItinerary';
 import { tripApi } from '../services/api';
@@ -16,13 +17,13 @@ type ResultsTab = 'flights' | 'hotels' | 'restaurants' | 'activities';
 
 export const Dashboard: React.FC = () => {
   const { 
-    tripData, preferences, flights,
+    tripData, preferences, flights, hotels,
     setTripData, setFlights, setHotels, setRestaurants, setActivities, setWeather
   } = useTripData();
   const { 
     flight: selectedFlight, hotel: selectedHotel, 
     restaurants: selectedRestaurants, activities: selectedActivities,
-    selectFlight 
+    selectFlight, selectHotel 
   } = useItinerary();
   
   const [naturalLanguageRequest, setNaturalLanguageRequest] = useState('');
@@ -30,15 +31,19 @@ export const Dashboard: React.FC = () => {
   const [lastSearchMessage, setLastSearchMessage] = useState('');
   const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('flights');
   const [aiRecommendedFlightId, setAiRecommendedFlightId] = useState<string | null>(null);
+  const [aiRecommendedHotelId, setAiRecommendedHotelId] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
 
   // Check if we have any results to show
-  const hasResults = flights.length > 0;
+  const hasResults = flights.length > 0 || hotels.length > 0;
 
   // Clear stale itinerary on mount if no results are loaded
-  // (persisted state from a previous session with no matching options)
   useEffect(() => {
-    if (!hasResults) {
+    const { flights, hotels, restaurants, activities } = useTripData.getState();
+    const hasAnyResults = flights.length > 0 || hotels.length > 0 ||
+                           restaurants.length > 0 || activities.length > 0;
+    if (!hasAnyResults) {
+      try { localStorage.removeItem('itinerary-storage'); } catch (e) { /* ignore */ }
       useItinerary.getState().clearItinerary();
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -83,8 +88,10 @@ export const Dashboard: React.FC = () => {
         setTripData({ id: resolvedTripId });
       }
 
-      // Update all options with results
-      const results = response.results || response.options || {};
+      // ✅ FIX: Type the fallback so TS knows .flights/.hotels etc. are valid
+      const results: Record<string, any> =
+        response.results || response.options || {};
+
       const flightResults = results.flights || [];
       setFlights(flightResults);
       setHotels(results.hotels || []);
@@ -92,11 +99,11 @@ export const Dashboard: React.FC = () => {
       setActivities(results.activities || []);
       setWeather(results.weather || []);
 
-      // ✅ Auto-select the AI recommended flight using structured recommendations
+      // Auto-select the AI recommended flight
       if (flightResults.length > 0) {
         const recFlightId = response.recommendations?.flight?.recommended_id;
         const aiPick = recFlightId
-          ? flightResults.find((f) => String(f.id) === String(recFlightId))
+          ? flightResults.find((f: any) => String(f.id) === String(recFlightId))
           : null;
         
         const flightToSelect = aiPick || flightResults[0];
@@ -106,12 +113,29 @@ export const Dashboard: React.FC = () => {
         setActiveResultsTab('flights');
       }
 
+      // Auto-select the AI recommended hotel
+      const hotelResults = results.hotels || [];
+      if (hotelResults.length > 0) {
+        const recHotelId = response.recommendations?.hotel?.recommended_id;
+        const aiHotelPick = recHotelId
+          ? hotelResults.find((h: any) => String(h.id) === String(recHotelId))
+          : null;
+        
+        const hotelToSelect = aiHotelPick || hotelResults[0];
+        
+        setAiRecommendedHotelId(hotelToSelect.id);
+        selectHotel(hotelToSelect, 'ai');
+
+        if (flightResults.length === 0) {
+          setActiveResultsTab('hotels');
+        }
+      }
+
       // Store structured recommendations for display
       if (response.recommendations) {
         setRecommendations(response.recommendations);
       }
 
-      // Show success message
       setLastSearchMessage(
         response.message || response.final_recommendation || 'Trip planning complete!'
       );
@@ -127,15 +151,18 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleSelectFlight = (flight: any) => {
-    // If the user picks the AI-recommended flight, keep it tagged as 'ai'
     const source = flight.id === aiRecommendedFlightId ? 'ai' : 'user';
     selectFlight(flight, source);
   };
 
-  // Results tabs config
+  const handleSelectHotel = (hotel: any) => {
+    const source = hotel.id === aiRecommendedHotelId ? 'ai' : 'user';
+    selectHotel(hotel, source);
+  };
+
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
-    { id: 'hotels', label: 'Hotels', icon: '🏨', count: useTripData.getState().hotels.length },
+    { id: 'hotels', label: 'Hotels', icon: '🏨', count: hotels.length },
     { id: 'restaurants', label: 'Restaurants', icon: '🍽️', count: useTripData.getState().restaurants.length },
     { id: 'activities', label: 'Activities', icon: '🎭', count: useTripData.getState().activities.length },
   ];
@@ -157,16 +184,12 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Trip Summary Bar */}
       <TripSummaryBar />
-
-      {/* Preferences Summary (collapsed bar below TripSummaryBar) */}
       <PreferencesSummary preferences={preferences} />
 
       {/* Natural Language Input & Preferences */}
       <div className="px-6 lg:px-[10%] py-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          {/* Left: Natural Language Input */}
           <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
             <NaturalLanguageInput 
               value={naturalLanguageRequest}
@@ -175,15 +198,12 @@ export const Dashboard: React.FC = () => {
               isProcessing={isPlanning}
             />
           </div>
-
-          {/* Right: Preferences Panel */}
           <PreferencesPanel 
             preferences={preferences} 
             onUpdate={useTripData.getState().updatePreferences} 
           />
         </div>
 
-        {/* Big "Plan My Trip" Button */}
         <div className="max-w-4xl mx-auto">
           <button
             onClick={() => handlePlanTrip(naturalLanguageRequest)}
@@ -199,13 +219,17 @@ export const Dashboard: React.FC = () => {
               <>🚀 Plan My Trip</>
             )}
           </button>
-          
         </div>
+
+        {/* AI response message */}
+        {lastSearchMessage && (
+          <div className="max-w-4xl mx-auto mt-4 bg-white rounded-lg border border-purple-200 p-4 text-[17px] text-gray-700 shadow-sm">
+            💬 {lastSearchMessage}
+          </div>
+        )}
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════
-          AI RECOMMENDATION STICKY NOTES — 3 per row
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* AI RECOMMENDATION STICKY NOTES */}
       {recommendations && Object.keys(recommendations).length > 0 && (() => {
         const categoryConfig: Record<string, { icon: string; bg: string; tape: string; label: string }> = {
           flight:     { icon: '✈️',  bg: 'bg-yellow-100', tape: 'bg-yellow-300', label: 'Flight' },
@@ -215,7 +239,6 @@ export const Dashboard: React.FC = () => {
           weather:    { icon: '🌤️',  bg: 'bg-orange-100', tape: 'bg-orange-300', label: 'Weather' },
         };
 
-        // Build cards: real recommendations + pending placeholders
         const allCategories = ['flight', 'hotel', 'restaurant', 'activity'];
         const cards = allCategories.map((cat) => ({
           category: cat,
@@ -243,10 +266,8 @@ export const Dashboard: React.FC = () => {
                     transform: `rotate(${(category.charCodeAt(0) % 3 - 1) * 0.8}deg)`,
                   }}
                 >
-                  {/* Tape strip */}
                   <div className={`absolute -top-1.5 left-1/2 -translate-x-1/2 w-16 h-3 ${config.tape} rounded-sm opacity-70`} />
 
-                  {/* Header */}
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-1.5">
                       <span className="text-[21px]">{config.icon}</span>
@@ -263,19 +284,16 @@ export const Dashboard: React.FC = () => {
 
                   {rec && rec.recommended_id ? (
                     <div className="flex-1 overflow-y-auto pr-1">
-                      {/* Name / Airline */}
                       <p className="text-[19px] font-semibold text-gray-800 mb-1 truncate">
                         {rec.metadata?.airline
                           || rec.metadata?.hotel_name
                           || rec.metadata?.name
                           || `Option #${rec.recommended_id}`}
                       </p>
-                      {/* Reason */}
                       <p className="text-[17px] text-gray-600 leading-relaxed"
                          style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
                         {rec.reason || 'Best match for your preferences'}
                       </p>
-                      {/* Quick stats */}
                       <div className="flex items-center gap-2 mt-2 text-[15px] text-gray-500">
                         {rec.metadata?.is_direct !== undefined && (
                           <span>{rec.metadata.is_direct ? '✅ Direct' : '🔄 Connecting'}</span>
@@ -301,18 +319,14 @@ export const Dashboard: React.FC = () => {
         );
       })()}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          MAIN CONTENT: Results (left) + Itinerary (right)
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* MAIN CONTENT: Results (left) + Itinerary (right) */}
       <div className="px-6 lg:px-[10%] pb-6">
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           
-          {/* ── LEFT: Results Panel (60% width) ───────────────────────── */}
           <div className="lg:col-span-3">
             {hasResults ? (
               <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
                 
-                {/* Results Tab Bar */}
                 <div className="flex border-b bg-gradient-to-r from-purple-50 to-pink-50">
                   {resultsTabs.map((tab) => (
                     <button
@@ -344,10 +358,8 @@ export const Dashboard: React.FC = () => {
                   ))}
                 </div>
 
-                {/* Results Content */}
                 <div className="p-6">
 
-                  {/* ── FLIGHTS TAB ──────────────────────────────────── */}
                   {activeResultsTab === 'flights' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
@@ -380,18 +392,38 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
-                  {/* ── HOTELS TAB (placeholder — wire up next) ──────── */}
                   {activeResultsTab === 'hotels' && (
-                    <div className="text-center py-12 text-gray-500">
-                      <div className="text-4xl mb-3">🏨</div>
-                      <p className="font-semibold">Hotel results — wiring up next</p>
-                      <p className="text-[17px] mt-1">
-                        {useTripData.getState().hotels.length} hotels found
-                      </p>
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-[21px] font-bold text-gray-800">
+                          🏨 Available Hotels
+                        </h2>
+                        <div className="flex items-center gap-3">
+                          {selectedHotel && (
+                            <span className="text-[15px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium truncate max-w-[280px]">
+                              Selected: {selectedHotel.name} — ${selectedHotel.total_price}
+                            </span>
+                          )}
+                          <span className="text-[17px] text-gray-500">
+                            {hotels.length} option{hotels.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        {hotels.map((hotel, index) => (
+                          <HotelCard
+                            key={hotel.id || index}
+                            hotel={hotel}
+                            isSelected={selectedHotel?.id === hotel.id}
+                            isAiRecommended={hotel.id === aiRecommendedHotelId}
+                            onSelect={() => handleSelectHotel(hotel)}
+                          />
+                        ))}
+                      </div>
                     </div>
                   )}
 
-                  {/* ── RESTAURANTS TAB (placeholder) ─────────────────── */}
                   {activeResultsTab === 'restaurants' && (
                     <div className="text-center py-12 text-gray-500">
                       <div className="text-4xl mb-3">🍽️</div>
@@ -402,7 +434,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
-                  {/* ── ACTIVITIES TAB (placeholder) ──────────────────── */}
                   {activeResultsTab === 'activities' && (
                     <div className="text-center py-12 text-gray-500">
                       <div className="text-4xl mb-3">🎭</div>
@@ -415,7 +446,6 @@ export const Dashboard: React.FC = () => {
                 </div>
               </div>
             ) : (
-              /* Empty State — before any search */
               <div className="bg-white rounded-xl shadow-lg p-8 border border-gray-200">
                 <div className="text-center py-20">
                   <div className="text-6xl mb-4">🚀</div>
@@ -433,7 +463,6 @@ export const Dashboard: React.FC = () => {
             )}
           </div>
 
-          {/* ── RIGHT: Itinerary Sidebar (40% width) ─────────────────── */}
           <div className="lg:col-span-2">
             <ItinerarySidebar />
           </div>

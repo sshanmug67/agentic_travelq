@@ -1,16 +1,18 @@
 /**
  * Enhanced Trip Search Form with Comprehensive Preferences
  * Location: frontend/src/components/common/TripSearchForm.tsx
+ *
+ * FIX: Handler types now use Legacy snake_case interfaces to match
+ *      the snake_case keys used in JSX (max_stops, cabin_class, etc.)
  */
 import React, { useState } from 'react';
 import { Search, ChevronDown, ChevronUp } from 'lucide-react';
 import type { 
   TripRequest, 
   TripPreset, 
-  FlightPreferences, 
-  HotelPreferences,
-  ActivityPreferences,
-  BudgetConstraints 
+  LegacyFlightPrefs,        // ← was FlightPreferences (camelCase)
+  LegacyHotelPrefs,         // ← was HotelPreferences (camelCase)
+  LegacyBudget              // ← was BudgetConstraints (camelCase)
 } from '@/types/trip';
 import { 
   TRIP_PRESETS, 
@@ -21,12 +23,12 @@ import {
 } from '@/types/trip';
 
 interface TripSearchFormProps {
-  onSubmit: (request: TripRequest) => void | Promise<void>;  // ✅ Changed from onSearch
+  onSubmit: (request: TripRequest) => void | Promise<void>;
   loading?: boolean;
 }
 
 export const TripSearchForm: React.FC<TripSearchFormProps> = ({ 
-  onSubmit,  // ✅ Changed from onSearch
+  onSubmit,
   loading = false 
 }) => {
   const [preset, setPreset] = useState<TripPreset>('default');
@@ -53,7 +55,6 @@ export const TripSearchForm: React.FC<TripSearchFormProps> = ({
   const handlePresetChange = (newPreset: TripPreset) => {
     setPreset(newPreset);
     
-    // Calculate days for budget
     const days = formData.departure_date && formData.return_date
       ? Math.ceil((new Date(formData.return_date).getTime() - new Date(formData.departure_date).getTime()) / (1000 * 60 * 60 * 24))
       : 7;
@@ -67,9 +68,9 @@ export const TripSearchForm: React.FC<TripSearchFormProps> = ({
     });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {  // ✅ Made async
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    await onSubmit(formData);  // ✅ Changed from onSearch, added await
+    await onSubmit(formData);
   };
 
   const handleBasicChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -80,7 +81,8 @@ export const TripSearchForm: React.FC<TripSearchFormProps> = ({
     });
   };
 
-  const handleFlightChange = (field: keyof FlightPreferences, value: any) => {
+  // ✅ FIX: Use LegacyFlightPrefs (snake_case keys) instead of FlightPreferences (camelCase)
+  const handleFlightChange = (field: keyof LegacyFlightPrefs, value: any) => {
     setFormData({
       ...formData,
       flight_prefs: {
@@ -90,7 +92,8 @@ export const TripSearchForm: React.FC<TripSearchFormProps> = ({
     });
   };
 
-  const handleHotelChange = (field: keyof HotelPreferences, value: any) => {
+  // ✅ FIX: Use LegacyHotelPrefs (snake_case keys) instead of HotelPreferences (camelCase)
+  const handleHotelChange = (field: keyof LegacyHotelPrefs, value: any) => {
     setFormData({
       ...formData,
       hotel_prefs: {
@@ -100,7 +103,8 @@ export const TripSearchForm: React.FC<TripSearchFormProps> = ({
     });
   };
 
-  const handleBudgetChange = (field: keyof BudgetConstraints, value: number) => {
+  // ✅ FIX: Use LegacyBudget (snake_case keys) instead of BudgetConstraints (camelCase)
+  const handleBudgetChange = (field: keyof LegacyBudget, value: number) => {
     setFormData({
       ...formData,
       budget: {
