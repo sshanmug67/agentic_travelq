@@ -123,35 +123,13 @@ class Settings:
     
     @classmethod
     def load(cls, config_file: str = None) -> "Settings":
-        """
-        Load configuration with priority order:
-        
-        1. Environment Variables (HIGHEST PRIORITY)
-        2. .env file (project_root/.env)
-        3. app_config.yaml (project_root/config/app_config.yaml)
-        4. Hardcoded defaults (fallback)
-        
-        Args:
-            config_file: Path to YAML config file. 
-                         Defaults to project_root/config/app_config.yaml
-        
-        Returns:
-            Settings instance
-        """
         settings = cls()
-        
-        # Step 1: Load .env file if it exists
         settings._load_dotenv()
         
-        # Step 2: Load defaults from YAML
         if config_file is None:
             config_file = str(settings._get_project_root() / "config" / "app_config.yaml")
         settings._load_from_yaml(config_file)
-        
-        # Step 3: Override with environment variables (highest priority)
         settings._load_from_environment()
-        
-        # Step 4: Validate
         settings.validate()
         
         return settings
@@ -161,12 +139,6 @@ class Settings:
     # =================================================================
     
     def _get_project_root(self) -> Path:
-        """
-        Get project root directory.
-        
-        This file location: project_root/backend/config/settings.py
-        Project root is 2 levels up: config/ -> backend/ -> project_root/
-        """
         return Path(__file__).resolve().parent.parent.parent
     
     # =================================================================
@@ -174,8 +146,6 @@ class Settings:
     # =================================================================
     
     def _load_dotenv(self):
-        """Load .env file from project root"""
-        # Look for .env in project root
         env_file = self._get_project_root() / ".env"
         
         if env_file.exists():
@@ -193,7 +163,6 @@ class Settings:
     # =================================================================
     
     def _load_from_yaml(self, filepath: str):
-        """Load configuration from YAML file"""
         config_file = Path(filepath)
         
         if not config_file.exists():
@@ -278,6 +247,14 @@ class Settings:
                     self.flight_agent_enabled = flight.get("enabled", self.flight_agent_enabled)
                     self.flight_agent_max_results = flight.get("max_results", self.flight_agent_max_results)
                 
+                if "hotel" in agents:
+                    hotel = agents["hotel"]
+                    self.hotel_agent_enabled = hotel.get("enabled", self.hotel_agent_enabled)
+                
+                if "hotel" in agents:
+                    hotel = agents["hotel"]
+                    self.hotel_agent_enabled = hotel.get("enabled", self.hotel_agent_enabled)
+                
                 if "weather" in agents:
                     weather = agents["weather"]
                     self.weather_agent_enabled = weather.get("enabled", self.weather_agent_enabled)
@@ -356,12 +333,10 @@ class Settings:
             self.amadeus_client_secret = os.getenv("AMADEUS_CLIENT_SECRET")
             logger.info("✓ AMADEUS_CLIENT_SECRET: Set from environment")
         
-        # --- Google Places API (THIS WAS MISSING!) ---
+        # --- Google Places API ---
         if os.getenv("GOOGLE_PLACES_API_KEY"):
             self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
-            # Mask the key for security (show first 10 chars)
-            masked_key = self.google_places_api_key[:10] + "..." if len(self.google_places_api_key) > 10 else "***"
-            logger.info(f"✓ GOOGLE_PLACES_API_KEY: Set from environment")
+            logger.info("✓ GOOGLE_PLACES_API_KEY: Set from environment")
         else:
             logger.warning("⚠️  GOOGLE_PLACES_API_KEY: NOT set in environment")
         
@@ -453,6 +428,20 @@ class Settings:
         logger.info("\n📋 LLM Configuration:")
         logger.info(f"   Model: {self.llm_model}")
         logger.info(f"   Embedding Model: {self.embedding_model}")
+        
+        logger.info("\n📋 Agent Status:")
+        agents_status = {
+            "Flight":       (self.flight_agent_enabled,       f"max_results={self.flight_agent_max_results}"),
+            "Hotel":        (self.hotel_agent_enabled,        None),
+            "Weather":      (self.weather_agent_enabled,      f"forecast_days={self.weather_agent_forecast_days}"),
+            "Events":       (self.events_agent_enabled,       f"max_results={self.events_agent_max_results}"),
+            "Places":       (self.places_agent_enabled,       f"max_results={self.places_agent_max_results}"),
+            "Orchestrator": (self.orchestrator_agent_enabled, f"parallel={self.orchestrator_parallel_execution}"),
+        }
+        for name, (enabled, extra) in agents_status.items():
+            status = "✅ ENABLED" if enabled else "❌ DISABLED"
+            detail = f" ({extra})" if enabled and extra else ""
+            logger.info(f"   {name:14s}: {status}{detail}")
         
         logger.info("\n📋 Environment:")
         logger.info(f"   Environment: {self.environment}")
