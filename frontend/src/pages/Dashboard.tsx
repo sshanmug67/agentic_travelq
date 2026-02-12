@@ -1,6 +1,6 @@
 // frontend/src/pages/Dashboard.tsx
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ItinerarySidebar } from '../components/itinerary/ItinerarySidebar';
 import { NaturalLanguageInput } from '../components/common/NaturalLanguageInput';
 import { PreferencesPanel } from '../components/common/PreferencesPanel';
@@ -33,6 +33,14 @@ export const Dashboard: React.FC = () => {
 
   // Check if we have any results to show
   const hasResults = flights.length > 0;
+
+  // Clear stale itinerary on mount if no results are loaded
+  // (persisted state from a previous session with no matching options)
+  useEffect(() => {
+    if (!hasResults) {
+      useItinerary.getState().clearItinerary();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handlePlanTrip = async (userRequest: string) => {
     if (!tripData.destination) {
@@ -84,8 +92,6 @@ export const Dashboard: React.FC = () => {
       setWeather(results.weather || []);
 
       // ✅ Auto-select the AI recommended flight using structured recommendations
-      // Backend returns: response.recommendations.flight.recommended_id
-      // Falls back to first flight if no recommendation exists
       if (flightResults.length > 0) {
         const recFlightId = response.recommendations?.flight?.recommended_id;
         const aiPick = recFlightId
@@ -115,7 +121,9 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleSelectFlight = (flight: any) => {
-    selectFlight(flight, 'user');
+    // If the user picks the AI-recommended flight, keep it tagged as 'ai'
+    const source = flight.id === aiRecommendedFlightId ? 'ai' : 'user';
+    selectFlight(flight, source);
   };
 
   // Results tabs config
@@ -130,7 +138,7 @@ export const Dashboard: React.FC = () => {
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50">
       {/* Header */}
       <div className="bg-white shadow-md sticky top-0 z-40">
-        <div className="px-6 py-3 flex items-center justify-between">
+        <div className="px-6 lg:px-[10%] py-3 flex items-center justify-between">
           <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
             TravelQ
           </h1>
@@ -150,7 +158,7 @@ export const Dashboard: React.FC = () => {
       <PreferencesSummary preferences={preferences} />
 
       {/* Natural Language Input & Preferences */}
-      <div className="px-6 py-6">
+      <div className="px-6 lg:px-[10%] py-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
           {/* Left: Natural Language Input */}
           <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
@@ -186,31 +194,100 @@ export const Dashboard: React.FC = () => {
             )}
           </button>
           
-          {/* AI Summary Message */}
-          {lastSearchMessage && (
-            <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-              <div className="flex items-start gap-3">
-                <span className="text-green-600 text-xl flex-shrink-0">✓</span>
-                <p className="text-green-800 text-sm whitespace-pre-wrap leading-relaxed">
-                  {lastSearchMessage.length > 300 
-                    ? lastSearchMessage.substring(0, 300) + '...' 
-                    : lastSearchMessage
-                  }
-                </p>
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════
+          AI RECOMMENDATION SUMMARY — full width across both panels
+          ══════════════════════════════════════════════════════════════════ */}
+      {lastSearchMessage && (
+        <div className="px-6 lg:px-[10%] pb-4">
+          <div className="bg-gradient-to-r from-purple-600 via-pink-600 to-orange-500 rounded-xl p-[1px]">
+            <div className="bg-white rounded-xl p-5">
+              <div className="flex items-start gap-4">
+                <div className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
+                  <span className="text-white text-lg">✨</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-sm font-bold text-purple-700 uppercase tracking-wide mb-2">
+                    TravelQ Recommendation
+                  </h3>
+                  <div className="max-h-40 overflow-y-auto pr-2 text-sm text-gray-700 leading-relaxed scrollbar-thin">
+                    {lastSearchMessage.split('\n').map((line, i) => {
+                      const trimmed = line.trim();
+                      
+                      // Horizontal rule
+                      if (trimmed === '---' || trimmed === '***') {
+                        return <hr key={i} className="my-2 border-gray-200" />;
+                      }
+                      
+                      // Empty line → spacing
+                      if (!trimmed) {
+                        return <div key={i} className="h-2" />;
+                      }
+                      
+                      // H1: # Heading
+                      if (trimmed.startsWith('# ')) {
+                        return (
+                          <h4 key={i} className="text-base font-bold text-gray-800 mt-2 mb-1">
+                            {trimmed.replace(/^# /, '')}
+                          </h4>
+                        );
+                      }
+                      
+                      // H2: ## Heading
+                      if (trimmed.startsWith('## ')) {
+                        return (
+                          <h5 key={i} className="text-sm font-bold text-purple-700 mt-3 mb-1">
+                            {trimmed.replace(/^## /, '')}
+                          </h5>
+                        );
+                      }
+                      
+                      // List item: - text
+                      if (trimmed.startsWith('- ')) {
+                        const content = trimmed.replace(/^- /, '');
+                        return (
+                          <div key={i} className="flex items-start gap-2 ml-2 my-0.5">
+                            <span className="text-purple-400 mt-0.5">•</span>
+                            <span
+                              dangerouslySetInnerHTML={{
+                                __html: content
+                                  .replace(/\*\*(.+?)\*\*/g, '<strong class="text-gray-800">$1</strong>')
+                              }}
+                            />
+                          </div>
+                        );
+                      }
+                      
+                      // Regular paragraph with bold support
+                      return (
+                        <p
+                          key={i}
+                          className="my-0.5"
+                          dangerouslySetInnerHTML={{
+                            __html: trimmed
+                              .replace(/\*\*(.+?)\*\*/g, '<strong class="text-gray-800">$1</strong>')
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════
           MAIN CONTENT: Results (left) + Itinerary (right)
           ══════════════════════════════════════════════════════════════════ */}
-      <div className="px-6 pb-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="px-6 lg:px-[10%] pb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           
-          {/* ── LEFT: Results Panel (2/3 width) ───────────────────────── */}
-          <div className="lg:col-span-2">
+          {/* ── LEFT: Results Panel (60% width) ───────────────────────── */}
+          <div className="lg:col-span-3">
             {hasResults ? (
               <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
                 
@@ -335,8 +412,8 @@ export const Dashboard: React.FC = () => {
             )}
           </div>
 
-          {/* ── RIGHT: Itinerary Sidebar (1/3 width) ──────────────────── */}
-          <div className="lg:col-span-1">
+          {/* ── RIGHT: Itinerary Sidebar (40% width) ─────────────────── */}
+          <div className="lg:col-span-2">
             <ItinerarySidebar />
           </div>
         </div>
