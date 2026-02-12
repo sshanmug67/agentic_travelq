@@ -4,21 +4,37 @@ import React, { useState } from 'react';
 import { ItinerarySidebar } from '../components/itinerary/ItinerarySidebar';
 import { NaturalLanguageInput } from '../components/common/NaturalLanguageInput';
 import { PreferencesPanel } from '../components/common/PreferencesPanel';
+import { PreferencesSummary } from '../components/common/PreferencesSummary';
 import { TripSummaryBar } from '../components/common/TripSummaryBar';
+import { FlightCard } from '../components/flight/FlightCard';
 import { useTripData } from '../hooks/useTripData';
 import { useItinerary } from '../hooks/useItinerary';
 import { tripApi } from '../services/api';
+import type { TripPlanResponse } from '../types/trip';
+
+type ResultsTab = 'flights' | 'hotels' | 'restaurants' | 'activities';
 
 export const Dashboard: React.FC = () => {
-  const { tripData, preferences, updatePreferences, setFlights, setHotels, setRestaurants, setActivities } = useTripData();
-  const { flight, hotel, restaurants, activities } = useItinerary();
+  const { 
+    tripData, preferences, flights,
+    setTripData, setFlights, setHotels, setRestaurants, setActivities, setWeather
+  } = useTripData();
+  const { 
+    flight: selectedFlight, hotel: selectedHotel, 
+    restaurants: selectedRestaurants, activities: selectedActivities,
+    selectFlight 
+  } = useItinerary();
   
   const [naturalLanguageRequest, setNaturalLanguageRequest] = useState('');
   const [isPlanning, setIsPlanning] = useState(false);
   const [lastSearchMessage, setLastSearchMessage] = useState('');
+  const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('flights');
+  const [aiRecommendedFlightId, setAiRecommendedFlightId] = useState<string | null>(null);
+
+  // Check if we have any results to show
+  const hasResults = flights.length > 0;
 
   const handlePlanTrip = async (userRequest: string) => {
-    // Validation
     if (!tripData.destination) {
       alert('Please enter a destination');
       return;
@@ -32,10 +48,9 @@ export const Dashboard: React.FC = () => {
     setLastSearchMessage('');
     
     try {
-      // Send ALL data in ONE request
       const response = await tripApi.planTrip({
         tripId: tripData.id,
-        userRequest: userRequest, // Natural language input (highest priority)
+        userRequest: userRequest,
         tripDetails: {
           origin: tripData.origin,
           destination: tripData.destination,
@@ -44,25 +59,51 @@ export const Dashboard: React.FC = () => {
           travelers: tripData.travelers,
           budget: tripData.totalBudget,
         },
-        preferences: preferences, // Preferences (medium priority)
+        preferences: preferences,
         currentItinerary: {
-          flight: flight,
-          hotel: hotel,
-          restaurants: restaurants,
-          activities: activities,
+          flight: selectedFlight,
+          hotel: selectedHotel,
+          restaurants: selectedRestaurants,
+          activities: selectedActivities,
         },
-      });
+      }) as TripPlanResponse;
+
+      // Store the tripId from backend response
+      const resolvedTripId = response.tripId || response.trip_id;
+      if (resolvedTripId) {
+        setTripData({ id: resolvedTripId });
+      }
 
       // Update all options with results
-      setFlights(response.results.flights || []);
-      setHotels(response.results.hotels || []);
-      setRestaurants(response.results.restaurants || []);
-      setActivities(response.results.activities || []);
+      const results = response.results || response.options || {};
+      const flightResults = results.flights || [];
+      setFlights(flightResults);
+      setHotels(results.hotels || []);
+      setRestaurants(results.restaurants || []);
+      setActivities(results.activities || []);
+      setWeather(results.weather || []);
+
+      // ✅ Auto-select the AI recommended flight using structured recommendations
+      // Backend returns: response.recommendations.flight.recommended_id
+      // Falls back to first flight if no recommendation exists
+      if (flightResults.length > 0) {
+        const recFlightId = response.recommendations?.flight?.recommended_id;
+        const aiPick = recFlightId
+          ? flightResults.find((f) => String(f.id) === String(recFlightId))
+          : null;
+        
+        const flightToSelect = aiPick || flightResults[0];
+        
+        setAiRecommendedFlightId(flightToSelect.id);
+        selectFlight(flightToSelect, 'ai');
+        setActiveResultsTab('flights');
+      }
 
       // Show success message
-      setLastSearchMessage(response.message || 'Trip planning complete!');
+      setLastSearchMessage(
+        response.message || response.final_recommendation || 'Trip planning complete!'
+      );
       
-      // Clear natural language input after successful search
       setNaturalLanguageRequest('');
 
     } catch (error: any) {
@@ -72,6 +113,18 @@ export const Dashboard: React.FC = () => {
       setIsPlanning(false);
     }
   };
+
+  const handleSelectFlight = (flight: any) => {
+    selectFlight(flight, 'user');
+  };
+
+  // Results tabs config
+  const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
+    { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
+    { id: 'hotels', label: 'Hotels', icon: '🏨', count: useTripData.getState().hotels.length },
+    { id: 'restaurants', label: 'Restaurants', icon: '🍽️', count: useTripData.getState().restaurants.length },
+    { id: 'activities', label: 'Activities', icon: '🎭', count: useTripData.getState().activities.length },
+  ];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50">
@@ -93,6 +146,9 @@ export const Dashboard: React.FC = () => {
       {/* Trip Summary Bar */}
       <TripSummaryBar />
 
+      {/* Preferences Summary (collapsed bar below TripSummaryBar) */}
+      <PreferencesSummary preferences={preferences} />
+
       {/* Natural Language Input & Preferences */}
       <div className="px-6 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -107,7 +163,10 @@ export const Dashboard: React.FC = () => {
           </div>
 
           {/* Right: Preferences Panel */}
-          <PreferencesPanel preferences={preferences} onUpdate={updatePreferences} />
+          <PreferencesPanel 
+            preferences={preferences} 
+            onUpdate={useTripData.getState().updatePreferences} 
+          />
         </div>
 
         {/* Big "Plan My Trip" Button */}
@@ -123,43 +182,160 @@ export const Dashboard: React.FC = () => {
                 Planning Your Trip...
               </>
             ) : (
-              <>
-                🚀 Plan My Trip
-              </>
+              <>🚀 Plan My Trip</>
             )}
           </button>
           
-          {/* Last Search Message */}
+          {/* AI Summary Message */}
           {lastSearchMessage && (
-            <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg text-center">
-              <p className="text-green-800 font-semibold">✓ {lastSearchMessage}</p>
+            <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+              <div className="flex items-start gap-3">
+                <span className="text-green-600 text-xl flex-shrink-0">✓</span>
+                <p className="text-green-800 text-sm whitespace-pre-wrap leading-relaxed">
+                  {lastSearchMessage.length > 300 
+                    ? lastSearchMessage.substring(0, 300) + '...' 
+                    : lastSearchMessage
+                  }
+                </p>
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Main Content */}
+      {/* ══════════════════════════════════════════════════════════════════
+          MAIN CONTENT: Results (left) + Itinerary (right)
+          ══════════════════════════════════════════════════════════════════ */}
       <div className="px-6 pb-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* LEFT: Options (2/3 width) */}
+          
+          {/* ── LEFT: Results Panel (2/3 width) ───────────────────────── */}
           <div className="lg:col-span-2">
-            <div className="bg-white rounded-xl shadow-lg p-8 border border-gray-200">
-              <div className="text-center py-20">
-                <div className="text-6xl mb-4">🚀</div>
-                <h2 className="text-2xl font-bold text-gray-800 mb-2">
-                  Ready to Plan Your Trip?
-                </h2>
-                <p className="text-gray-600 mb-6">
-                  Fill in your trip details above and click "Plan My Trip" to see options!
-                </p>
-                <div className="text-sm text-gray-500">
-                  Flight, Hotel, Restaurant, and Activity options will appear here.
+            {hasResults ? (
+              <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
+                
+                {/* Results Tab Bar */}
+                <div className="flex border-b bg-gradient-to-r from-purple-50 to-pink-50">
+                  {resultsTabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveResultsTab(tab.id)}
+                      className={`flex-1 px-4 py-3 text-sm font-medium transition-all duration-300 relative ${
+                        activeResultsTab === tab.id
+                          ? 'text-purple-700 bg-white'
+                          : 'text-gray-600 hover:text-purple-600 hover:bg-white/50'
+                      }`}
+                    >
+                      <span className="flex items-center justify-center gap-2">
+                        <span className="text-lg">{tab.icon}</span>
+                        <span>{tab.label}</span>
+                        {tab.count > 0 && (
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                            activeResultsTab === tab.id
+                              ? 'bg-purple-100 text-purple-700'
+                              : 'bg-gray-200 text-gray-600'
+                          }`}>
+                            {tab.count}
+                          </span>
+                        )}
+                      </span>
+                      {activeResultsTab === tab.id && (
+                        <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-600 to-pink-600" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Results Content */}
+                <div className="p-6">
+
+                  {/* ── FLIGHTS TAB ──────────────────────────────────── */}
+                  {activeResultsTab === 'flights' && (
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-lg font-bold text-gray-800">
+                          ✈️ Available Flights
+                        </h2>
+                        <div className="flex items-center gap-3">
+                          {selectedFlight && (
+                            <span className="text-xs bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium">
+                              Selected: {selectedFlight.airline} {selectedFlight.outbound?.flight_number} — ${selectedFlight.price}
+                            </span>
+                          )}
+                          <span className="text-sm text-gray-500">
+                            {flights.length} option{flights.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        {flights.map((flight, index) => (
+                          <FlightCard
+                            key={flight.id || index}
+                            flight={flight}
+                            isSelected={selectedFlight?.id === flight.id}
+                            isAiRecommended={flight.id === aiRecommendedFlightId}
+                            onSelect={() => handleSelectFlight(flight)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ── HOTELS TAB (placeholder — wire up next) ──────── */}
+                  {activeResultsTab === 'hotels' && (
+                    <div className="text-center py-12 text-gray-500">
+                      <div className="text-4xl mb-3">🏨</div>
+                      <p className="font-semibold">Hotel results — wiring up next</p>
+                      <p className="text-sm mt-1">
+                        {useTripData.getState().hotels.length} hotels found
+                      </p>
+                    </div>
+                  )}
+
+                  {/* ── RESTAURANTS TAB (placeholder) ─────────────────── */}
+                  {activeResultsTab === 'restaurants' && (
+                    <div className="text-center py-12 text-gray-500">
+                      <div className="text-4xl mb-3">🍽️</div>
+                      <p className="font-semibold">Restaurant results — wiring up next</p>
+                      <p className="text-sm mt-1">
+                        {useTripData.getState().restaurants.length} restaurants found
+                      </p>
+                    </div>
+                  )}
+
+                  {/* ── ACTIVITIES TAB (placeholder) ──────────────────── */}
+                  {activeResultsTab === 'activities' && (
+                    <div className="text-center py-12 text-gray-500">
+                      <div className="text-4xl mb-3">🎭</div>
+                      <p className="font-semibold">Activity results — wiring up next</p>
+                      <p className="text-sm mt-1">
+                        {useTripData.getState().activities.length} activities found
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
+            ) : (
+              /* Empty State — before any search */
+              <div className="bg-white rounded-xl shadow-lg p-8 border border-gray-200">
+                <div className="text-center py-20">
+                  <div className="text-6xl mb-4">🚀</div>
+                  <h2 className="text-2xl font-bold text-gray-800 mb-2">
+                    Ready to Plan Your Trip?
+                  </h2>
+                  <p className="text-gray-600 mb-6">
+                    Fill in your trip details above and click "Plan My Trip" to see options!
+                  </p>
+                  <div className="text-sm text-gray-500">
+                    Flight, Hotel, Restaurant, and Activity options will appear here.
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* RIGHT: Itinerary Sidebar (1/3 width) */}
+          {/* ── RIGHT: Itinerary Sidebar (1/3 width) ──────────────────── */}
           <div className="lg:col-span-1">
             <ItinerarySidebar />
           </div>

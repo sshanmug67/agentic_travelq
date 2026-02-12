@@ -1,6 +1,11 @@
 """
 Smart Orchestrator Agent - Dynamic Agent Selection with Storage
 Location: backend/agents/orchestrator_agent.py
+
+Changes:
+  - orchestrate() now reads recommendations from storage via get_recommendations()
+  - Attaches recommendations dict to the returned result
+  - _generate_final_recommendation() receives recommendations for better context
 """
 from typing import List, Dict, Any
 
@@ -299,6 +304,15 @@ Instead, you delegate to specialized agents and coordinate their results.
         
         log_agent_json(summary, label="Options Collected from Storage", agent_name="OrchestratorAgent")
         
+        # ✅ NEW: Collect AI recommendations from storage
+        recommendations = trip_storage.get_recommendations(trip_id)
+        
+        log_agent_json(
+            recommendations, 
+            label="⭐ AI Recommendations from Agents", 
+            agent_name="OrchestratorAgent"
+        )
+        
         # Extract conversation history
         conversation_history = []
         for msg in group_chat.messages:
@@ -307,11 +321,12 @@ Instead, you delegate to specialized agents and coordinate their results.
                 "message": msg.get("content", "")
             })
         
-        # ✅ Generate final recommendation
+        # ✅ Generate final recommendation (now with structured recommendations)
         final_recommendation = self._generate_final_recommendation(
             all_options,
             conversation_history,
-            preferences
+            preferences,
+            recommendations  # ← NEW: pass recommendations for better context
         )
         
         log_agent_raw("=" * 80, agent_name="OrchestratorAgent")
@@ -323,6 +338,7 @@ Instead, you delegate to specialized agents and coordinate their results.
             "trip_id": trip_id,
             "opening_message": opening_message,
             "final_recommendation": final_recommendation,
+            "recommendations": recommendations,   # ← NEW: structured recommendations
             "all_options": all_options,
             "conversation_history": conversation_history,
             "summary": summary,
@@ -442,10 +458,13 @@ Instead, you delegate to specialized agents and coordinate their results.
         self,
         all_options: Dict[str, List],
         conversation_history: List[Dict],
-        preferences: Any
+        preferences: Any,
+        recommendations: Dict[str, Any] = None
     ) -> str:
         """
-        Generate comprehensive final recommendation using LLM
+        Generate comprehensive final recommendation using LLM.
+        
+        Now receives structured recommendations from agents for better context.
         """
         # Extract agent recommendations from conversation
         agent_recs = []
@@ -460,6 +479,16 @@ Instead, you delegate to specialized agents and coordinate their results.
         events = all_options.get("events", [])
         places = all_options.get("places", [])
         weather = all_options.get("weather", [])
+        
+        # ✅ NEW: Build structured picks section
+        structured_picks = ""
+        if recommendations:
+            structured_picks = "\nSTRUCTURED AGENT PICKS:\n"
+            for category, rec in recommendations.items():
+                structured_picks += (
+                    f"- {category.upper()}: ID={rec['recommended_id']}, "
+                    f"Reason: {rec.get('reason', 'N/A')}\n"
+                )
         
         prompt = f"""
             Create a comprehensive trip itinerary based ONLY on data that was actually collected.
@@ -476,6 +505,7 @@ Instead, you delegate to specialized agents and coordinate their results.
             - Events: {len(events)} options reviewed
             - Places: {len(places)} options reviewed
             - Weather: {len(weather)} forecasts
+            {structured_picks}
 
             AGENT RECOMMENDATIONS:
             {chr(10).join(agent_recs) if agent_recs else "No agent recommendations available"}

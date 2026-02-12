@@ -5,7 +5,7 @@ import { useTripData } from '../../hooks/useTripData';
 import { useItinerary } from '../../hooks/useItinerary';
 
 export const TripSummaryBar: React.FC = () => {
-  const { tripData, setTripData } = useTripData();
+  const { tripData, setTripData, resetTrip } = useTripData();
   const { clearItinerary, budget, setBudget } = useItinerary();
   
   const [showTripMenu, setShowTripMenu] = useState(false);
@@ -55,17 +55,21 @@ export const TripSummaryBar: React.FC = () => {
       'Start a new trip? This will clear your current itinerary.'
     );
     if (confirmed) {
+      // Use resetTrip() which resets everything: id → null, origin → 'New York', etc.
+      resetTrip();
       clearItinerary();
-      setTripData({
-        origin: '',
-        destination: '',
-        startDate: '',
-        endDate: '',
+
+      // Sync temp values with the fresh defaults
+      setTempValues({
+        origin: 'New York',
+        destination: 'London, UK',
+        startDate: '2026-02-20',
+        endDate: '2026-02-25',
         travelers: 1,
-        totalBudget: 0,
+        budget: 4000,
       });
-      setShowOrigin(false);
-      setEditMode({ field: 'destination' });
+      setShowOrigin(true);
+      setEditMode({ field: 'destination' }); // Focus on destination input
     }
     setShowTripMenu(false);
   };
@@ -98,7 +102,15 @@ export const TripSummaryBar: React.FC = () => {
       <div className="px-6 py-4">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold opacity-90">Current Trip</h2>
+            <h2 className="text-sm font-semibold opacity-90">
+              {tripData.id ? 'Current Trip' : 'New Trip'}
+            </h2>
+            {/* Show trip ID badge only for existing trips */}
+            {tripData.id && (
+              <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full opacity-70">
+                {tripData.id}
+              </span>
+            )}
           </div>
           
           {/* Trip Actions Menu */}
@@ -144,7 +156,11 @@ export const TripSummaryBar: React.FC = () => {
                 </button>
                 <button
                   onClick={() => {
-                    alert('Save Trip feature coming soon!');
+                    if (!tripData.id) {
+                      alert('Plan a trip first before saving!');
+                    } else {
+                      alert('Save Trip feature coming soon!');
+                    }
                     setShowTripMenu(false);
                   }}
                   className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-green-50 flex items-center gap-2"
@@ -408,7 +424,9 @@ export const TripSummaryBar: React.FC = () => {
                 }}
                 className="hover:underline cursor-pointer"
               >
-                Budget: ${tripData.totalBudget.toLocaleString()}
+                {tripData.totalBudget > 0
+                  ? `Budget: $${tripData.totalBudget.toLocaleString()}`
+                  : 'Set budget'}
               </button>
             )}
           </div>

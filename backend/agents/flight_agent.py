@@ -1,9 +1,16 @@
 """
 Flight Agent - Real API with Centralized Storage
 Location: backend/agents/flight_agent.py
+
+Changes (v3):
+  - Removed deterministic _pick_recommended_flight()
+  - LLM now picks the recommended flight ID based on full user preferences
+  - LLM returns structured JSON: { recommended_id, reason, summary }
+  - Summary is the conversational message; recommended_id gets stored
 """
 import json
 import time
+import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -23,15 +30,15 @@ class FlightAgent(TravelQBaseAgent):
     """
     
     def __init__(self, trip_id: str, trip_storage: TripStorageInterface, **kwargs):
-        system_message = """
-You are a helpful Flight Search Assistant.
+        system_message = """You are a Flight Search Assistant that recommends flights based on user preferences.
 
-Your job:
-1. Search for flights using real-time data
-2. Review all available options
-3. Provide a brief, conversational recommendation
+You will be given:
+1. A list of available flights with IDs, prices, airlines, stops, and times
+2. The user's preferences (budget, preferred airlines, time preferences, cabin class, etc.)
 
-Be friendly and helpful. Don't dump data - just give useful advice.
+Your job is to pick the BEST flight for this specific user and explain why.
+
+You MUST respond with valid JSON only — no markdown, no backticks, no extra text.
 """
         
         super().__init__(
@@ -75,8 +82,7 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                 truncate=500
             )
         
-        # Extract preferences
-        # ✅ Get preferences from storage (no LLM extraction!)
+        # ✅ Get preferences from storage
         preferences = self.trip_storage.get_preferences(self.trip_id)
         
         if not preferences:
@@ -93,7 +99,7 @@ Be friendly and helpful. Don't dump data - just give useful advice.
             "destination": preferences.destination,
             "departure_date": preferences.departure_date,
             "return_date": preferences.return_date,
-            "cabin_class": preferences.flight_prefs.cabin_class.upper(),  # ✅ UPPERCASE
+            "cabin_class": preferences.flight_prefs.cabin_class.upper(),
             "num_travelers": preferences.num_travelers,
             "budget": preferences.budget.flight_budget,
             "max_stops": preferences.flight_prefs.max_stops
@@ -103,7 +109,7 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                       agent_name="FlightAgent")
         
         try:
-            # ✅ Step 1: Resolve city names to airport codes
+            # Step 1: Resolve city names to airport codes
             origin_code = self._resolve_location(search_params["origin"])
             destination_code = self._resolve_location(search_params["destination"])
             
@@ -115,7 +121,7 @@ Be friendly and helpful. Don't dump data - just give useful advice.
             log_agent_raw(f"✓ Resolved: {search_params['origin']} → {origin_code}, {search_params['destination']} → {destination_code}", 
                          agent_name="FlightAgent")
             
-            # ✅ Step 2: Call Amadeus API
+            # Step 2: Call Amadeus API
             start_time = time.time()
             
             flights = self._search_flights_api(
@@ -129,13 +135,10 @@ Be friendly and helpful. Don't dump data - just give useful advice.
             
             api_duration = time.time() - start_time
             
-            log_agent_raw(f"✅ API returned {len(flights)} flight options in {api_duration:.2f}s: Returned API Data:", 
-                         agent_name="FlightAgent")
-            
-            log_agent_json(f"{flights}", 
+            log_agent_raw(f"✅ API returned {len(flights)} flight options in {api_duration:.2f}s", 
                          agent_name="FlightAgent")
 
-            # ✅ Step 3: Store ALL options in centralized storage
+            # Step 3: Store ALL options in centralized storage
             flights_dict = [self._flight_to_dict(f) for f in flights]
             
             self.trip_storage.add_flights(
@@ -164,8 +167,8 @@ Be friendly and helpful. Don't dump data - just give useful advice.
             log_agent_raw(f"💾 Stored {len(flights)} flights in centralized storage", 
                          agent_name="FlightAgent")
             
-            # ✅ Step 4: Generate conversational recommendation (NO structured data)
-            recommendation = self._generate_recommendation(flights, search_params)
+            # Step 4: LLM picks the best flight and explains why
+            recommendation = self._generate_recommendation(flights, preferences)
             
             # Log outgoing
             self.log_conversation_message(
@@ -180,7 +183,6 @@ Be friendly and helpful. Don't dump data - just give useful advice.
         except Exception as e:
             log_agent_raw(f"❌ Flight search failed: {str(e)}", agent_name="FlightAgent")
             error_msg = f"I encountered an error searching for flights: {str(e)}. Please try again or check your search parameters."
-            # ✅ Also signal completion on error
             return self.signal_completion(error_msg)
     
     def _search_flights_api(
@@ -195,13 +197,14 @@ Be friendly and helpful. Don't dump data - just give useful advice.
         """
         Call Amadeus API to search flights
         """
-        # Check if Amadeus is configured
         if not self.amadeus_service or not self.amadeus_service.client:
-            log_agent_raw("⚠️ Amadeus not configured, using mock data", agent_name="flightagent")
+            log_agent_raw("⚠️ Amadeus not configured, using mock data", agent_name="FlightAgent")
             return self._generate_mock_flights(origin, destination, departure_date)
         
         cabin_class_upper = cabin_class.upper()
 
+        max_results = settings.flight_agent_max_results
+        
         api_params = {
             "originLocationCode": origin,
             "destinationLocationCode": destination,
@@ -209,7 +212,7 @@ Be friendly and helpful. Don't dump data - just give useful advice.
             "returnDate": return_date,
             "adults": adults,
             "travelClass": cabin_class_upper,
-            "max": 50
+            "max": max_results
         }
         
         log_agent_raw("=" * 80, agent_name="FlightAgent")
@@ -217,7 +220,6 @@ Be friendly and helpful. Don't dump data - just give useful advice.
         log_agent_json(api_params, label="Amadeus API Request", agent_name="FlightAgent")
         log_agent_raw("=" * 80, agent_name="FlightAgent")
 
-        # Call real Amadeus API
         try:
             response = self.amadeus_service.client.shopping.flight_offers_search.get(
                 originLocationCode=origin,
@@ -226,14 +228,12 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                 returnDate=return_date,
                 adults=adults,
                 travelClass=cabin_class_upper,
-                max=5  # Get many options
+                max=max_results
             )
             
-            # ✅ ADD THIS - Log success
             log_agent_raw(f"✅ Amadeus API SUCCESS - Received {len(response.data)} offers", 
                         agent_name="FlightAgent")
 
-            # Parse response into Flight objects
             flights = []
             for offer in response.data:
                 flight = self._parse_amadeus_offer(offer)
@@ -241,24 +241,14 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                     flights.append(flight)
             
             return flights
-            
 
         except Exception as e:
-            log_agent_raw("=" * 80, agent_name="FlightAgent")
-            log_agent_raw(f"❌ Amadeus API FAILED", agent_name="FlightAgent")
-            log_agent_raw(f"Error Type: {type(e).__name__}", agent_name="FlightAgent")
-            log_agent_raw(f"Error Message: {str(e)}", agent_name="FlightAgent")
+            log_agent_raw(f"❌ Amadeus API FAILED: {type(e).__name__}: {str(e)}", agent_name="FlightAgent")
             
-            # Try to get more details from the exception
             if hasattr(e, 'response'):
                 log_agent_raw(f"Response Status: {getattr(e.response, 'status_code', 'N/A')}", 
                             agent_name="FlightAgent")
-                log_agent_raw(f"Response Body: {getattr(e.response, 'body', 'N/A')}", 
-                            agent_name="FlightAgent")
             
-            log_agent_raw("=" * 80, agent_name="FlightAgent")
-            
-            # Fallback to mock data
             log_agent_raw("⚠️ Falling back to mock data", agent_name="FlightAgent")
             return self._generate_mock_flights(origin, destination, departure_date)
     
@@ -270,23 +260,15 @@ Be friendly and helpful. Don't dump data - just give useful advice.
             if not itineraries:
                 return None
             
-            # Check if round-trip
             is_round_trip = len(itineraries) == 2
-            
-            # Get price
             price = float(offer['price']['total'])
             currency = offer['price']['currency']
-            
-            # Get airline code
             first_segment = itineraries[0]['segments'][0]
             airline_code = first_segment['carrierCode']
-            
-            # Extract baggage
             cabin_class = first_segment.get('cabin', 'ECONOMY')
             checked_bags, cabin_bags = self._parse_baggage(offer, cabin_class)
             
             if is_round_trip:
-                # Parse both outbound and return
                 outbound = self._parse_flight_segment(itineraries[0])
                 return_flight = self._parse_flight_segment(itineraries[1])
                 total_duration = f"{outbound.duration} + {return_flight.duration}"
@@ -306,7 +288,6 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                     cabin_bags=cabin_bags
                 )
             else:
-                # One-way flight (legacy format for backward compatibility)
                 segment = self._parse_flight_segment(itineraries[0])
                 
                 return Flight(
@@ -314,7 +295,6 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                     airline=segment.airline,
                     airline_code=airline_code,
                     is_round_trip=False,
-                    # Legacy fields
                     origin=segment.departure_airport,
                     destination=segment.arrival_airport,
                     departure_time=segment.departure_time,
@@ -323,7 +303,6 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                     flight_number=segment.flight_number,
                     stops=segment.stops,
                     layovers=segment.layovers,
-                    # Common fields
                     price=price,
                     currency=currency,
                     cabin_class=cabin_class,
@@ -336,21 +315,15 @@ Be friendly and helpful. Don't dump data - just give useful advice.
     
     def _parse_flight_segment(self, itinerary: Dict) -> FlightSegment:
         """Parse a single flight segment (outbound or return)"""
-        
         segments = itinerary['segments']
         first_segment = segments[0]
         last_segment = segments[-1]
         
-        # Get airline name
         airline = first_segment['carrierCode']
         airline_code = first_segment['carrierCode']
         flight_number = f"{first_segment['carrierCode']}{first_segment['number']}"
-        
-        # Calculate duration
         duration = itinerary['duration']
         duration_formatted = self._format_duration(duration)
-        
-        # Get layovers
         layovers = [seg['arrival']['iataCode'] for seg in segments[:-1]]
         
         return FlightSegment(
@@ -378,12 +351,10 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                 if fare_detail and len(fare_detail) > 0:
                     segment_details = fare_detail[0]
                     
-                    # Checked baggage
                     checked_allowance = segment_details.get('includedCheckedBags')
                     if checked_allowance and isinstance(checked_allowance, dict):
                         quantity = checked_allowance.get('quantity')
                         weight = checked_allowance.get('weight')
-                        
                         if quantity or weight:
                             checked_bags = {
                                 "quantity": quantity if quantity else 0,
@@ -391,7 +362,6 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                                 "weight_unit": checked_allowance.get('weightUnit', 'KG')
                             }
                     
-                    # Cabin baggage defaults
                     if cabin_class.upper() in ['BUSINESS', 'FIRST']:
                         cabin_bags = {"quantity": 2, "weight": 16, "weight_unit": "KG"}
                     else:
@@ -404,77 +374,134 @@ Be friendly and helpful. Don't dump data - just give useful advice.
 
     def _format_duration(self, duration: str) -> str:
         """Convert PT7H30M to '7h 30m'"""
-        import re
         hours = re.search(r'(\d+)H', duration)
         minutes = re.search(r'(\d+)M', duration)
-        
         h = hours.group(1) if hours else "0"
         m = minutes.group(1) if minutes else "0"
-        
         return f"{h}h {m}m"
-    
+
+
+    # ─────────────────────────────────────────────────────────────────────
+    # LLM-DRIVEN RECOMMENDATION
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _build_flights_table(self, flights: List[Flight]) -> str:
+        """
+        Build a compact text table of all flights for the LLM prompt.
+        Each row has the flight ID so the LLM can reference it.
+        """
+        rows = []
+        for f in flights:
+            if f.is_round_trip and f.outbound and f.return_flight:
+                rows.append(
+                    f"ID: {f.id} | {f.airline} | ${f.price:.2f} | "
+                    f"Out: {f.outbound.departure_airport}→{f.outbound.arrival_airport} "
+                    f"{f.outbound.departure_time} ({f.outbound.duration}, {f.outbound.stops} stops"
+                    f"{', via ' + ','.join(f.outbound.layovers) if f.outbound.layovers else ''}) | "
+                    f"Return: {f.return_flight.departure_airport}→{f.return_flight.arrival_airport} "
+                    f"{f.return_flight.departure_time} ({f.return_flight.duration}, {f.return_flight.stops} stops"
+                    f"{', via ' + ','.join(f.return_flight.layovers) if f.return_flight.layovers else ''})"
+                )
+            else:
+                rows.append(
+                    f"ID: {f.id} | {f.airline} {f.flight_number} | ${f.price:.2f} | "
+                    f"{f.origin}→{f.destination} {f.departure_time} "
+                    f"({f.duration}, {f.stops} stops)"
+                )
+        return "\n".join(rows)
+
+    def _build_preferences_summary(self, preferences: Any) -> str:
+        """
+        Build a readable summary of user preferences for the LLM.
+        """
+        lines = []
+        lines.append(f"Flight budget: ${preferences.budget.flight_budget}")
+        lines.append(f"Cabin class: {preferences.flight_prefs.cabin_class}")
+        lines.append(f"Max stops: {preferences.flight_prefs.max_stops}")
+        
+        if hasattr(preferences.flight_prefs, 'time_preference'):
+            lines.append(f"Time preference: {preferences.flight_prefs.time_preference}")
+        
+        if hasattr(preferences.flight_prefs, 'preferred_carriers') and preferences.flight_prefs.preferred_carriers:
+            lines.append(f"Preferred airlines: {', '.join(preferences.flight_prefs.preferred_carriers)}")
+        
+        if hasattr(preferences.flight_prefs, 'seat_preference'):
+            lines.append(f"Seat preference: {preferences.flight_prefs.seat_preference}")
+        
+        lines.append(f"Trip purpose: {preferences.trip_purpose}")
+        lines.append(f"Travelers: {preferences.num_travelers}")
+        
+        return "\n".join(lines)
+
+    def _parse_llm_json(self, text: str) -> Optional[Dict]:
+        """
+        Safely parse JSON from LLM response.
+        Strips markdown fences and handles common LLM formatting issues.
+        """
+        # Strip markdown code fences
+        cleaned = re.sub(r'^```(?:json)?\s*', '', text.strip())
+        cleaned = re.sub(r'\s*```$', '', cleaned.strip())
+        
+        try:
+            return json.loads(cleaned)
+        except json.JSONDecodeError:
+            # Try to find JSON object in the text
+            match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group())
+                except json.JSONDecodeError:
+                    pass
+        
+        return None
+
     def _generate_recommendation(
         self,
         flights: List[Flight],
-        preferences: Dict[str, Any]
+        preferences: Any
     ) -> str:
         """
-        Use LLM to generate conversational recommendation
+        LLM picks the best flight based on user preferences.
+        
+        Returns the conversational summary. The recommended_id is stored
+        in centralized storage for the frontend to consume.
         """
         if not flights:
             return "I couldn't find any flights for your route. Please check your dates and try again."
         
-        # Sort by price
-        flights_sorted = sorted(flights, key=lambda f: f.price)
+        # Build the prompt
+        flights_table = self._build_flights_table(flights)
+        prefs_summary = self._build_preferences_summary(preferences)
+        valid_ids = [str(f.id) for f in flights]
         
-        # Get key options - handle both round-trip and one-way
-        cheapest = flights_sorted[0]
-        
-        # For direct flights, check based on trip type
-        direct_flights = []
-        for f in flights:
-            if f.is_round_trip:
-                # Round-trip: both outbound and return must be direct
-                if f.outbound and f.return_flight and f.outbound.stops == 0 and f.return_flight.stops == 0:
-                    direct_flights.append(f)
-            else:
-                # One-way: check stops field
-                if f.stops == 0:
-                    direct_flights.append(f)
-        
-        best_direct = direct_flights[0] if direct_flights else None
-        
-        # Build prompt for LLM
-        cheapest_desc = self._flight_description(cheapest)
-        direct_desc = self._flight_description(best_direct) if best_direct else "No direct flights available"
-        
-        prompt = f"""
-            Based on the flight search results, provide a helpful recommendation.
+        prompt = f"""Here are the available flights:
 
-            SEARCH RESULTS:
-            - Total flights found: {len(flights)}
-            - Price range: ${flights_sorted[0].price:.2f} - ${flights_sorted[-1].price:.2f}
-            - Direct flights available: {len(direct_flights)}
+{flights_table}
 
-            TOP OPTIONS:
-            1. Cheapest: {cheapest_desc}
-            2. Best direct: {direct_desc}
+User preferences:
+{prefs_summary}
 
-            USER PREFERENCES:
-            - Budget: ${preferences.get('budget', 'Not specified')}
-            - Cabin class: {preferences.get('cabin_class', 'economy')}
-            - Max stops: {preferences.get('max_stops', 2)}
+Pick the single best flight for this user. Consider their budget, preferred airlines, 
+time preferences, number of stops, and trip purpose. Weigh the tradeoffs — a slightly 
+more expensive direct flight may be better than a cheap one with 2 layovers for a 
+business traveler, for example.
 
-            Provide a conversational recommendation (3-4 sentences):
-            - Mention how many options you reviewed
-            - Recommend your top pick with specific flight number and why
-            - Mention a budget alternative if relevant
-            - Be friendly and helpful
+You MUST respond with ONLY a JSON object in this exact format, nothing else:
+{{
+  "recommended_id": "<the flight ID from the list above>",
+  "reason": "<1-2 sentences explaining why this is the best match for this user's preferences>",
+  "summary": "<3-4 sentence friendly recommendation mentioning how many options you reviewed, why you picked this one, and any notable alternatives>"
+}}
 
-            Example: "I reviewed 47 round-trip flights from NYC to London. My top recommendation is British Airways for $850 - both legs are direct with good timing. If you're looking to save money, the Air Canada option with one stop each way is only $520."
-            """
+CRITICAL RULES:
+- recommended_id MUST be one of these exact values: {valid_ids}
+- Do NOT invent a flight ID. Pick from the list above.
+- Respond with valid JSON only. No markdown, no backticks, no extra text.
+"""
         
-        # Call LLM
+        log_agent_raw("🤖 Asking LLM to pick best flight based on preferences...", 
+                     agent_name="FlightAgent")
+        
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
             
@@ -484,34 +511,109 @@ Be friendly and helpful. Don't dump data - just give useful advice.
                     {"role": "system", "content": self.system_message},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.7,
-                max_tokens=300
+                temperature=0.3,
+                max_tokens=400
             )
             
-            return response.choices[0].message.content.strip()
+            raw_response = response.choices[0].message.content.strip()
+            
+            log_agent_raw(f"📥 LLM raw response: {raw_response}", agent_name="FlightAgent")
+            
+            # Parse the JSON
+            result = self._parse_llm_json(raw_response)
+            
+            if not result:
+                log_agent_raw("⚠️ Failed to parse LLM JSON, using fallback", agent_name="FlightAgent")
+                return self._fallback_recommendation(flights, preferences)
+            
+            recommended_id = str(result.get("recommended_id", ""))
+            reason = result.get("reason", "Best overall match")
+            summary = result.get("summary", "")
+            
+            # Validate the ID exists in our flight list
+            if recommended_id not in valid_ids:
+                log_agent_raw(
+                    f"⚠️ LLM returned invalid ID '{recommended_id}', "
+                    f"valid IDs are {valid_ids}. Using fallback.",
+                    agent_name="FlightAgent"
+                )
+                return self._fallback_recommendation(flights, preferences)
+            
+            # Find the matching flight for metadata
+            recommended_flight = next(f for f in flights if str(f.id) == recommended_id)
+            
+            # ✅ Store the recommendation
+            is_direct = self._is_direct_flight(recommended_flight)
+            
+            self.trip_storage.store_recommendation(
+                trip_id=self.trip_id,
+                category="flight",
+                recommended_id=recommended_id,
+                reason=reason,
+                metadata={
+                    "airline": recommended_flight.airline,
+                    "price": recommended_flight.price,
+                    "is_direct": is_direct,
+                    "total_options_reviewed": len(flights)
+                }
+            )
+            
+            log_agent_raw(
+                f"⭐ LLM picked flight {recommended_id} "
+                f"({recommended_flight.airline} ${recommended_flight.price:.2f}): {reason}",
+                agent_name="FlightAgent"
+            )
+            
+            return summary if summary else f"I recommend flight {recommended_id} by {recommended_flight.airline}. {reason}"
             
         except Exception as e:
             log_agent_raw(f"⚠️ LLM recommendation failed: {str(e)}", agent_name="FlightAgent")
-            # Fallback to template
-            if cheapest.is_round_trip:
-                return f"I found {len(flights)} round-trip flights. My top pick is {cheapest.airline} for ${cheapest.price:.2f}."
-            else:
-                return f"I found {len(flights)} flights. My top pick is {cheapest.airline} {cheapest.flight_number} for ${cheapest.price:.2f}."
-    
+            return self._fallback_recommendation(flights, preferences)
 
-    def _flight_description(self, flight: Flight) -> str:
-        """Generate description for a flight (handles both one-way and round-trip)"""
+    def _fallback_recommendation(self, flights: List[Flight], preferences: Any) -> str:
+        """
+        Fallback when LLM fails: pick cheapest flight, store it, return template.
+        This is the safety net — not the primary path.
+        """
+        cheapest = sorted(flights, key=lambda f: f.price)[0]
+        
+        self.trip_storage.store_recommendation(
+            trip_id=self.trip_id,
+            category="flight",
+            recommended_id=str(cheapest.id),
+            reason="Fallback: lowest price (LLM recommendation unavailable)",
+            metadata={
+                "airline": cheapest.airline,
+                "price": cheapest.price,
+                "is_direct": self._is_direct_flight(cheapest),
+                "total_options_reviewed": len(flights),
+                "is_fallback": True
+            }
+        )
+        
+        log_agent_raw(
+            f"⭐ Fallback pick: flight {cheapest.id} ({cheapest.airline} ${cheapest.price:.2f})",
+            agent_name="FlightAgent"
+        )
+        
+        return (
+            f"I found {len(flights)} flights for your route. "
+            f"My top pick is {cheapest.airline} at ${cheapest.price:.2f} — "
+            f"the most affordable option available."
+        )
+
+    def _is_direct_flight(self, flight: Flight) -> bool:
+        """Check if a flight is direct (no stops on any leg)"""
         if flight.is_round_trip and flight.outbound and flight.return_flight:
-            return (f"{flight.airline} ${flight.price:.2f} - "
-                    f"Outbound: {flight.outbound.departure_airport}→{flight.outbound.arrival_airport} "
-                    f"({flight.outbound.stops} stops, {flight.outbound.duration}), "
-                    f"Return: {flight.return_flight.departure_airport}→{flight.return_flight.arrival_airport} "
-                    f"({flight.return_flight.stops} stops, {flight.return_flight.duration})")
-        else:
-            # Legacy one-way format
-            return (f"{flight.airline} {flight.flight_number} - ${flight.price:.2f}, "
-                    f"{flight.stops} stops, {flight.duration}")
+            return flight.outbound.stops == 0 and flight.return_flight.stops == 0
+        elif not flight.is_round_trip:
+            return (flight.stops or 0) == 0
+        return False
 
+
+    # ─────────────────────────────────────────────────────────────────────
+    # UTILITY METHODS
+    # ─────────────────────────────────────────────────────────────────────
 
     def _resolve_location(self, location: str) -> Optional[str]:
         """Resolve city name to airport code"""
@@ -533,8 +635,7 @@ Be friendly and helpful. Don't dump data - just give useful advice.
     
     def _generate_mock_flights(self, origin: str, dest: str, date: str) -> List[Flight]:
         """Generate mock flights when API is unavailable"""
-        from datetime import datetime, timedelta
-        from models.trip import FlightSegment
+        from datetime import timedelta
         
         dep_date = datetime.fromisoformat(date)
         

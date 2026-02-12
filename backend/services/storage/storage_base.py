@@ -1,6 +1,10 @@
 """
 Storage Interface - Abstract base for trip storage
-Location: backend/services/storage/base.py
+Location: backend/services/storage/storage_base.py
+
+Added:
+  - store_recommendation()   → agents write their top pick
+  - get_recommendations()    → orchestrator reads all picks
 """
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional
@@ -121,4 +125,51 @@ class TripStorageInterface(ABC):
         duration: float
     ):
         """Log API call for debugging/analytics"""
+        pass
+
+    # ─── AI Recommendations ──────────────────────────────────────────────
+    # Each agent stores its top pick after deciding.
+    # The orchestrator reads all picks and attaches them to the response.
+
+    @abstractmethod
+    def store_recommendation(
+        self,
+        trip_id: str,
+        category: str,
+        recommended_id: str,
+        reason: str = "",
+        metadata: Optional[Dict] = None
+    ):
+        """
+        Store an agent's top-pick recommendation.
+
+        Args:
+            trip_id:        Trip identifier
+            category:       One of: flight, hotel, restaurant, activity
+            recommended_id: The ID of the recommended item (matches item.id in options)
+            reason:         Short human-readable explanation of why this was picked
+            metadata:       Optional extra data (e.g. runner_up_id, score)
+        """
+        pass
+
+    @abstractmethod
+    def get_recommendations(self, trip_id: str) -> Dict[str, Any]:
+        """
+        Get all agent recommendations for a trip.
+
+        Returns dict like:
+            {
+                "flight": {
+                    "recommended_id": "1",
+                    "reason": "Best price with direct route",
+                    "metadata": {}
+                },
+                "hotel": {
+                    "recommended_id": "ChIJ...",
+                    "reason": "Highest rated within budget",
+                    "metadata": {}
+                },
+                ...
+            }
+        """
         pass

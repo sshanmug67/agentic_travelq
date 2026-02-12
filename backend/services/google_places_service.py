@@ -12,7 +12,7 @@ Location: backend/services/google_places_service.py
 import logging
 import requests
 from typing import List, Dict, Any, Optional
-from backend.utils.logging_config import log_agent_json
+from utils.logging_config import log_agent_json
 from config.settings import settings
 
 logger = logging.getLogger(__name__)

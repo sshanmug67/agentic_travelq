@@ -6,6 +6,9 @@ Combines:
 - Frontend request models
 - Result data models (Flight, Weather, Event, Place)
 - Multi-agent response models
+
+Changes:
+  - TripResponse: added `recommendations` field for structured agent picks
 """
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -322,6 +325,16 @@ class TripResponse(BaseModel):
     processing_time: float
     agents_used: List[str]
     
+    # ✅ NEW: Structured AI recommendations from agents
+    # Each agent stores its top pick; orchestrator collects them here.
+    # Shape: { "flight": { "recommended_id": "1", "reason": "...", "metadata": {...} }, ... }
+    recommendations: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Structured AI recommendations from agents. "
+                    "Keys are categories (flight, hotel, restaurant, activity). "
+                    "Values contain recommended_id, reason, and metadata."
+    )
+    
     # Optional fields
     conversation_history: Optional[List[Dict]] = None
     
@@ -338,6 +351,18 @@ class TripResponse(BaseModel):
                 "summary": {
                     "flights": 47,
                     "hotels": 0
+                },
+                "recommendations": {
+                    "flight": {
+                        "recommended_id": "1",
+                        "reason": "Direct flight (no stops); Lowest price",
+                        "metadata": {
+                            "airline": "BA",
+                            "price": 431.11,
+                            "is_direct": True,
+                            "total_options_reviewed": 5
+                        }
+                    }
                 },
                 "processing_time": 102.57,
                 "agents_used": ["FlightAgent", "WeatherAgent"]

@@ -108,7 +108,7 @@ export const FlightCard: React.FC<FlightCardProps> = ({
               <div className="flex-1 flex items-center">
                 <div className="flex-1 h-0.5 bg-gradient-to-r from-blue-400 to-purple-400 relative">
                   <motion.div
-                    animate={{ x: [0, '100%'] }}
+                    animate={{ x: ['0%', '100%'] }}
                     transition={{ duration: 2, repeat: Infinity }}
                     className="absolute top-1/2 -translate-y-1/2 text-blue-600"
                   >
@@ -164,7 +164,7 @@ export const FlightCard: React.FC<FlightCardProps> = ({
                 <div className="flex-1 flex items-center">
                   <div className="flex-1 h-0.5 bg-gradient-to-r from-purple-400 to-pink-400 relative">
                     <motion.div
-                      animate={{ x: ['100%', 0] }}
+                      animate={{ x: ['0%', '100%'] }}
                       transition={{ duration: 2, repeat: Infinity }}
                       className="absolute top-1/2 -translate-y-1/2 text-purple-600 transform rotate-180"
                     >

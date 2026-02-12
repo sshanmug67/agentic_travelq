@@ -1,6 +1,9 @@
 """
 Updated Trip Planning Service
 Location: backend/services/trip_planning_service.py
+
+Changes:
+  - Passes result["recommendations"] through to the response dict
 """
 from typing import Dict, Any
 from datetime import datetime
@@ -54,6 +57,7 @@ class TripPlanningService:
                 "trip_id": result["trip_id"],
                 "flights_reviewed": len(result["all_options"]["flights"]),
                 "hotels_reviewed": len(result["all_options"]["hotels"]),
+                "recommendations": result.get("recommendations", {}),   # ← NEW
                 "processing_time": f"{processing_time:.2f}s"
             }, label="Results Summary")
             log_info_raw("=" * 80)
@@ -62,6 +66,7 @@ class TripPlanningService:
                 "status": "success",
                 "trip_id": result["trip_id"],
                 "final_recommendation": result["final_recommendation"],
+                "recommendations": result.get("recommendations", {}),   # ← NEW
                 "options": result["all_options"],
                 "summary": result["summary"],
                 "processing_time": processing_time,

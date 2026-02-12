@@ -361,7 +361,7 @@ class Settings:
             self.google_places_api_key = os.getenv("GOOGLE_PLACES_API_KEY")
             # Mask the key for security (show first 10 chars)
             masked_key = self.google_places_api_key[:10] + "..." if len(self.google_places_api_key) > 10 else "***"
-            logger.info(f"✓ GOOGLE_PLACES_API_KEY: Set from environment ({masked_key})")
+            logger.info(f"✓ GOOGLE_PLACES_API_KEY: Set from environment")
         else:
             logger.warning("⚠️  GOOGLE_PLACES_API_KEY: NOT set in environment")
         

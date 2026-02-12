@@ -1,6 +1,10 @@
 """
 In-Memory Storage Implementation
 Location: backend/services/storage/memory_storage.py
+
+Changes:
+  - Added "recommendations" dict to _init_trip()
+  - Implemented store_recommendation() and get_recommendations()
 """
 from typing import Dict, List, Any, Optional
 from datetime import datetime
@@ -209,7 +213,54 @@ class InMemoryTripStorage(TripStorageInterface):
                 "duration": duration,
                 "timestamp": datetime.now().isoformat()
             })
-    
+
+    # ─── AI Recommendations ──────────────────────────────────────────────
+
+    def store_recommendation(
+        self,
+        trip_id: str,
+        category: str,
+        recommended_id: str,
+        reason: str = "",
+        metadata: Optional[Dict] = None
+    ):
+        """
+        Store an agent's top-pick recommendation.
+        
+        Overwrites any previous recommendation for the same category.
+        """
+        with self._lock:
+            if trip_id not in self._storage:
+                self._init_trip(trip_id)
+            
+            self._storage[trip_id]["recommendations"][category] = {
+                "recommended_id": recommended_id,
+                "reason": reason,
+                "metadata": metadata or {},
+                "stored_at": datetime.now().isoformat()
+            }
+            
+            log_info_raw(
+                f"⭐ Stored {category} recommendation for trip {trip_id}: "
+                f"id={recommended_id}, reason={reason[:80]}"
+            )
+
+    def get_recommendations(self, trip_id: str) -> Dict[str, Any]:
+        """
+        Get all agent recommendations for a trip.
+        
+        Returns:
+            Dict keyed by category (flight, hotel, restaurant, activity)
+            Each value has: recommended_id, reason, metadata
+            Returns empty dict if no recommendations stored.
+        """
+        with self._lock:
+            if trip_id in self._storage:
+                return self._storage[trip_id]["recommendations"].copy()
+            return {}
+
+    # ─── Private helpers ─────────────────────────────────────────────────
+
     def _init_trip(self, trip_id: str):
         """Initialize storage for a new trip"""
         self._storage[trip_id] = {
@@ -220,6 +271,7 @@ class InMemoryTripStorage(TripStorageInterface):
             "activities": [],
             "places": [],
             "weather": [],
+            "recommendations": {},   # ← NEW: agent top picks
             "metadata": {},
             "api_calls": [],
             "created_at": datetime.now().isoformat()
