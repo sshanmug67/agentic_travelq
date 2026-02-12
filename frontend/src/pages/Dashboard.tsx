@@ -30,6 +30,7 @@ export const Dashboard: React.FC = () => {
   const [lastSearchMessage, setLastSearchMessage] = useState('');
   const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('flights');
   const [aiRecommendedFlightId, setAiRecommendedFlightId] = useState<string | null>(null);
+  const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
 
   // Check if we have any results to show
   const hasResults = flights.length > 0;
@@ -105,6 +106,11 @@ export const Dashboard: React.FC = () => {
         setActiveResultsTab('flights');
       }
 
+      // Store structured recommendations for display
+      if (response.recommendations) {
+        setRecommendations(response.recommendations);
+      }
+
       // Show success message
       setLastSearchMessage(
         response.message || response.final_recommendation || 'Trip planning complete!'
@@ -139,7 +145,7 @@ export const Dashboard: React.FC = () => {
       {/* Header */}
       <div className="bg-white shadow-md sticky top-0 z-40">
         <div className="px-6 lg:px-[10%] py-3 flex items-center justify-between">
-          <h1 className="text-2xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
+          <h1 className="text-[27px] font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
             TravelQ
           </h1>
           <div className="flex items-center gap-4">
@@ -182,7 +188,7 @@ export const Dashboard: React.FC = () => {
           <button
             onClick={() => handlePlanTrip(naturalLanguageRequest)}
             disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
-            className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-xl py-4 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-105 disabled:hover:scale-100 flex items-center justify-center gap-3"
+            className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-[23px] py-4 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-105 disabled:hover:scale-100 flex items-center justify-center gap-3"
           >
             {isPlanning ? (
               <>
@@ -198,87 +204,102 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════
-          AI RECOMMENDATION SUMMARY — full width across both panels
+          AI RECOMMENDATION STICKY NOTES — 3 per row
           ══════════════════════════════════════════════════════════════════ */}
-      {lastSearchMessage && (
-        <div className="px-6 lg:px-[10%] pb-4">
-          <div className="bg-gradient-to-r from-purple-600 via-pink-600 to-orange-500 rounded-xl p-[1px]">
-            <div className="bg-white rounded-xl p-5">
-              <div className="flex items-start gap-4">
-                <div className="flex-shrink-0 w-10 h-10 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
-                  <span className="text-white text-lg">✨</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-bold text-purple-700 uppercase tracking-wide mb-2">
-                    TravelQ Recommendation
-                  </h3>
-                  <div className="max-h-40 overflow-y-auto pr-2 text-sm text-gray-700 leading-relaxed scrollbar-thin">
-                    {lastSearchMessage.split('\n').map((line, i) => {
-                      const trimmed = line.trim();
-                      
-                      // Horizontal rule
-                      if (trimmed === '---' || trimmed === '***') {
-                        return <hr key={i} className="my-2 border-gray-200" />;
-                      }
-                      
-                      // Empty line → spacing
-                      if (!trimmed) {
-                        return <div key={i} className="h-2" />;
-                      }
-                      
-                      // H1: # Heading
-                      if (trimmed.startsWith('# ')) {
-                        return (
-                          <h4 key={i} className="text-base font-bold text-gray-800 mt-2 mb-1">
-                            {trimmed.replace(/^# /, '')}
-                          </h4>
-                        );
-                      }
-                      
-                      // H2: ## Heading
-                      if (trimmed.startsWith('## ')) {
-                        return (
-                          <h5 key={i} className="text-sm font-bold text-purple-700 mt-3 mb-1">
-                            {trimmed.replace(/^## /, '')}
-                          </h5>
-                        );
-                      }
-                      
-                      // List item: - text
-                      if (trimmed.startsWith('- ')) {
-                        const content = trimmed.replace(/^- /, '');
-                        return (
-                          <div key={i} className="flex items-start gap-2 ml-2 my-0.5">
-                            <span className="text-purple-400 mt-0.5">•</span>
-                            <span
-                              dangerouslySetInnerHTML={{
-                                __html: content
-                                  .replace(/\*\*(.+?)\*\*/g, '<strong class="text-gray-800">$1</strong>')
-                              }}
-                            />
-                          </div>
-                        );
-                      }
-                      
-                      // Regular paragraph with bold support
-                      return (
-                        <p
-                          key={i}
-                          className="my-0.5"
-                          dangerouslySetInnerHTML={{
-                            __html: trimmed
-                              .replace(/\*\*(.+?)\*\*/g, '<strong class="text-gray-800">$1</strong>')
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
+      {recommendations && Object.keys(recommendations).length > 0 && (() => {
+        const categoryConfig: Record<string, { icon: string; bg: string; tape: string; label: string }> = {
+          flight:     { icon: '✈️',  bg: 'bg-yellow-100', tape: 'bg-yellow-300', label: 'Flight' },
+          hotel:      { icon: '🏨', bg: 'bg-blue-100',   tape: 'bg-blue-300',   label: 'Hotel' },
+          restaurant: { icon: '🍽️',  bg: 'bg-green-100',  tape: 'bg-green-300',  label: 'Restaurant' },
+          activity:   { icon: '🎭', bg: 'bg-pink-100',   tape: 'bg-pink-300',   label: 'Activity' },
+          weather:    { icon: '🌤️',  bg: 'bg-orange-100', tape: 'bg-orange-300', label: 'Weather' },
+        };
+
+        // Build cards: real recommendations + pending placeholders
+        const allCategories = ['flight', 'hotel', 'restaurant', 'activity'];
+        const cards = allCategories.map((cat) => ({
+          category: cat,
+          config: categoryConfig[cat] || { icon: '📋', bg: 'bg-gray-100', tape: 'bg-gray-300', label: cat },
+          rec: recommendations[cat] || null,
+        }));
+
+        return (
+          <div className="px-6 lg:px-[10%] pb-8">
+            <div className="border-2 border-gray-800 rounded-2xl p-5 bg-white/50">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="w-7 h-7 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
+                <span className="text-white text-[17px]">✨</span>
               </div>
+              <h3 className="text-[17px] font-bold text-purple-700 uppercase tracking-wide">
+                TravelQ Recommendations
+              </h3>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {cards.map(({ category, config, rec }) => (
+                <div
+                  key={category}
+                  className={`${config.bg} rounded-lg shadow-md relative pt-4 pb-3 px-4 min-h-[130px] max-h-[200px] flex flex-col transform transition-transform hover:-rotate-1 hover:shadow-lg`}
+                  style={{
+                    transform: `rotate(${(category.charCodeAt(0) % 3 - 1) * 0.8}deg)`,
+                  }}
+                >
+                  {/* Tape strip */}
+                  <div className={`absolute -top-1.5 left-1/2 -translate-x-1/2 w-16 h-3 ${config.tape} rounded-sm opacity-70`} />
+
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[21px]">{config.icon}</span>
+                      <span className="text-[17px] font-bold uppercase tracking-wider text-gray-700">
+                        {config.label}
+                      </span>
+                    </div>
+                    {rec?.metadata?.price != null && (
+                      <span className="text-[19px] font-bold text-green-700">
+                        ${Number(rec.metadata.price).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+
+                  {rec && rec.recommended_id ? (
+                    <div className="flex-1 overflow-y-auto pr-1">
+                      {/* Name / Airline */}
+                      <p className="text-[19px] font-semibold text-gray-800 mb-1 truncate">
+                        {rec.metadata?.airline
+                          || rec.metadata?.hotel_name
+                          || rec.metadata?.name
+                          || `Option #${rec.recommended_id}`}
+                      </p>
+                      {/* Reason */}
+                      <p className="text-[17px] text-gray-600 leading-relaxed"
+                         style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+                        {rec.reason || 'Best match for your preferences'}
+                      </p>
+                      {/* Quick stats */}
+                      <div className="flex items-center gap-2 mt-2 text-[15px] text-gray-500">
+                        {rec.metadata?.is_direct !== undefined && (
+                          <span>{rec.metadata.is_direct ? '✅ Direct' : '🔄 Connecting'}</span>
+                        )}
+                        {rec.metadata?.total_options_reviewed && (
+                          <span>📊 {rec.metadata.total_options_reviewed} reviewed</span>
+                        )}
+                        {rec.metadata?.rating && (
+                          <span>⭐ {rec.metadata.rating}</span>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex-1 flex items-center justify-center">
+                      <p className="text-[17px] text-gray-400 italic">Pending...</p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* ══════════════════════════════════════════════════════════════════
           MAIN CONTENT: Results (left) + Itinerary (right)
@@ -297,17 +318,17 @@ export const Dashboard: React.FC = () => {
                     <button
                       key={tab.id}
                       onClick={() => setActiveResultsTab(tab.id)}
-                      className={`flex-1 px-4 py-3 text-sm font-medium transition-all duration-300 relative ${
+                      className={`flex-1 px-4 py-3 text-[17px] font-medium transition-all duration-300 relative ${
                         activeResultsTab === tab.id
                           ? 'text-purple-700 bg-white'
                           : 'text-gray-600 hover:text-purple-600 hover:bg-white/50'
                       }`}
                     >
                       <span className="flex items-center justify-center gap-2">
-                        <span className="text-lg">{tab.icon}</span>
+                        <span className="text-[21px]">{tab.icon}</span>
                         <span>{tab.label}</span>
                         {tab.count > 0 && (
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
+                          <span className={`text-[15px] px-2 py-0.5 rounded-full ${
                             activeResultsTab === tab.id
                               ? 'bg-purple-100 text-purple-700'
                               : 'bg-gray-200 text-gray-600'
@@ -330,16 +351,16 @@ export const Dashboard: React.FC = () => {
                   {activeResultsTab === 'flights' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold text-gray-800">
+                        <h2 className="text-[21px] font-bold text-gray-800">
                           ✈️ Available Flights
                         </h2>
                         <div className="flex items-center gap-3">
                           {selectedFlight && (
-                            <span className="text-xs bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium">
+                            <span className="text-[15px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium">
                               Selected: {selectedFlight.airline} {selectedFlight.outbound?.flight_number} — ${selectedFlight.price}
                             </span>
                           )}
-                          <span className="text-sm text-gray-500">
+                          <span className="text-[17px] text-gray-500">
                             {flights.length} option{flights.length !== 1 ? 's' : ''}
                           </span>
                         </div>
@@ -364,7 +385,7 @@ export const Dashboard: React.FC = () => {
                     <div className="text-center py-12 text-gray-500">
                       <div className="text-4xl mb-3">🏨</div>
                       <p className="font-semibold">Hotel results — wiring up next</p>
-                      <p className="text-sm mt-1">
+                      <p className="text-[17px] mt-1">
                         {useTripData.getState().hotels.length} hotels found
                       </p>
                     </div>
@@ -375,7 +396,7 @@ export const Dashboard: React.FC = () => {
                     <div className="text-center py-12 text-gray-500">
                       <div className="text-4xl mb-3">🍽️</div>
                       <p className="font-semibold">Restaurant results — wiring up next</p>
-                      <p className="text-sm mt-1">
+                      <p className="text-[17px] mt-1">
                         {useTripData.getState().restaurants.length} restaurants found
                       </p>
                     </div>
@@ -386,7 +407,7 @@ export const Dashboard: React.FC = () => {
                     <div className="text-center py-12 text-gray-500">
                       <div className="text-4xl mb-3">🎭</div>
                       <p className="font-semibold">Activity results — wiring up next</p>
-                      <p className="text-sm mt-1">
+                      <p className="text-[17px] mt-1">
                         {useTripData.getState().activities.length} activities found
                       </p>
                     </div>
@@ -398,13 +419,13 @@ export const Dashboard: React.FC = () => {
               <div className="bg-white rounded-xl shadow-lg p-8 border border-gray-200">
                 <div className="text-center py-20">
                   <div className="text-6xl mb-4">🚀</div>
-                  <h2 className="text-2xl font-bold text-gray-800 mb-2">
+                  <h2 className="text-[27px] font-bold text-gray-800 mb-2">
                     Ready to Plan Your Trip?
                   </h2>
                   <p className="text-gray-600 mb-6">
                     Fill in your trip details above and click "Plan My Trip" to see options!
                   </p>
-                  <div className="text-sm text-gray-500">
+                  <div className="text-[17px] text-gray-500">
                     Flight, Hotel, Restaurant, and Activity options will appear here.
                   </div>
                 </div>

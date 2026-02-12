@@ -19,201 +19,120 @@ export const FlightCard: React.FC<FlightCardProps> = ({
 }) => {
   const [showDetails, setShowDetails] = React.useState(false);
 
+  const formatTime = (dateStr: string) =>
+    new Date(dateStr).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+  const formatDate = (dateStr: string) =>
+    new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  const stopsLabel = (stops: number) =>
+    stops === 0 ? 'Direct' : `${stops} stop${stops > 1 ? 's' : ''}`;
+
   return (
     <motion.div
-      whileHover={{ scale: 1.02, y: -4 }}
-      transition={{ duration: 0.2 }}
-      className={`rounded-xl overflow-hidden cursor-pointer transition-all duration-300 ${
+      whileHover={{ scale: 1.01 }}
+      transition={{ duration: 0.15 }}
+      className={`rounded-lg overflow-hidden cursor-pointer transition-all duration-200 ${
         isSelected
-          ? 'ring-4 ring-purple-500 shadow-2xl bg-gradient-to-br from-purple-50 to-pink-50'
-          : 'hover:shadow-xl bg-white border-2 border-gray-200'
+          ? 'ring-2 ring-purple-500 shadow-lg bg-gradient-to-br from-purple-50 to-pink-50'
+          : 'hover:shadow-md bg-white border border-gray-200'
       }`}
       onClick={onSelect}
     >
-      {/* AI Recommendation Badge */}
+      {/* AI Recommendation Badge — slim */}
       {isAiRecommended && !isSelected && (
-        <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 px-4 py-1 flex items-center justify-center gap-2">
-          <span className="text-sm font-bold text-yellow-900">🤖 AI Recommended</span>
-          <span className="text-xs bg-yellow-600 text-white px-2 py-0.5 rounded-full">
-            Best Value
-          </span>
+        <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 px-3 py-0.5 flex items-center justify-center gap-2">
+          <span className="text-[15px] font-bold text-yellow-900">🤖 AI Recommended</span>
         </div>
       )}
 
-      <div className="p-5">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-start gap-3">
+      <div className="px-4 py-3">
+        {/* Header row: radio + airline + cabin/stops ... price */}
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-3">
             <input
               type="radio"
               checked={isSelected}
               onChange={onSelect}
-              className="mt-1 w-5 h-5 text-purple-600 cursor-pointer"
+              className="w-4 h-4 text-purple-600 cursor-pointer"
             />
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-lg text-gray-800">
-                  {flight.airline} {flight.outbound.flight_number}
-                </span>
-                {isAiRecommended && (
-                  <span className="text-xl" title="AI Recommended">
-                    🌟
-                  </span>
-                )}
-              </div>
-              <div className="text-sm text-gray-600 mt-1 flex items-center gap-2">
-                <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-xs font-medium">
-                  {flight.cabin_class}
-                </span>
-                <span>•</span>
-                <span>
-                  {flight.outbound.stops === 0
-                    ? 'Direct'
-                    : `${flight.outbound.stops} stop${flight.outbound.stops > 1 ? 's' : ''}`}
-                </span>
-              </div>
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-[17px] text-gray-800">
+                {flight.airline_code} {flight.outbound?.flight_number || ''}
+              </span>
+              {isAiRecommended && <span className="text-[17px]" title="AI Recommended">🌟</span>}
+              <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[15px] font-medium">
+                {flight.cabin_class}
+              </span>
+              <span className="text-[15px] text-gray-500">
+                • {stopsLabel(flight.outbound?.stops ?? 0)}
+              </span>
             </div>
           </div>
           <div className="text-right">
-            <div className="text-2xl font-bold text-green-600">${flight.price}</div>
-            <div className="text-xs text-gray-500">per person</div>
+            <span className="text-[21px] font-bold text-green-600">${flight.price}</span>
+            <span className="text-[15px] text-gray-400 ml-1">pp</span>
           </div>
         </div>
 
-        {/* Flight Route Visualization */}
-        <div className="space-y-3">
-          {/* Outbound */}
-          <div className="bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg p-3">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-blue-700 uppercase tracking-wide">
-                ✈️ Outbound
-              </span>
-              <span className="text-xs text-gray-600">
-                {new Date(flight.outbound.departure_time).toLocaleDateString('en-US', {
-                  month: 'short',
-                  day: 'numeric',
-                })}
-              </span>
-            </div>
-            <div className="flex items-center gap-3">
-              <div className="text-center">
-                <div className="font-bold text-lg">{flight.outbound.departure_airport}</div>
-                <div className="text-sm text-gray-600">
-                  {new Date(flight.outbound.departure_time).toLocaleTimeString('en-US', {
-                    hour: 'numeric',
-                    minute: '2-digit',
-                  })}
-                </div>
-              </div>
-              <div className="flex-1 flex items-center">
-                <div className="flex-1 h-0.5 bg-gradient-to-r from-blue-400 to-purple-400 relative">
-                  <motion.div
-                    animate={{ x: ['0%', '100%'] }}
-                    transition={{ duration: 2, repeat: Infinity }}
-                    className="absolute top-1/2 -translate-y-1/2 text-blue-600"
-                  >
-                    ✈
-                  </motion.div>
-                </div>
-              </div>
-              <div className="text-center">
-                <div className="font-bold text-lg">{flight.outbound.arrival_airport}</div>
-                <div className="text-sm text-gray-600">
-                  {new Date(flight.outbound.arrival_time).toLocaleTimeString('en-US', {
-                    hour: 'numeric',
-                    minute: '2-digit',
-                  })}
-                </div>
-              </div>
-            </div>
-            <div className="text-xs text-gray-600 mt-2 flex items-center justify-center gap-2">
-              <span>⏱️ {flight.outbound.duration}</span>
-              {flight.outbound.stops > 0 && flight.outbound.layovers && (
-                <>
-                  <span>•</span>
-                  <span>🔄 via {flight.outbound.layovers.join(', ')}</span>
-                </>
-              )}
-            </div>
+        {/* Outbound row */}
+        <div className="flex items-center gap-2 py-1.5 px-2 bg-blue-50/60 rounded text-[17px]">
+          <span className="text-[15px] font-semibold text-blue-600 w-8 flex-shrink-0">OUT</span>
+          <span className="font-semibold text-gray-800 w-10">{flight.outbound?.departure_airport}</span>
+          <span className="text-[15px] text-gray-500">{formatTime(flight.outbound?.departure_time)}</span>
+          <div className="flex-1 flex items-center px-1">
+            <div className="flex-1 h-px bg-blue-300" />
+            <span className="text-[15px] text-gray-400 px-1.5">
+              {flight.outbound?.duration}
+            </span>
+            <div className="flex-1 h-px bg-blue-300" />
           </div>
-
-          {/* Return */}
-          {flight.return_flight && (
-            <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-semibold text-purple-700 uppercase tracking-wide">
-                  ✈️ Return
-                </span>
-                <span className="text-xs text-gray-600">
-                  {new Date(flight.return_flight.departure_time).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                  })}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                <div className="text-center">
-                  <div className="font-bold text-lg">{flight.return_flight.departure_airport}</div>
-                  <div className="text-sm text-gray-600">
-                    {new Date(flight.return_flight.departure_time).toLocaleTimeString('en-US', {
-                      hour: 'numeric',
-                      minute: '2-digit',
-                    })}
-                  </div>
-                </div>
-                <div className="flex-1 flex items-center">
-                  <div className="flex-1 h-0.5 bg-gradient-to-r from-purple-400 to-pink-400 relative">
-                    <motion.div
-                      animate={{ x: ['0%', '100%'] }}
-                      transition={{ duration: 2, repeat: Infinity }}
-                      className="absolute top-1/2 -translate-y-1/2 text-purple-600 transform rotate-180"
-                    >
-                      ✈
-                    </motion.div>
-                  </div>
-                </div>
-                <div className="text-center">
-                  <div className="font-bold text-lg">{flight.return_flight.arrival_airport}</div>
-                  <div className="text-sm text-gray-600">
-                    {new Date(flight.return_flight.arrival_time).toLocaleTimeString('en-US', {
-                      hour: 'numeric',
-                      minute: '2-digit',
-                    })}
-                  </div>
-                </div>
-              </div>
-              <div className="text-xs text-gray-600 mt-2 flex items-center justify-center gap-2">
-                <span>⏱️ {flight.return_flight.duration}</span>
-                {flight.return_flight.stops > 0 && flight.return_flight.layovers && (
-                  <>
-                    <span>•</span>
-                    <span>🔄 via {flight.return_flight.layovers.join(', ')}</span>
-                  </>
-                )}
-              </div>
-            </div>
+          <span className="font-semibold text-gray-800 w-10 text-right">{flight.outbound?.arrival_airport}</span>
+          <span className="text-[15px] text-gray-500 w-16 text-right">{formatTime(flight.outbound?.arrival_time)}</span>
+          <span className="text-[15px] text-gray-400 w-14 text-right">{formatDate(flight.outbound?.departure_time)}</span>
+          {flight.outbound?.stops > 0 && flight.outbound?.layovers?.length > 0 && (
+            <span className="text-[15px] text-gray-400 ml-1">via {flight.outbound.layovers.join(',')}</span>
           )}
         </div>
 
-        {/* Additional Info */}
-        <div className="mt-4 flex items-center justify-between text-xs text-gray-600">
-          <div className="flex items-center gap-3">
-            {flight.cabin_bags && (
-              <span className="flex items-center gap-1">
-                💼 {flight.cabin_bags.quantity} cabin bag ({flight.cabin_bags.weight}
-                {flight.cabin_bags.weight_unit})
+        {/* Return row */}
+        {flight.return_flight && (
+          <div className="flex items-center gap-2 py-1.5 px-2 bg-purple-50/60 rounded text-[17px] mt-1">
+            <span className="text-[15px] font-semibold text-purple-600 w-8 flex-shrink-0">RET</span>
+            <span className="font-semibold text-gray-800 w-10">{flight.return_flight.departure_airport}</span>
+            <span className="text-[15px] text-gray-500">{formatTime(flight.return_flight.departure_time)}</span>
+            <div className="flex-1 flex items-center px-1">
+              <div className="flex-1 h-px bg-purple-300" />
+              <span className="text-[15px] text-gray-400 px-1.5">
+                {flight.return_flight.duration}
               </span>
+              <div className="flex-1 h-px bg-purple-300" />
+            </div>
+            <span className="font-semibold text-gray-800 w-10 text-right">{flight.return_flight.arrival_airport}</span>
+            <span className="text-[15px] text-gray-500 w-16 text-right">{formatTime(flight.return_flight.arrival_time)}</span>
+            <span className="text-[15px] text-gray-400 w-14 text-right">{formatDate(flight.return_flight.departure_time)}</span>
+            {flight.return_flight.stops > 0 && flight.return_flight.layovers?.length > 0 && (
+              <span className="text-[15px] text-gray-400 ml-1">via {flight.return_flight.layovers.join(',')}</span>
             )}
           </div>
-          <div className="flex gap-2">
+        )}
+
+        {/* Footer row: baggage + actions */}
+        <div className="mt-2 flex items-center justify-between text-[15px] text-gray-500">
+          <div className="flex items-center gap-3">
+            {flight.cabin_bags && (
+              <span>💼 {flight.cabin_bags.quantity} cabin bag ({flight.cabin_bags.weight}{flight.cabin_bags.weight_unit})</span>
+            )}
+            {flight.checked_bags && (
+              <span>🧳 {flight.checked_bags.quantity} checked</span>
+            )}
+          </div>
+          <div className="flex gap-3">
             <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowDetails(!showDetails);
-              }}
+              onClick={(e) => { e.stopPropagation(); setShowDetails(!showDetails); }}
               className="text-purple-600 hover:text-purple-700 font-semibold hover:underline"
             >
-              {showDetails ? 'Hide' : 'View'} Details
+              {showDetails ? 'Hide' : 'Details'}
             </button>
             <button
               onClick={(e) => e.stopPropagation()}
@@ -230,17 +149,17 @@ export const FlightCard: React.FC<FlightCardProps> = ({
           animate={{ height: showDetails ? 'auto' : 0 }}
           className="overflow-hidden"
         >
-          <div className="mt-4 pt-4 border-t border-gray-200 text-sm space-y-2">
+          <div className="mt-2 pt-2 border-t border-gray-200 text-[15px] space-y-1">
             <div className="flex justify-between">
-              <span className="text-gray-600">Total Duration:</span>
+              <span className="text-gray-500">Total Duration:</span>
               <span className="font-semibold">{flight.total_duration}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-600">Aircraft:</span>
+              <span className="text-gray-500">Aircraft:</span>
               <span className="font-semibold">Boeing 787 (Estimated)</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-gray-600">Cancellation:</span>
+              <span className="text-gray-500">Cancellation:</span>
               <span className="font-semibold text-green-600">Flexible</span>
             </div>
           </div>
