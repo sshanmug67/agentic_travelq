@@ -369,7 +369,7 @@ export const Dashboard: React.FC = () => {
                       Top Picks
                     </h4>
                   </div>
-                  <div className="space-y-4">
+                  <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
                   {pickCards.map(({ category, config, rec }) => (
                     <div
                       key={category}
