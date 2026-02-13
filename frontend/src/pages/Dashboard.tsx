@@ -361,8 +361,8 @@ export const Dashboard: React.FC = () => {
 
               <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
 
-                {/* ─── LEFT: Flight & Hotel Picks ─────────────────────── */}
-                <div className="lg:col-span-2 flex flex-col">
+                {/* ─── LEFT: Flight, Hotel & Weather Picks ────────────── */}
+                <div className="lg:col-span-2 flex flex-col lg:border-r lg:border-gray-200 lg:pr-6">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-[18px]">🎯</span>
                     <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
@@ -421,6 +421,43 @@ export const Dashboard: React.FC = () => {
                       )}
                     </div>
                   ))}
+
+                  {/* ─── Weather Recommendation ────────────────────────── */}
+                  {(() => {
+                    const weatherRec = recommendations['weather'];
+                    if (!weatherRec) return null;
+                    const tempMin = weatherRec.metadata?.temp_min;
+                    const tempMax = weatherRec.metadata?.temp_max;
+                    return (
+                      <div className="bg-sky-50 rounded-lg border border-gray-200 border-l-4 border-l-sky-400 p-4 transition-shadow hover:shadow-md">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[18px]">🌤️</span>
+                            <span className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
+                              Weather
+                            </span>
+                          </div>
+                          {tempMin != null && tempMax != null && (
+                            <span className="text-[13px] font-semibold text-sky-700">
+                              {tempMin}°F – {tempMax}°F
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[13px] text-gray-600 leading-relaxed">
+                          {weatherRec.reason || 'Weather data available'}
+                        </p>
+                        <div className="flex items-center gap-3 mt-2 text-[12px] text-gray-400">
+                          {weatherRec.metadata?.num_days && (
+                            <span>{weatherRec.metadata.num_days}-day forecast</span>
+                          )}
+                          {weatherRec.metadata?.rainy_days > 0 && (
+                            <span>🌧️ {weatherRec.metadata.rainy_days} rainy day{weatherRec.metadata.rainy_days !== 1 ? 's' : ''}</span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   </div>
                 </div>
 

@@ -1,6 +1,11 @@
 """
 Weather Agent - Real API with Centralized Storage
 Location: backend/agents/weather_agent.py
+
+Changes (v2):
+  - Added store_recommendation() call after generating weather recommendation
+  - Weather recommendation now appears in response.recommendations.weather
+  - Frontend can display it alongside Flight/Hotel picks
 """
 import time
 import asyncio
@@ -139,6 +144,39 @@ class WeatherAgent(TravelQBaseAgent):
             
             # Generate conversational recommendation
             recommendation = self._generate_recommendation(weather_forecasts, search_params)
+            
+            # ══════════════════════════════════════════════════════════════
+            # v2 NEW: Store weather recommendation so the frontend can
+            #         display it in the AI Recommendations panel
+            # ══════════════════════════════════════════════════════════════
+            try:
+                temps = [f.temperature for f in weather_forecasts]
+                self.trip_storage.store_recommendation(
+                    trip_id=self.trip_id,
+                    category="weather",
+                    recommended_id="weather_forecast",
+                    reason=recommendation,
+                    metadata={
+                        "destination": search_params["destination"],
+                        "num_days": len(weather_forecasts),
+                        "temp_min": round(min(f.temp_min for f in weather_forecasts), 1),
+                        "temp_max": round(max(f.temp_max for f in weather_forecasts), 1),
+                        "avg_temp": round(sum(temps) / len(temps), 1),
+                        "rainy_days": sum(
+                            1 for f in weather_forecasts
+                            if (f.precipitation_probability or 0) > 50
+                        ),
+                    },
+                )
+                log_agent_raw(
+                    f"⭐ Weather recommendation stored ({len(weather_forecasts)} day forecast)",
+                    agent_name="WeatherAgent",
+                )
+            except Exception as e:
+                log_agent_raw(
+                    f"⚠️ Failed to store weather recommendation: {e}",
+                    agent_name="WeatherAgent",
+                )
             
             # Log outgoing
             self.log_conversation_message(
