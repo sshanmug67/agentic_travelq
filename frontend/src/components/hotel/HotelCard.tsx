@@ -56,7 +56,7 @@ export const HotelCard: React.FC<HotelCardProps> = ({
       {/* AI Recommendation Badge — slim */}
       {isAiRecommended && !isSelected && (
         <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 px-3 py-0.5 flex items-center justify-center gap-2">
-          <span className="text-[15px] font-bold text-yellow-900">🤖 AI Recommended</span>
+          <span className="text-[13px] font-bold text-yellow-900">🤖 AI Recommended</span>
         </div>
       )}
 
@@ -71,27 +71,27 @@ export const HotelCard: React.FC<HotelCardProps> = ({
               className="w-4 h-4 text-purple-600 cursor-pointer"
             />
             <div className="flex items-center gap-2">
-              <span className="font-bold text-[17px] text-gray-800 truncate max-w-[240px]">
+              <span className="font-bold text-[15px] text-gray-800 truncate max-w-[240px]">
                 {hotel.name}
               </span>
-              {isAiRecommended && <span className="text-[17px]" title="AI Recommended">🌟</span>}
-              <span className="flex items-center gap-1 text-[15px]">
+              {isAiRecommended && <span className="text-[15px]" title="AI Recommended">🌟</span>}
+              <span className="flex items-center gap-1 text-[13px]">
                 {renderStars(hotel.google_rating)}
                 <span className="font-semibold text-gray-700 ml-0.5">{hotel.google_rating}</span>
               </span>
-              <span className="text-[15px] text-gray-400">
+              <span className="text-[13px] text-gray-400">
                 ({hotel.user_ratings_total?.toLocaleString()})
               </span>
             </div>
           </div>
           <div className="text-right flex-shrink-0">
-            <span className="text-[21px] font-bold text-green-600">${hotel.total_price}</span>
-            <span className="text-[15px] text-gray-400 ml-1">total</span>
+            <span className="text-[19px] font-bold text-green-600">${hotel.total_price}</span>
+            <span className="text-[13px] text-gray-400 ml-1">total</span>
           </div>
         </div>
 
         {/* Details row: photo thumbnail + address + dates + per-night */}
-        <div className="flex items-center gap-3 py-1.5 px-2 bg-blue-50/60 rounded text-[17px]">
+        <div className="flex items-center gap-3 py-1.5 px-2 bg-blue-50/60 rounded text-[15px]">
           {/* Small thumbnail */}
           {photoUrls.length > 0 ? (
             <img
@@ -101,45 +101,45 @@ export const HotelCard: React.FC<HotelCardProps> = ({
             />
           ) : (
             <div className="w-12 h-12 rounded bg-gray-200 flex items-center justify-center flex-shrink-0">
-              <span className="text-[21px]">🏨</span>
+              <span className="text-[19px]">🏨</span>
             </div>
           )}
 
           {/* Address */}
           <div className="flex items-center gap-1 flex-1 min-w-0">
-            <span className="text-[15px] text-gray-500">📍</span>
-            <span className="text-[15px] text-gray-700 truncate">{hotel.address}</span>
+            <span className="text-[13px] text-gray-500">📍</span>
+            <span className="text-[13px] text-gray-700 truncate">{hotel.address}</span>
           </div>
 
           {/* Dates */}
           <div className="flex items-center gap-1 flex-shrink-0">
-            <span className="text-[15px] text-gray-500">🗓️</span>
-            <span className="text-[15px] text-gray-700">
+            <span className="text-[13px] text-gray-500">🗓️</span>
+            <span className="text-[13px] text-gray-700">
               {formatDate(hotel.check_in_date)} – {formatDate(hotel.check_out_date)}
             </span>
           </div>
 
           {/* Per-night price */}
           <div className="flex-shrink-0 text-right">
-            <span className="text-[15px] font-semibold text-gray-600">
+            <span className="text-[13px] font-semibold text-gray-600">
               ${hotel.price_per_night}/night
             </span>
-            <span className="text-[15px] text-gray-400 ml-1">
+            <span className="text-[13px] text-gray-400 ml-1">
               • {hotel.num_nights}n
             </span>
           </div>
         </div>
 
         {/* Footer row: highlights + actions */}
-        <div className="mt-2 flex items-center justify-between text-[15px] text-gray-500">
+        <div className="mt-2 flex items-center justify-between text-[13px] text-gray-500">
           <div className="flex items-center gap-2">
             {hotel.highlights && hotel.highlights.slice(0, 3).map((h, idx) => (
-              <span key={idx} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-[15px]">
+              <span key={idx} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-[13px]">
                 ✨ {h}
               </span>
             ))}
             {(!hotel.highlights || hotel.highlights.length === 0) && (
-              <span className="text-[15px] text-gray-400">{hotel.num_nights} nights stay</span>
+              <span className="text-[13px] text-gray-400">{hotel.num_nights} nights stay</span>
             )}
           </div>
           <div className="flex gap-3">
@@ -177,7 +177,7 @@ export const HotelCard: React.FC<HotelCardProps> = ({
           animate={{ height: showDetails ? 'auto' : 0 }}
           className="overflow-hidden"
         >
-          <div className="mt-2 pt-2 border-t border-gray-200 text-[15px] space-y-1">
+          <div className="mt-2 pt-2 border-t border-gray-200 text-[13px] space-y-1">
             <div className="flex justify-between">
               <span className="text-gray-500">Address:</span>
               <span className="font-semibold text-right max-w-[60%]">{hotel.address}</span>

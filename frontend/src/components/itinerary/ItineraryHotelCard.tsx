@@ -41,9 +41,9 @@ export const ItineraryHotelCard: React.FC<ItineraryHotelCardProps> = ({
       {/* Header: badge + delete */}
       <div className="flex justify-between items-start mb-3">
         {isAiSelected ? (
-          <span className="ai-sticker text-[17px]">🤖 AI Pick</span>
+          <span className="ai-sticker text-[15px]">🤖 AI Pick</span>
         ) : (
-          <span className="user-badge text-[17px] text-white">👤 You Chose</span>
+          <span className="user-badge text-[15px] text-white">👤 You Chose</span>
         )}
         <button onClick={onDelete} className="paper-delete" aria-label="Delete hotel">
           ×
@@ -62,19 +62,19 @@ export const ItineraryHotelCard: React.FC<ItineraryHotelCardProps> = ({
             />
           ) : (
             <div className="w-16 h-16 rounded-lg bg-gray-200 flex items-center justify-center flex-shrink-0">
-              <span className="text-[27px]">🏨</span>
+              <span className="text-[25px]">🏨</span>
             </div>
           )}
 
           {/* Hotel info */}
           <div className="flex-1 min-w-0">
-            <div className="font-bold text-[21px] text-gray-800 truncate">
+            <div className="font-bold text-[19px] text-gray-800 truncate">
               {hotel.name}
             </div>
             <div className="flex items-center gap-1 mt-0.5">
-              <span className="text-[15px]">{renderStars(hotel.google_rating)}</span>
-              <span className="text-[17px] font-semibold text-gray-700">{hotel.google_rating}</span>
-              <span className="text-[15px] text-gray-400">
+              <span className="text-[13px]">{renderStars(hotel.google_rating)}</span>
+              <span className="text-[15px] font-semibold text-gray-700">{hotel.google_rating}</span>
+              <span className="text-[13px] text-gray-400">
                 ({hotel.user_ratings_total?.toLocaleString()})
               </span>
             </div>
@@ -83,17 +83,17 @@ export const ItineraryHotelCard: React.FC<ItineraryHotelCardProps> = ({
 
         {/* Address */}
         <div className="mt-2 flex items-start gap-1">
-          <span className="text-[15px] mt-0.5">📍</span>
-          <span className="text-[17px] text-gray-600 leading-tight">{hotel.address}</span>
+          <span className="text-[13px] mt-0.5">📍</span>
+          <span className="text-[15px] text-gray-600 leading-tight">{hotel.address}</span>
         </div>
 
         {/* Dates */}
         <div className="mt-1 flex items-center gap-1">
-          <span className="text-[15px]">🗓️</span>
-          <span className="text-[17px] text-gray-600">
+          <span className="text-[13px]">🗓️</span>
+          <span className="text-[15px] text-gray-600">
             {formatDate(hotel.check_in_date)} – {formatDate(hotel.check_out_date)}
           </span>
-          <span className="text-[15px] text-gray-400 ml-1">
+          <span className="text-[13px] text-gray-400 ml-1">
             • {hotel.num_nights} nights
           </span>
         </div>
@@ -101,15 +101,15 @@ export const ItineraryHotelCard: React.FC<ItineraryHotelCardProps> = ({
         {/* Price */}
         <div className="mt-3 pt-2 border-t border-dashed border-gray-300">
           <div className="flex justify-between items-center">
-            <span className="font-bold text-[21px] text-green-700">
+            <span className="font-bold text-[19px] text-green-700">
               💰 ${hotel.total_price}
             </span>
-            <span className="text-[17px] text-gray-500">
+            <span className="text-[15px] text-gray-500">
               ${hotel.price_per_night}/night
             </span>
           </div>
           {!isAiSelected && hotel.priceDifference !== undefined && hotel.priceDifference !== 0 && (
-            <div className="text-[17px] text-gray-600 mt-1 text-right">
+            <div className="text-[15px] text-gray-600 mt-1 text-right">
               {hotel.priceDifference > 0 ? '+' : ''}${hotel.priceDifference.toFixed(2)} vs AI
             </div>
           )}
@@ -122,7 +122,7 @@ export const ItineraryHotelCard: React.FC<ItineraryHotelCardProps> = ({
               href={(hotel as any).booking_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[15px] text-purple-600 hover:text-purple-700 font-semibold hover:underline"
+              className="text-[13px] text-purple-600 hover:text-purple-700 font-semibold hover:underline"
             >
               🔗 View on Booking.com →
             </a>

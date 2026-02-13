@@ -16,28 +16,25 @@ import type { TripPlanResponse } from '../types/trip';
 type ResultsTab = 'flights' | 'hotels' | 'restaurants' | 'activities';
 
 export const Dashboard: React.FC = () => {
-  const { 
+  const {
     tripData, preferences, flights, hotels,
     setTripData, setFlights, setHotels, setRestaurants, setActivities, setWeather
   } = useTripData();
-  const { 
-    flight: selectedFlight, hotel: selectedHotel, 
+  const {
+    flight: selectedFlight, hotel: selectedHotel,
     restaurants: selectedRestaurants, activities: selectedActivities,
-    selectFlight, selectHotel 
+    selectFlight, selectHotel
   } = useItinerary();
-  
+
   const [naturalLanguageRequest, setNaturalLanguageRequest] = useState('');
   const [isPlanning, setIsPlanning] = useState(false);
-  const [lastSearchMessage, setLastSearchMessage] = useState('');
   const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('flights');
   const [aiRecommendedFlightId, setAiRecommendedFlightId] = useState<string | null>(null);
   const [aiRecommendedHotelId, setAiRecommendedHotelId] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
 
-  // Check if we have any results to show
   const hasResults = flights.length > 0 || hotels.length > 0;
 
-  // Clear stale itinerary on mount if no results are loaded
   useEffect(() => {
     const { flights, hotels, restaurants, activities } = useTripData.getState();
     const hasAnyResults = flights.length > 0 || hotels.length > 0 ||
@@ -59,8 +56,7 @@ export const Dashboard: React.FC = () => {
     }
 
     setIsPlanning(true);
-    setLastSearchMessage('');
-    
+
     try {
       const response = await tripApi.planTrip({
         tripId: tripData.id,
@@ -82,13 +78,11 @@ export const Dashboard: React.FC = () => {
         },
       }) as TripPlanResponse;
 
-      // Store the tripId from backend response
       const resolvedTripId = response.tripId || response.trip_id;
       if (resolvedTripId) {
         setTripData({ id: resolvedTripId });
       }
 
-      // ✅ FIX: Type the fallback so TS knows .flights/.hotels etc. are valid
       const results: Record<string, any> =
         response.results || response.options || {};
 
@@ -99,47 +93,35 @@ export const Dashboard: React.FC = () => {
       setActivities(results.activities || []);
       setWeather(results.weather || []);
 
-      // Auto-select the AI recommended flight
       if (flightResults.length > 0) {
         const recFlightId = response.recommendations?.flight?.recommended_id;
         const aiPick = recFlightId
           ? flightResults.find((f: any) => String(f.id) === String(recFlightId))
           : null;
-        
         const flightToSelect = aiPick || flightResults[0];
-        
         setAiRecommendedFlightId(flightToSelect.id);
         selectFlight(flightToSelect, 'ai');
         setActiveResultsTab('flights');
       }
 
-      // Auto-select the AI recommended hotel
       const hotelResults = results.hotels || [];
       if (hotelResults.length > 0) {
         const recHotelId = response.recommendations?.hotel?.recommended_id;
         const aiHotelPick = recHotelId
           ? hotelResults.find((h: any) => String(h.id) === String(recHotelId))
           : null;
-        
         const hotelToSelect = aiHotelPick || hotelResults[0];
-        
         setAiRecommendedHotelId(hotelToSelect.id);
         selectHotel(hotelToSelect, 'ai');
-
         if (flightResults.length === 0) {
           setActiveResultsTab('hotels');
         }
       }
 
-      // Store structured recommendations for display
       if (response.recommendations) {
         setRecommendations(response.recommendations);
       }
 
-      setLastSearchMessage(
-        response.message || response.final_recommendation || 'Trip planning complete!'
-      );
-      
       setNaturalLanguageRequest('');
 
     } catch (error: any) {
@@ -172,7 +154,7 @@ export const Dashboard: React.FC = () => {
       {/* Header */}
       <div className="bg-white shadow-md sticky top-0 z-40">
         <div className="px-6 lg:px-[10%] py-3 flex items-center justify-between">
-          <h1 className="text-[27px] font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
+          <h1 className="text-[25px] font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
             TravelQ
           </h1>
           <div className="flex items-center gap-4">
@@ -191,16 +173,16 @@ export const Dashboard: React.FC = () => {
       <div className="px-6 lg:px-[10%] py-6">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
           <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
-            <NaturalLanguageInput 
+            <NaturalLanguageInput
               value={naturalLanguageRequest}
               onChange={setNaturalLanguageRequest}
               onSubmit={handlePlanTrip}
               isProcessing={isPlanning}
             />
           </div>
-          <PreferencesPanel 
-            preferences={preferences} 
-            onUpdate={useTripData.getState().updatePreferences} 
+          <PreferencesPanel
+            preferences={preferences}
+            onUpdate={useTripData.getState().updatePreferences}
           />
         </div>
 
@@ -208,7 +190,7 @@ export const Dashboard: React.FC = () => {
           <button
             onClick={() => handlePlanTrip(naturalLanguageRequest)}
             disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
-            className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-[23px] py-4 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-105 disabled:hover:scale-100 flex items-center justify-center gap-3"
+            className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-[21px] py-4 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-105 disabled:hover:scale-100 flex items-center justify-center gap-3"
           >
             {isPlanning ? (
               <>
@@ -220,16 +202,11 @@ export const Dashboard: React.FC = () => {
             )}
           </button>
         </div>
-
-        {/* AI response message */}
-        {lastSearchMessage && (
-          <div className="max-w-4xl mx-auto mt-4 bg-white rounded-lg border border-purple-200 p-4 text-[17px] text-gray-700 shadow-sm">
-            💬 {lastSearchMessage}
-          </div>
-        )}
       </div>
 
-      {/* AI RECOMMENDATION STICKY NOTES */}
+      {/* ══════════════════════════════════════════════════════════════════
+          INDIVIDUAL RECOMMENDATION STICKY NOTES — 3 per row
+          ══════════════════════════════════════════════════════════════════ */}
       {recommendations && Object.keys(recommendations).length > 0 && (() => {
         const categoryConfig: Record<string, { icon: string; bg: string; tape: string; label: string }> = {
           flight:     { icon: '✈️',  bg: 'bg-yellow-100', tape: 'bg-yellow-300', label: 'Flight' },
@@ -249,100 +226,102 @@ export const Dashboard: React.FC = () => {
         return (
           <div className="px-6 lg:px-[10%] pb-8">
             <div className="border-2 border-gray-800 rounded-2xl p-5 bg-white/50">
-            <div className="flex items-center gap-2 mb-4">
-              <div className="w-7 h-7 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
-                <span className="text-white text-[17px]">✨</span>
+              <div className="flex items-center gap-2 mb-4">
+                <div className="w-7 h-7 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
+                  <span className="text-white text-[15px]">✨</span>
+                </div>
+                <h3 className="text-[15px] font-bold text-purple-700 uppercase tracking-wide">
+                  TravelQ Recommendations
+                </h3>
               </div>
-              <h3 className="text-[17px] font-bold text-purple-700 uppercase tracking-wide">
-                TravelQ Recommendations
-              </h3>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {cards.map(({ category, config, rec }) => (
-                <div
-                  key={category}
-                  className={`${config.bg} rounded-lg shadow-md relative pt-4 pb-3 px-4 min-h-[130px] max-h-[200px] flex flex-col transform transition-transform hover:-rotate-1 hover:shadow-lg`}
-                  style={{
-                    transform: `rotate(${(category.charCodeAt(0) % 3 - 1) * 0.8}deg)`,
-                  }}
-                >
-                  <div className={`absolute -top-1.5 left-1/2 -translate-x-1/2 w-16 h-3 ${config.tape} rounded-sm opacity-70`} />
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                {cards.map(({ category, config, rec }) => (
+                  <div
+                    key={category}
+                    className={`${config.bg} rounded-lg shadow-md relative pt-4 pb-3 px-4 min-h-[130px] max-h-[200px] flex flex-col transform transition-transform hover:-rotate-1 hover:shadow-lg`}
+                    style={{
+                      transform: `rotate(${(category.charCodeAt(0) % 3 - 1) * 0.8}deg)`,
+                    }}
+                  >
+                    <div className={`absolute -top-1.5 left-1/2 -translate-x-1/2 w-16 h-3 ${config.tape} rounded-sm opacity-70`} />
 
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[21px]">{config.icon}</span>
-                      <span className="text-[17px] font-bold uppercase tracking-wider text-gray-700">
-                        {config.label}
-                      </span>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[19px]">{config.icon}</span>
+                        <span className="text-[15px] font-bold uppercase tracking-wider text-gray-700">
+                          {config.label}
+                        </span>
+                      </div>
+                      {rec?.metadata?.price != null && (
+                        <span className="text-[17px] font-bold text-green-700">
+                          ${Number(rec.metadata.price).toFixed(2)}
+                        </span>
+                      )}
                     </div>
-                    {rec?.metadata?.price != null && (
-                      <span className="text-[19px] font-bold text-green-700">
-                        ${Number(rec.metadata.price).toFixed(2)}
-                      </span>
+
+                    {rec && rec.recommended_id ? (
+                      <div className="flex-1 overflow-y-auto pr-1">
+                        <p className="text-[17px] font-semibold text-gray-800 mb-1 truncate">
+                          {rec.metadata?.airline
+                            || rec.metadata?.hotel_name
+                            || rec.metadata?.name
+                            || `Option #${rec.recommended_id}`}
+                        </p>
+                        <p className="text-[15px] text-gray-600 leading-relaxed"
+                           style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+                          {rec.reason || 'Best match for your preferences'}
+                        </p>
+                        <div className="flex items-center gap-2 mt-2 text-[13px] text-gray-500">
+                          {rec.metadata?.is_direct !== undefined && (
+                            <span>{rec.metadata.is_direct ? '✅ Direct' : '🔄 Connecting'}</span>
+                          )}
+                          {rec.metadata?.total_options_reviewed && (
+                            <span>📊 {rec.metadata.total_options_reviewed} reviewed</span>
+                          )}
+                          {rec.metadata?.rating && (
+                            <span>⭐ {rec.metadata.rating}</span>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex-1 flex items-center justify-center">
+                        <p className="text-[15px] text-gray-400 italic">Pending...</p>
+                      </div>
                     )}
                   </div>
-
-                  {rec && rec.recommended_id ? (
-                    <div className="flex-1 overflow-y-auto pr-1">
-                      <p className="text-[19px] font-semibold text-gray-800 mb-1 truncate">
-                        {rec.metadata?.airline
-                          || rec.metadata?.hotel_name
-                          || rec.metadata?.name
-                          || `Option #${rec.recommended_id}`}
-                      </p>
-                      <p className="text-[17px] text-gray-600 leading-relaxed"
-                         style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
-                        {rec.reason || 'Best match for your preferences'}
-                      </p>
-                      <div className="flex items-center gap-2 mt-2 text-[15px] text-gray-500">
-                        {rec.metadata?.is_direct !== undefined && (
-                          <span>{rec.metadata.is_direct ? '✅ Direct' : '🔄 Connecting'}</span>
-                        )}
-                        {rec.metadata?.total_options_reviewed && (
-                          <span>📊 {rec.metadata.total_options_reviewed} reviewed</span>
-                        )}
-                        {rec.metadata?.rating && (
-                          <span>⭐ {rec.metadata.rating}</span>
-                        )}
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="flex-1 flex items-center justify-center">
-                      <p className="text-[17px] text-gray-400 italic">Pending...</p>
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
             </div>
           </div>
         );
       })()}
 
-      {/* MAIN CONTENT: Results (left) + Itinerary (right) */}
+      {/* ══════════════════════════════════════════════════════════════════
+          MAIN CONTENT: Results (left) + Itinerary (right)
+          ══════════════════════════════════════════════════════════════════ */}
       <div className="px-6 lg:px-[10%] pb-6">
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-          
+
           <div className="lg:col-span-3">
             {hasResults ? (
               <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
-                
+
                 <div className="flex border-b bg-gradient-to-r from-purple-50 to-pink-50">
                   {resultsTabs.map((tab) => (
                     <button
                       key={tab.id}
                       onClick={() => setActiveResultsTab(tab.id)}
-                      className={`flex-1 px-4 py-3 text-[17px] font-medium transition-all duration-300 relative ${
+                      className={`flex-1 px-4 py-3 text-[15px] font-medium transition-all duration-300 relative ${
                         activeResultsTab === tab.id
                           ? 'text-purple-700 bg-white'
                           : 'text-gray-600 hover:text-purple-600 hover:bg-white/50'
                       }`}
                     >
                       <span className="flex items-center justify-center gap-2">
-                        <span className="text-[21px]">{tab.icon}</span>
+                        <span className="text-[19px]">{tab.icon}</span>
                         <span>{tab.label}</span>
                         {tab.count > 0 && (
-                          <span className={`text-[15px] px-2 py-0.5 rounded-full ${
+                          <span className={`text-[13px] px-2 py-0.5 rounded-full ${
                             activeResultsTab === tab.id
                               ? 'bg-purple-100 text-purple-700'
                               : 'bg-gray-200 text-gray-600'
@@ -363,21 +342,21 @@ export const Dashboard: React.FC = () => {
                   {activeResultsTab === 'flights' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-[21px] font-bold text-gray-800">
+                        <h2 className="text-[19px] font-bold text-gray-800">
                           ✈️ Available Flights
                         </h2>
                         <div className="flex items-center gap-3">
                           {selectedFlight && (
-                            <span className="text-[15px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium">
-                              Selected: {selectedFlight.airline} {selectedFlight.outbound?.flight_number} — ${selectedFlight.price}
+                            <span className="text-[13px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium">
+                              Selected: {selectedFlight.airline_code} {selectedFlight.outbound?.flight_number} — ${selectedFlight.price}
                             </span>
                           )}
-                          <span className="text-[17px] text-gray-500">
+                          <span className="text-[15px] text-gray-500">
                             {flights.length} option{flights.length !== 1 ? 's' : ''}
                           </span>
                         </div>
                       </div>
-                      
+
                       <div className="space-y-4">
                         {flights.map((flight, index) => (
                           <FlightCard
@@ -395,21 +374,21 @@ export const Dashboard: React.FC = () => {
                   {activeResultsTab === 'hotels' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-[21px] font-bold text-gray-800">
+                        <h2 className="text-[19px] font-bold text-gray-800">
                           🏨 Available Hotels
                         </h2>
                         <div className="flex items-center gap-3">
                           {selectedHotel && (
-                            <span className="text-[15px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium truncate max-w-[280px]">
+                            <span className="text-[13px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium truncate max-w-[280px]">
                               Selected: {selectedHotel.name} — ${selectedHotel.total_price}
                             </span>
                           )}
-                          <span className="text-[17px] text-gray-500">
+                          <span className="text-[15px] text-gray-500">
                             {hotels.length} option{hotels.length !== 1 ? 's' : ''}
                           </span>
                         </div>
                       </div>
-                      
+
                       <div className="space-y-4">
                         {hotels.map((hotel, index) => (
                           <HotelCard
@@ -428,7 +407,7 @@ export const Dashboard: React.FC = () => {
                     <div className="text-center py-12 text-gray-500">
                       <div className="text-4xl mb-3">🍽️</div>
                       <p className="font-semibold">Restaurant results — wiring up next</p>
-                      <p className="text-[17px] mt-1">
+                      <p className="text-[15px] mt-1">
                         {useTripData.getState().restaurants.length} restaurants found
                       </p>
                     </div>
@@ -438,7 +417,7 @@ export const Dashboard: React.FC = () => {
                     <div className="text-center py-12 text-gray-500">
                       <div className="text-4xl mb-3">🎭</div>
                       <p className="font-semibold">Activity results — wiring up next</p>
-                      <p className="text-[17px] mt-1">
+                      <p className="text-[15px] mt-1">
                         {useTripData.getState().activities.length} activities found
                       </p>
                     </div>
@@ -449,13 +428,13 @@ export const Dashboard: React.FC = () => {
               <div className="bg-white rounded-xl shadow-lg p-8 border border-gray-200">
                 <div className="text-center py-20">
                   <div className="text-6xl mb-4">🚀</div>
-                  <h2 className="text-[27px] font-bold text-gray-800 mb-2">
+                  <h2 className="text-[25px] font-bold text-gray-800 mb-2">
                     Ready to Plan Your Trip?
                   </h2>
                   <p className="text-gray-600 mb-6">
                     Fill in your trip details above and click "Plan My Trip" to see options!
                   </p>
-                  <div className="text-[17px] text-gray-500">
+                  <div className="text-[15px] text-gray-500">
                     Flight, Hotel, Restaurant, and Activity options will appear here.
                   </div>
                 </div>

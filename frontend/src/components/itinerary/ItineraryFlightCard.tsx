@@ -31,15 +31,15 @@ export const ItineraryFlightCard: React.FC<ItineraryFlightCardProps> = ({
     layovers?: string[];
   }> = ({ label, color, departure_airport, arrival_airport, departure_time, arrival_time, stops, layovers }) => (
     <div className="flex-1 min-w-0">
-      <div className={`font-semibold text-[19px] ${color} mb-1`}>📅 {label}</div>
-      <div className="text-[19px] font-bold text-gray-800">
+      <div className={`font-semibold text-[17px] ${color} mb-1`}>📅 {label}</div>
+      <div className="text-[17px] font-bold text-gray-800">
         {departure_airport} → {arrival_airport}
       </div>
-      <div className="text-[17px] text-gray-600 mt-0.5">
+      <div className="text-[15px] text-gray-600 mt-0.5">
         {formatDate(departure_time)} {formatTime(departure_time)} – {formatTime(arrival_time)}
       </div>
       {stops > 0 && (
-        <div className="text-[17px] text-gray-500 mt-0.5">
+        <div className="text-[15px] text-gray-500 mt-0.5">
           🔄 {stops} stop{stops > 1 ? 's' : ''}
           {layovers && layovers.length > 0 && ` (${layovers.join(', ')})`}
         </div>
@@ -52,9 +52,9 @@ export const ItineraryFlightCard: React.FC<ItineraryFlightCardProps> = ({
       {/* Header: badge + delete */}
       <div className="flex justify-between items-start mb-3">
         {isAiSelected ? (
-          <span className="ai-sticker text-[17px]">🤖 AI Pick</span>
+          <span className="ai-sticker text-[15px]">🤖 AI Pick</span>
         ) : (
-          <span className="user-badge text-[17px] text-white">👤 You Chose</span>
+          <span className="user-badge text-[15px] text-white">👤 You Chose</span>
         )}
         <button onClick={onDelete} className="paper-delete" aria-label="Delete flight">
           ×
@@ -63,7 +63,7 @@ export const ItineraryFlightCard: React.FC<ItineraryFlightCardProps> = ({
 
       <div className="handwritten-body">
         {/* Airline name */}
-        <div className="font-bold text-[21px] mb-3">
+        <div className="font-bold text-[19px] mb-3">
           {flight.airline_code} {flight.outbound?.flight_number || ''}
         </div>
 
@@ -104,11 +104,11 @@ export const ItineraryFlightCard: React.FC<ItineraryFlightCardProps> = ({
         {/* Price */}
         <div className="mt-3 pt-2 border-t border-dashed border-gray-300">
           <div className="flex justify-between items-center">
-            <span className="font-bold text-[21px] text-green-700">
+            <span className="font-bold text-[19px] text-green-700">
               💰 ${flight.price}
             </span>
             {!isAiSelected && flight.priceDifference !== undefined && flight.priceDifference !== 0 && (
-              <span className="text-[17px] text-gray-600">
+              <span className="text-[15px] text-gray-600">
                 {flight.priceDifference > 0 ? '+' : ''}${flight.priceDifference.toFixed(2)} vs AI
               </span>
             )}
