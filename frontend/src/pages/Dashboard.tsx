@@ -1,4 +1,10 @@
 // frontend/src/pages/Dashboard.tsx
+//
+// Changes (v2):
+//   - Import RestaurantCard and ActivityCard components
+//   - Wire up toggleRestaurant / toggleActivity from useItinerary
+//   - Replace placeholder restaurants/activities tabs with actual card grids
+//   - Track AI-recommended restaurant/activity IDs for future sticky-note display
 
 import React, { useState, useEffect } from 'react';
 import { ItinerarySidebar } from '../components/itinerary/ItinerarySidebar';
@@ -8,6 +14,8 @@ import { PreferencesSummary } from '../components/common/PreferencesSummary';
 import { TripSummaryBar } from '../components/common/TripSummaryBar';
 import { FlightCard } from '../components/flight/FlightCard';
 import { HotelCard } from '../components/hotel/HotelCard';
+import { RestaurantCard } from '../components/restaurant/RestaurantCard';
+import { ActivityCard } from '../components/activity/ActivityCard';
 import { useTripData } from '../hooks/useTripData';
 import { useItinerary } from '../hooks/useItinerary';
 import { tripApi } from '../services/api';
@@ -23,7 +31,7 @@ export const Dashboard: React.FC = () => {
   const {
     flight: selectedFlight, hotel: selectedHotel,
     restaurants: selectedRestaurants, activities: selectedActivities,
-    selectFlight, selectHotel
+    selectFlight, selectHotel, toggleRestaurant, toggleActivity
   } = useItinerary();
 
   const [naturalLanguageRequest, setNaturalLanguageRequest] = useState('');
@@ -144,12 +152,28 @@ export const Dashboard: React.FC = () => {
     selectHotel(hotel, source);
   };
 
+  const handleToggleRestaurant = (restaurant: any) => {
+    toggleRestaurant(restaurant);
+  };
+
+  const handleToggleActivity = (activity: any) => {
+    toggleActivity(activity);
+  };
+
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
     { id: 'hotels', label: 'Hotels', icon: '🏨', count: hotels.length },
     { id: 'restaurants', label: 'Restaurants', icon: '🍽️', count: useTripData.getState().restaurants.length },
     { id: 'activities', label: 'Activities', icon: '🎭', count: useTripData.getState().activities.length },
   ];
+
+  // Helper: check if a restaurant is selected in itinerary
+  const isRestaurantSelected = (id: string) =>
+    selectedRestaurants.some((r) => r.id === id);
+
+  // Helper: check if an activity is selected in itinerary
+  const isActivitySelected = (id: string) =>
+    selectedActivities.some((a) => a.id === id);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50">
@@ -341,6 +365,7 @@ export const Dashboard: React.FC = () => {
 
                 <div className="p-6">
 
+                  {/* ────────── FLIGHTS TAB ────────── */}
                   {activeResultsTab === 'flights' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
@@ -373,6 +398,7 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
+                  {/* ────────── HOTELS TAB ────────── */}
                   {activeResultsTab === 'hotels' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
@@ -405,23 +431,87 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
+                  {/* ────────── RESTAURANTS TAB ────────── */}
                   {activeResultsTab === 'restaurants' && (
-                    <div className="text-center py-12 text-gray-500">
-                      <div className="text-4xl mb-3">🍽️</div>
-                      <p className="font-semibold">Restaurant results — wiring up next</p>
-                      <p className="text-[15px] mt-1">
-                        {useTripData.getState().restaurants.length} restaurants found
-                      </p>
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-[19px] font-bold text-gray-800">
+                          🍽️ Recommended Restaurants
+                        </h2>
+                        <div className="flex items-center gap-3">
+                          {selectedRestaurants.length > 0 && (
+                            <span className="text-[13px] bg-orange-100 text-orange-700 px-3 py-1 rounded-full font-medium">
+                              {selectedRestaurants.length} added to itinerary
+                            </span>
+                          )}
+                          <span className="text-[15px] text-gray-500">
+                            {useTripData.getState().restaurants.length} option{useTripData.getState().restaurants.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      {useTripData.getState().restaurants.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {useTripData.getState().restaurants.map((restaurant, index) => (
+                            <RestaurantCard
+                              key={`${restaurant.id}-${index}`}
+                              restaurant={restaurant}
+                              isSelected={isRestaurantSelected(restaurant.id)}
+                              onToggle={() => handleToggleRestaurant(restaurant)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-12 text-gray-500">
+                          <div className="text-4xl mb-3">🍽️</div>
+                          <p className="font-semibold">No restaurant results yet</p>
+                          <p className="text-[15px] mt-1">
+                            Plan your trip to discover great dining options
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
 
+                  {/* ────────── ACTIVITIES TAB ────────── */}
                   {activeResultsTab === 'activities' && (
-                    <div className="text-center py-12 text-gray-500">
-                      <div className="text-4xl mb-3">🎭</div>
-                      <p className="font-semibold">Activity results — wiring up next</p>
-                      <p className="text-[15px] mt-1">
-                        {useTripData.getState().activities.length} activities found
-                      </p>
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-[19px] font-bold text-gray-800">
+                          🎭 Things To Do
+                        </h2>
+                        <div className="flex items-center gap-3">
+                          {selectedActivities.length > 0 && (
+                            <span className="text-[13px] bg-blue-100 text-blue-700 px-3 py-1 rounded-full font-medium">
+                              {selectedActivities.length} added to itinerary
+                            </span>
+                          )}
+                          <span className="text-[15px] text-gray-500">
+                            {useTripData.getState().activities.length} option{useTripData.getState().activities.length !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      </div>
+
+                      {useTripData.getState().activities.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {useTripData.getState().activities.map((activity, index) => (
+                            <ActivityCard
+                              key={`${activity.id}-${index}`}
+                              activity={activity}
+                              isSelected={isActivitySelected(activity.id)}
+                              onToggle={() => handleToggleActivity(activity)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-12 text-gray-500">
+                          <div className="text-4xl mb-3">🎭</div>
+                          <p className="font-semibold">No activity results yet</p>
+                          <p className="text-[15px] mt-1">
+                            Plan your trip to discover things to do
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

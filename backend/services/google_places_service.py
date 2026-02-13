@@ -707,7 +707,7 @@ class GooglePlacesService:
             if place.get('photos'):
                 for photo in place['photos'][:5]:
                     photo_url = self.get_photo_url(photo['name'], max_width=400)
-                    photos.append(photo_url)
+                    photos.append({"url": photo_url})
             
             # Extract name
             display_name = place.get('displayName', {})
@@ -758,7 +758,7 @@ class GooglePlacesService:
         if place.get('photos'):
             for photo in place['photos'][:10]:
                 photo_url = self.get_photo_url(photo['name'], max_width=800)
-                photos.append(photo_url)
+                photos.append({"url": photo_url})
         
         # Extract reviews
         reviews = []

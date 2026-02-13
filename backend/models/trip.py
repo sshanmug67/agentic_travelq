@@ -9,9 +9,11 @@ Combines:
 
 Changes:
   - TripResponse: added `recommendations` field for structured agent picks
+  - v2: Added PhotoItem model; Hotel.photos and Place.photos now accept
+        both {"url": "..."} dicts and plain strings for backward compat
 """
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
 
 
@@ -60,6 +62,20 @@ class TripRequest(BaseModel):
             data['activity_prefs']['interests'] = data['interests']
         
         super().__init__(**data)
+
+
+# ============================================================================
+# SHARED MODELS
+# ============================================================================
+
+class PhotoItem(BaseModel):
+    """
+    Photo URL wrapper — matches frontend Array<{ url: string }> type.
+    
+    Google Places service returns these; Pydantic validates them before
+    the data reaches the frontend.
+    """
+    url: str
 
 
 # ============================================================================
@@ -190,7 +206,7 @@ class Hotel(BaseModel):
     # Details
     amenities: Optional[HotelAmenities] = None
     description: Optional[str] = None
-    photos: Optional[List[str]] = []
+    photos: Optional[List[PhotoItem]] = []
     booking_url: Optional[str] = None
     
     # Google Places additional info
@@ -202,6 +218,21 @@ class Hotel(BaseModel):
     # Additional info
     property_type: Optional[str] = None  # hotel, apartment, resort, etc.
     
+    @field_validator('photos', mode='before')
+    @classmethod
+    def coerce_photos(cls, v):
+        """Accept both plain strings and {"url": "..."} dicts"""
+        if v is None:
+            return []
+        result = []
+        for item in v:
+            if isinstance(item, str):
+                result.append({"url": item})
+            elif isinstance(item, dict):
+                result.append(item)
+            else:
+                result.append(item)
+        return result
 
 
 class Weather(BaseModel):
@@ -245,10 +276,26 @@ class Place(BaseModel):
     rating: Optional[float] = None
     category: str
     description: Optional[str] = None
-    photos: Optional[List[str]] = []
+    photos: Optional[List[PhotoItem]] = []
     opening_hours: Optional[Dict[str, Any]] = None
     price_level: Optional[int] = None  # 0-4 scale
     website: Optional[str] = None
+    
+    @field_validator('photos', mode='before')
+    @classmethod
+    def coerce_photos(cls, v):
+        """Accept both plain strings and {"url": "..."} dicts"""
+        if v is None:
+            return []
+        result = []
+        for item in v:
+            if isinstance(item, str):
+                result.append({"url": item})
+            elif isinstance(item, dict):
+                result.append(item)
+            else:
+                result.append(item)
+        return result
 
 
 # ============================================================================

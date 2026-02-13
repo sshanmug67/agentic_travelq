@@ -3,6 +3,11 @@ Places Agent - Real Implementation using Google Places API (New)
 Location: backend/agents/places_agent.py
 
 Searches for restaurants, attractions, shopping, museums, parks, etc.
+
+Changes (v2):
+  - Added deduplication by place_id to prevent same place appearing multiple times
+  - Use settings for max_restaurant / max_activity counts
+  - Added segregation summary log
 """
 import time
 from typing import Dict, Any, List, Optional
@@ -126,20 +131,24 @@ Be enthusiastic, knowledgeable, and helpful!
                     "Try broadening your search criteria."
                 )
             
-            # Store ALL places
-
             # Segregate places into restaurants and activities
             restaurants = []
             activities = []
-            restaurent_count = 0
+            restaurant_count = 0
             activity_count = 0
-            max_restaurant = 5
-            max_activity = 5
+            max_restaurant = getattr(settings, 'places_agent_restaurants_max_results', 15)
+            max_activity = getattr(settings, 'places_agent_activities_max_results', 15)
+            seen_ids = set()  # Deduplicate by place_id
 
             RESTAURANT_KEYWORDS = ['restaurant', 'cafe', 'bar', 'bakery', 'food']
             EXCLUDED_CATEGORIES = ['hotel', 'lodging', 'motel', 'hostel', 'resort']  # Handled by HotelsAgent
 
             for place in all_places:
+                # Deduplicate: skip if we've already seen this place_id
+                if place.id in seen_ids:
+                    continue
+                seen_ids.add(place.id)
+                
                 place_dict = self._place_to_dict(place)
                 category = place.category.lower()
                 
@@ -151,13 +160,18 @@ Be enthusiastic, knowledgeable, and helpful!
                 is_restaurant = any(keyword in category for keyword in RESTAURANT_KEYWORDS)
                 
                 if is_restaurant:
-                    restaurent_count +=1
-                    if(restaurent_count <= max_restaurant):
+                    restaurant_count += 1
+                    if restaurant_count <= max_restaurant:
                         restaurants.append(place_dict)
                 else:
-                    activity_count +=1
-                    if(activity_count <= max_activity):
+                    activity_count += 1
+                    if activity_count <= max_activity:
                         activities.append(place_dict)
+            
+            duplicates_removed = len(all_places) - len(seen_ids)
+            log_agent_raw(f"📊 Segregation: {len(restaurants)} restaurants, {len(activities)} activities "
+                         f"(deduped from {len(all_places)} total, {duplicates_removed} duplicates removed)",
+                         agent_name="PlacesAgent")
 
             # Store separately
             if restaurants:
