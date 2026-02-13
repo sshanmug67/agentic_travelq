@@ -63,7 +63,6 @@ interface PreferencesData {
   };
   activityPrefs: ActivityPrefs;
   restaurantPrefs: RestaurantPrefs;
-  [key: string]: any;  // allow other prefs keys
 }
 
 interface PreferencesPanelProps {

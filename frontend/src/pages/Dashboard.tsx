@@ -26,6 +26,7 @@ type ResultsTab = 'flights' | 'hotels' | 'restaurants' | 'activities';
 export const Dashboard: React.FC = () => {
   const {
     tripData, preferences, flights, hotels,
+    restaurants: storeRestaurants, activities: storeActivities,
     setTripData, setFlights, setHotels, setRestaurants, setActivities, setWeather
   } = useTripData();
   const {
@@ -41,7 +42,8 @@ export const Dashboard: React.FC = () => {
   const [aiRecommendedHotelId, setAiRecommendedHotelId] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
 
-  const hasResults = flights.length > 0 || hotels.length > 0;
+  const hasResults = flights.length > 0 || hotels.length > 0
+    || storeRestaurants.length > 0 || storeActivities.length > 0;
 
   useEffect(() => {
     const { flights, hotels, restaurants, activities } = useTripData.getState();
@@ -97,12 +99,17 @@ export const Dashboard: React.FC = () => {
         response.results || response.options || {};
 
       const flightResults = results.flights || [];
+      const hotelResults = results.hotels || [];
+      const restaurantResults = results.restaurants || [];
+      const activityResults = results.activities || [];
+
       setFlights(flightResults);
-      setHotels(results.hotels || []);
-      setRestaurants(results.restaurants || []);
-      setActivities(results.activities || []);
+      setHotels(hotelResults);
+      setRestaurants(restaurantResults);
+      setActivities(activityResults);
       setWeather(results.weather || []);
 
+      // Auto-select AI-recommended flight
       if (flightResults.length > 0) {
         const recFlightId = response.recommendations?.flight?.recommended_id;
         const aiPick = recFlightId
@@ -111,10 +118,9 @@ export const Dashboard: React.FC = () => {
         const flightToSelect = aiPick || flightResults[0];
         setAiRecommendedFlightId(flightToSelect.id);
         selectFlight(flightToSelect, 'ai');
-        setActiveResultsTab('flights');
       }
 
-      const hotelResults = results.hotels || [];
+      // Auto-select AI-recommended hotel
       if (hotelResults.length > 0) {
         const recHotelId = response.recommendations?.hotel?.recommended_id;
         const aiHotelPick = recHotelId
@@ -123,9 +129,17 @@ export const Dashboard: React.FC = () => {
         const hotelToSelect = aiHotelPick || hotelResults[0];
         setAiRecommendedHotelId(hotelToSelect.id);
         selectHotel(hotelToSelect, 'ai');
-        if (flightResults.length === 0) {
-          setActiveResultsTab('hotels');
-        }
+      }
+
+      // Auto-switch to the first tab that has data
+      if (flightResults.length > 0) {
+        setActiveResultsTab('flights');
+      } else if (hotelResults.length > 0) {
+        setActiveResultsTab('hotels');
+      } else if (restaurantResults.length > 0) {
+        setActiveResultsTab('restaurants');
+      } else if (activityResults.length > 0) {
+        setActiveResultsTab('activities');
       }
 
       if (response.recommendations) {
@@ -163,8 +177,8 @@ export const Dashboard: React.FC = () => {
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
     { id: 'hotels', label: 'Hotels', icon: '🏨', count: hotels.length },
-    { id: 'restaurants', label: 'Restaurants', icon: '🍽️', count: useTripData.getState().restaurants.length },
-    { id: 'activities', label: 'Activities', icon: '🎭', count: useTripData.getState().activities.length },
+    { id: 'restaurants', label: 'Restaurants', icon: '🍽️', count: storeRestaurants.length },
+    { id: 'activities', label: 'Activities', icon: '🎭', count: storeActivities.length },
   ];
 
   // Helper: check if a restaurant is selected in itinerary
@@ -445,14 +459,14 @@ export const Dashboard: React.FC = () => {
                             </span>
                           )}
                           <span className="text-[15px] text-gray-500">
-                            {useTripData.getState().restaurants.length} option{useTripData.getState().restaurants.length !== 1 ? 's' : ''}
+                            {storeRestaurants.length} option{storeRestaurants.length !== 1 ? 's' : ''}
                           </span>
                         </div>
                       </div>
 
-                      {useTripData.getState().restaurants.length > 0 ? (
+                      {storeRestaurants.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {useTripData.getState().restaurants.map((restaurant, index) => (
+                          {storeRestaurants.map((restaurant, index) => (
                             <RestaurantCard
                               key={`${restaurant.id}-${index}`}
                               restaurant={restaurant}
@@ -487,14 +501,14 @@ export const Dashboard: React.FC = () => {
                             </span>
                           )}
                           <span className="text-[15px] text-gray-500">
-                            {useTripData.getState().activities.length} option{useTripData.getState().activities.length !== 1 ? 's' : ''}
+                            {storeActivities.length} option{storeActivities.length !== 1 ? 's' : ''}
                           </span>
                         </div>
                       </div>
 
-                      {useTripData.getState().activities.length > 0 ? (
+                      {storeActivities.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {useTripData.getState().activities.map((activity, index) => (
+                          {storeActivities.map((activity, index) => (
                             <ActivityCard
                               key={`${activity.id}-${index}`}
                               activity={activity}

@@ -12,6 +12,14 @@ Changes (v2):
     Uses Places Text Search API to find hotels by name/brand
     Called by HotelAgent when user has preferred_chains
 
+Changes (v3):
+  - Added search_places_by_text() for cuisine-specific restaurant searches
+    and interest-specific activity searches.
+    Uses Text Search API with free-text queries like:
+      "Italian restaurant in London"
+      "cherry blossom viewing in Tokyo"
+    Called by PlacesAgent when user has cuisine/interest preferences.
+
 Location: backend/services/google_places_service.py
 """
 import logging
@@ -422,7 +430,148 @@ class GooglePlacesService:
         except Exception as e:
             log.error(f"❌ Text Search exception: {str(e)}")
             return []
-    
+
+    def search_places_by_text(
+        self,
+        query: str,
+        location: str = None,
+        latitude: float = None,
+        longitude: float = None,
+        radius: int = 5000,
+        included_type: Optional[str] = None,
+        min_rating: float = 3.0,
+        max_results: int = 10,
+        agent_logger: Optional[logging.Logger] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for places using Google Places Text Search API.
+
+        Use this for targeted, preference-driven searches like:
+          "Italian restaurant in London"
+          "sushi restaurant in Tokyo"
+          "cherry blossom viewing spot in Tokyo"
+          "indoor museum in Paris"
+
+        Unlike Nearby Search (which only filters by type), Text Search
+        accepts free-text queries so it can match cuisines, themes, and
+        specific interests that have no Google Places type equivalent.
+
+        Endpoint: POST /v1/places:searchText
+        Docs: https://developers.google.com/maps/documentation/places/web-service/text-search
+
+        Args:
+            query:         Free-text search query
+            location:      Location name for geocoding bias
+            latitude:      Latitude for location bias
+            longitude:     Longitude for location bias
+            radius:        Bias radius in meters (not a hard boundary)
+            included_type: Optional Google Places type filter (e.g. "restaurant")
+            min_rating:    Minimum rating filter (0-5)
+            max_results:   Max results to return (API max: 20)
+            agent_logger:  Optional agent-specific logger
+
+        Returns:
+            List of place dictionaries (same format as search_hotels output)
+        """
+        log = agent_logger or logger
+
+        log.info(f"🔎 GooglePlacesService.search_places_by_text()")
+        log.info(f"      Text query: \"{query}\"")
+        log.info(f"      Included type: {included_type or '(none)'}")
+        log.info(f"      Location bias: {location or (f'{latitude},{longitude}' if latitude else 'None')}")
+        log.info(f"      Min Rating: {min_rating}, Max Results: {max_results}")
+
+        if not self.client:
+            log.error("❌ Google Places client not initialized")
+            return []
+
+        try:
+            # Resolve location to coordinates for bias
+            if location and not (latitude and longitude):
+                coords = self._geocode_location(location, log)
+                if coords:
+                    latitude, longitude = coords
+
+            # Build request body
+            request_body = {
+                "textQuery": query,
+                "maxResultCount": min(max_results, 20),
+                "rankPreference": "RELEVANCE",
+            }
+
+            if included_type:
+                request_body["includedType"] = included_type
+
+            # Add location bias if coordinates available
+            if latitude and longitude:
+                request_body["locationBias"] = {
+                    "circle": {
+                        "center": {
+                            "latitude": latitude,
+                            "longitude": longitude
+                        },
+                        "radius": radius
+                    }
+                }
+
+            # Headers
+            headers = {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": self.api_key,
+                "X-Goog-FieldMask": (
+                    "places.id,"
+                    "places.displayName,"
+                    "places.formattedAddress,"
+                    "places.location,"
+                    "places.rating,"
+                    "places.userRatingCount,"
+                    "places.priceLevel,"
+                    "places.primaryType,"
+                    "places.photos,"
+                    "places.types,"
+                    "places.currentOpeningHours,"
+                    "places.internationalPhoneNumber,"
+                    "places.websiteUri,"
+                    "places.businessStatus"
+                )
+            }
+
+            url = f"{self.BASE_URL}:searchText"
+            response = requests.post(url, json=request_body, headers=headers, timeout=30)
+
+            if response.status_code != 200:
+                log.warning(f"   ⚠️  Text Search API error: {response.status_code}")
+                log.warning(f"   Response: {response.text[:300]}")
+                return []
+
+            data = response.json()
+            places = data.get('places', [])
+
+            log.info(f"   ✓ Text Search returned {len(places)} results for \"{query}\"")
+
+            if not places:
+                return []
+
+            # Parse and filter
+            results = []
+            for place in places:
+                rating = place.get('rating', 0)
+                if rating > 0 and rating < min_rating:
+                    continue
+                parsed = self._parse_place_result(place, log)
+                if parsed:
+                    results.append(parsed)
+
+            log.info(f"   ✓ After filtering: {len(results)} places")
+            return results
+
+        except requests.exceptions.RequestException as e:
+            log.error(f"❌ Text Search request error: {str(e)}")
+            return []
+        except Exception as e:
+            log.error(f"❌ Text Search exception: {str(e)}")
+            return []
+
     def _geocode_location(
         self,
         location: str,

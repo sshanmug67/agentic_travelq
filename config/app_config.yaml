@@ -63,11 +63,11 @@ autogen:
 # --- Agent Configuration ---
 agents:
   flight:
-    enabled: true
+    enabled: false
     max_results: 10             # Max flight results to return
 
   hotel:
-    enabled: true
+    enabled: false
     max_results: 15             # Max hotel results to return
 
   weather:
