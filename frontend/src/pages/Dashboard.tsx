@@ -1,10 +1,13 @@
 // frontend/src/pages/Dashboard.tsx
 //
-// Changes (v2):
-//   - Import RestaurantCard and ActivityCard components
-//   - Wire up toggleRestaurant / toggleActivity from useItinerary
-//   - Replace placeholder restaurants/activities tabs with actual card grids
-//   - Track AI-recommended restaurant/activity IDs for future sticky-note display
+// Changes (v3):
+//   - v2 changes (RestaurantCard, ActivityCard, toggleRestaurant/toggleActivity)
+//   - Fix hasResults to include restaurants + activities (not just flights/hotels)
+//   - Destructure restaurants/activities from useTripData for reactive rendering
+//   - Auto-select AI-recommended restaurants into itinerary sidebar
+//   - Auto-select AI-recommended activities into itinerary sidebar
+//   - Auto-switch to first populated tab when agents return data
+//   - Replace useTripData.getState() calls in JSX with reactive store variables
 
 import React, { useState, useEffect } from 'react';
 import { ItinerarySidebar } from '../components/itinerary/ItinerarySidebar';
@@ -42,6 +45,7 @@ export const Dashboard: React.FC = () => {
   const [aiRecommendedHotelId, setAiRecommendedHotelId] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
 
+  // v3: Include all four data types in hasResults check
   const hasResults = flights.length > 0 || hotels.length > 0
     || storeRestaurants.length > 0 || storeActivities.length > 0;
 
@@ -109,7 +113,7 @@ export const Dashboard: React.FC = () => {
       setActivities(activityResults);
       setWeather(results.weather || []);
 
-      // Auto-select AI-recommended flight
+      // ── Auto-select AI-recommended flight ──────────────────────────
       if (flightResults.length > 0) {
         const recFlightId = response.recommendations?.flight?.recommended_id;
         const aiPick = recFlightId
@@ -120,7 +124,7 @@ export const Dashboard: React.FC = () => {
         selectFlight(flightToSelect, 'ai');
       }
 
-      // Auto-select AI-recommended hotel
+      // ── Auto-select AI-recommended hotel ───────────────────────────
       if (hotelResults.length > 0) {
         const recHotelId = response.recommendations?.hotel?.recommended_id;
         const aiHotelPick = recHotelId
@@ -131,7 +135,45 @@ export const Dashboard: React.FC = () => {
         selectHotel(hotelToSelect, 'ai');
       }
 
-      // Auto-switch to the first tab that has data
+      // ── v3 NEW: Auto-select AI-recommended restaurants ─────────────
+      if (restaurantResults.length > 0) {
+        const recRestaurant = response.recommendations?.restaurant;
+        const recIds: string[] =
+          recRestaurant?.metadata?.all_recommended_ids || [];
+
+        if (recIds.length > 0) {
+          // Toggle each recommended restaurant into the itinerary
+          for (const recId of recIds) {
+            const match = restaurantResults.find(
+              (r: any) => String(r.id) === String(recId)
+            );
+            if (match) {
+              toggleRestaurant(match);
+            }
+          }
+        }
+      }
+
+      // ── v3 NEW: Auto-select AI-recommended activities ──────────────
+      if (activityResults.length > 0) {
+        const recActivity = response.recommendations?.activity;
+        const recIds: string[] =
+          recActivity?.metadata?.all_recommended_ids || [];
+
+        if (recIds.length > 0) {
+          // Toggle each recommended activity into the itinerary
+          for (const recId of recIds) {
+            const match = activityResults.find(
+              (a: any) => String(a.id) === String(recId)
+            );
+            if (match) {
+              toggleActivity(match);
+            }
+          }
+        }
+      }
+
+      // ── Auto-switch to first tab that has data ─────────────────────
       if (flightResults.length > 0) {
         setActiveResultsTab('flights');
       } else if (hotelResults.length > 0) {
@@ -174,6 +216,7 @@ export const Dashboard: React.FC = () => {
     toggleActivity(activity);
   };
 
+  // v3: Use reactive store variables for tab counts
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
     { id: 'hotels', label: 'Hotels', icon: '🏨', count: hotels.length },
@@ -245,91 +288,185 @@ export const Dashboard: React.FC = () => {
       </div>
 
       {/* ══════════════════════════════════════════════════════════════════
-          INDIVIDUAL RECOMMENDATION STICKY NOTES — 3 per row
+          RECOMMENDATIONS: Left = Flight/Hotel picks | Right = Daily Schedule
           ══════════════════════════════════════════════════════════════════ */}
       {recommendations && Object.keys(recommendations).length > 0 && (() => {
-        const categoryConfig: Record<string, { icon: string; bg: string; tape: string; label: string }> = {
-          flight:     { icon: '✈️',  bg: 'bg-yellow-100', tape: 'bg-yellow-300', label: 'Flight' },
-          hotel:      { icon: '🏨', bg: 'bg-blue-100',   tape: 'bg-blue-300',   label: 'Hotel' },
-          restaurant: { icon: '🍽️',  bg: 'bg-green-100',  tape: 'bg-green-300',  label: 'Restaurant' },
-          activity:   { icon: '🎭', bg: 'bg-pink-100',   tape: 'bg-pink-300',   label: 'Activity' },
-          weather:    { icon: '🌤️',  bg: 'bg-orange-100', tape: 'bg-orange-300', label: 'Weather' },
+        // ── Left side: Flight + Hotel cards ───────────────────────────
+        const categoryConfig: Record<string, { icon: string; accent: string; accentLight: string; label: string }> = {
+          flight: { icon: '✈️', accent: 'border-l-amber-400',  accentLight: 'bg-amber-50',  label: 'Flight' },
+          hotel:  { icon: '🏨', accent: 'border-l-blue-400',   accentLight: 'bg-blue-50',   label: 'Hotel' },
         };
-
-        const allCategories = ['flight', 'hotel', 'restaurant', 'activity'];
-        const cards = allCategories.map((cat) => ({
+        const pickCategories = ['flight', 'hotel'];
+        const pickCards = pickCategories.map((cat) => ({
           category: cat,
-          config: categoryConfig[cat] || { icon: '📋', bg: 'bg-gray-100', tape: 'bg-gray-300', label: cat },
+          config: categoryConfig[cat],
           rec: recommendations[cat] || null,
         }));
 
+        // ── Right side: Daily plan from PlacesAgent ──────────────────
+        const dailyPlanRec = recommendations['daily_plan'];
+        const planText: string = dailyPlanRec?.reason || '';
+
+        // Parse markdown plan into day blocks
+        const dayBlocks: { title: string; body: string }[] = [];
+        if (planText) {
+          const sections = planText.split(/(?=###\s)/);
+          for (const section of sections) {
+            const trimmed = section.trim();
+            if (!trimmed) continue;
+            const newlineIdx = trimmed.indexOf('\n');
+            if (newlineIdx === -1) {
+              dayBlocks.push({ title: trimmed.replace(/^#+\s*/, ''), body: '' });
+            } else {
+              const heading = trimmed.slice(0, newlineIdx).replace(/^#+\s*/, '').trim();
+              const body = trimmed.slice(newlineIdx + 1).trim();
+              dayBlocks.push({ title: heading, body });
+            }
+          }
+        }
+
+        // Accent colors for day timeline
+        const dayAccents = [
+          'border-l-purple-400',
+          'border-l-pink-400',
+          'border-l-indigo-400',
+          'border-l-teal-400',
+          'border-l-orange-400',
+          'border-l-rose-400',
+        ];
+
+        // Convert **text** to <strong> for display
+        const renderBold = (text: string) => {
+          const parts = text.split(/\*\*(.*?)\*\*/g);
+          return parts.map((part, i) =>
+            i % 2 === 1
+              ? <strong key={i} className="font-semibold text-gray-800">{part}</strong>
+              : <span key={i}>{part}</span>
+          );
+        };
+
         return (
           <div className="px-6 lg:px-[10%] pb-8">
-            <div className="border-2 border-gray-800 rounded-2xl p-5 bg-white/50">
-              <div className="flex items-center gap-2 mb-4">
-                <div className="w-7 h-7 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center">
-                  <span className="text-white text-[15px]">✨</span>
+            <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+              {/* Section header */}
+              <div className="flex items-center gap-2.5 mb-5">
+                <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center shadow-sm">
+                  <span className="text-white text-[16px]">✨</span>
                 </div>
-                <h3 className="text-[15px] font-bold text-purple-700 uppercase tracking-wide">
-                  TravelQ Recommendations
+                <h3 className="text-[16px] font-bold text-gray-800 tracking-wide">
+                  AI Recommendations
                 </h3>
               </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {cards.map(({ category, config, rec }) => (
-                  <div
-                    key={category}
-                    className={`${config.bg} rounded-lg shadow-md relative pt-4 pb-3 px-4 min-h-[130px] max-h-[200px] flex flex-col transform transition-transform hover:-rotate-1 hover:shadow-lg`}
-                    style={{
-                      transform: `rotate(${(category.charCodeAt(0) % 3 - 1) * 0.8}deg)`,
-                    }}
-                  >
-                    <div className={`absolute -top-1.5 left-1/2 -translate-x-1/2 w-16 h-3 ${config.tape} rounded-sm opacity-70`} />
+              <hr className="border-gray-200 mb-5" />
 
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[19px]">{config.icon}</span>
-                        <span className="text-[15px] font-bold uppercase tracking-wider text-gray-700">
-                          {config.label}
-                        </span>
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+
+                {/* ─── LEFT: Flight & Hotel Picks ─────────────────────── */}
+                <div className="lg:col-span-2 flex flex-col">
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="text-[18px]">🎯</span>
+                    <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
+                      Top Picks
+                    </h4>
+                  </div>
+                  <div className="space-y-4">
+                  {pickCards.map(({ category, config, rec }) => (
+                    <div
+                      key={category}
+                      className={`${config.accentLight} rounded-lg border border-gray-200 border-l-4 ${config.accent} p-4 transition-shadow hover:shadow-md`}
+                    >
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[18px]">{config.icon}</span>
+                          <span className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
+                            {config.label}
+                          </span>
+                        </div>
+                        {rec?.metadata?.price != null && (
+                          <span className="text-[17px] font-bold text-green-700">
+                            ${Number(rec.metadata.price).toFixed(2)}
+                          </span>
+                        )}
                       </div>
-                      {rec?.metadata?.price != null && (
-                        <span className="text-[17px] font-bold text-green-700">
-                          ${Number(rec.metadata.price).toFixed(2)}
-                        </span>
+
+                      {rec && rec.recommended_id ? (
+                        <div>
+                          <p className="text-[16px] font-semibold text-gray-800 mb-1">
+                            {rec.metadata?.airline
+                              || rec.metadata?.hotel_name
+                              || rec.metadata?.name
+                              || `Option #${rec.recommended_id}`}
+                          </p>
+                          <p className="text-[13px] text-gray-600 leading-relaxed mb-2">
+                            {rec.reason || 'Best match for your preferences'}
+                          </p>
+                          <div className="flex items-center gap-3 text-[12px] text-gray-400">
+                            {rec.metadata?.is_direct !== undefined && (
+                              <span className="flex items-center gap-1">
+                                {rec.metadata.is_direct ? '✅ Direct' : '🔄 Connecting'}
+                              </span>
+                            )}
+                            {rec.metadata?.total_options_reviewed && (
+                              <span>{rec.metadata.total_options_reviewed} reviewed</span>
+                            )}
+                            {rec.metadata?.rating && (
+                              <span>⭐ {rec.metadata.rating}</span>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[14px] text-gray-400 italic py-4 text-center">
+                          Pending...
+                        </p>
                       )}
                     </div>
+                  ))}
+                  </div>
+                </div>
 
-                    {rec && rec.recommended_id ? (
-                      <div className="flex-1 overflow-y-auto pr-1">
-                        <p className="text-[17px] font-semibold text-gray-800 mb-1 truncate">
-                          {rec.metadata?.airline
-                            || rec.metadata?.hotel_name
-                            || rec.metadata?.name
-                            || `Option #${rec.recommended_id}`}
-                        </p>
-                        <p className="text-[15px] text-gray-600 leading-relaxed"
-                           style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
-                          {rec.reason || 'Best match for your preferences'}
-                        </p>
-                        <div className="flex items-center gap-2 mt-2 text-[13px] text-gray-500">
-                          {rec.metadata?.is_direct !== undefined && (
-                            <span>{rec.metadata.is_direct ? '✅ Direct' : '🔄 Connecting'}</span>
-                          )}
-                          {rec.metadata?.total_options_reviewed && (
-                            <span>📊 {rec.metadata.total_options_reviewed} reviewed</span>
-                          )}
-                          {rec.metadata?.rating && (
-                            <span>⭐ {rec.metadata.rating}</span>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="flex-1 flex items-center justify-center">
-                        <p className="text-[15px] text-gray-400 italic">Pending...</p>
-                      </div>
+                {/* ─── RIGHT: Daily Activity Schedule ─────────────────── */}
+                <div className="lg:col-span-3">
+                  <div className="flex items-center gap-2 mb-4">
+                    <span className="text-[18px]">📅</span>
+                    <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
+                      Daily Schedule
+                    </h4>
+                    {dailyPlanRec?.metadata?.num_days && (
+                      <span className="text-[12px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
+                        {dailyPlanRec.metadata.num_days} days
+                      </span>
                     )}
                   </div>
-                ))}
+
+                  {dayBlocks.length > 0 ? (
+                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
+                      {dayBlocks.map((day, idx) => {
+                        const accent = dayAccents[idx % dayAccents.length];
+                        return (
+                          <div
+                            key={idx}
+                            className={`bg-gray-50 rounded-lg border border-gray-200 border-l-4 ${accent} px-4 py-3 transition-shadow hover:shadow-sm`}
+                          >
+                            <p className="text-[13px] font-bold text-gray-800 mb-1">
+                              {day.title}
+                            </p>
+                            <p className="text-[12.5px] text-gray-600 leading-relaxed">
+                              {renderBold(day.body)}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="bg-gray-50 rounded-lg border border-dashed border-gray-300 p-8 text-center">
+                      <span className="text-3xl mb-2 block">📅</span>
+                      <p className="text-[14px] text-gray-400 italic">
+                        Daily schedule will appear after planning...
+                      </p>
+                    </div>
+                  )}
+                </div>
+
               </div>
             </div>
           </div>

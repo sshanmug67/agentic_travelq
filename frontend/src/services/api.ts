@@ -1,15 +1,14 @@
 // frontend/src/services/api.ts
 //
-// Changes (v3):
-//   - PlanTripRequest.preferences type now includes detailed prefs
-//     (flightPrefs, hotelPrefs, etc.) that Dashboard already sends
-//   - No runtime change — just type accuracy so TS catches mismatches
+// Changes (v4):
+//   - Timeout increased from 60s to 180s to accommodate multi-agent pipeline
+//     (WeatherAgent + PlacesAgent with ~10 Google Places API calls + LLM)
 
 import axios from 'axios';
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 60000, // 60 seconds for AI processing
+  timeout: 180000, // 180 seconds — multi-agent pipeline needs headroom
   headers: {
     'Content-Type': 'application/json',
   },

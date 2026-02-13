@@ -2,21 +2,12 @@
 Places Agent - Preference-Aware, Weather-Aware, Day-Planned
 Location: backend/agents/places_agent.py
 
-Searches for restaurants, attractions, shopping, museums, parks, etc.
-Now uses cuisine and interest preferences to drive targeted searches,
-reads weather data for indoor/outdoor activity planning, and builds
-a day-by-day meal plan with cuisine rotation.
-
-Changes (v4):
-  - Cuisine-specific restaurant searches via Text Search API
-    e.g. "Italian restaurant in London" instead of generic "restaurant"
-  - ⭐ preferred cuisines/interests get more search slots than ☆ interested
-  - Reads weather forecasts from trip storage (written by WeatherAgent)
-  - Classifies each trip day as outdoor-friendly / indoor-preferred
-  - Tags activities as indoor/outdoor for weather-aware assignment
-  - LLM builds day-by-day plan: activities + lunch/dinner with cuisine rotation
-  - Different cuisine for consecutive days where possible
-  - Stores enriched restaurant/activity data with cuisine_tag and venue_type
+Changes (v5 — recommendation storage):
+  - Everything from v4 plus:
+  - After LLM generates daily plan, extracts mentioned restaurant/activity names
+  - Stores structured recommendations via store_recommendation() (like FlightAgent)
+  - Stores all_recommended_ids in metadata so frontend can auto-select into itinerary
+  - Adds rule 8 to LLM prompt: use EXACT place names from the provided lists
 """
 import time
 import json
@@ -35,12 +26,17 @@ import openai
 
 class PlacesAgent(TravelQBaseAgent):
     """
-    Places Agent v4 — Preference-aware, weather-aware, day-planned.
+    Places Agent v5 — Preference-aware, weather-aware, day-planned,
+    with structured recommendation storage.
 
     Uses Google Places API (New) for real data. Drives searches from
     user's cuisine and activity preferences, reads weather data for
     indoor/outdoor planning, and assigns restaurants to meal slots
     with cuisine rotation across trip days.
+
+    NEW in v5: Stores restaurant/activity recommendations in the same
+    structured format as FlightAgent, enabling frontend auto-selection
+    into the itinerary sidebar.
     """
 
     # ── Category mappings for Nearby Search (type-based) ──────────────
@@ -95,10 +91,11 @@ Be enthusiastic, knowledgeable, and specific!
         # API Service
         self.google_places = get_google_places_service()
 
-        log_agent_raw("📍 PlacesAgent v4 initialized", agent_name="PlacesAgent")
+        log_agent_raw("📍 PlacesAgent v5 initialized", agent_name="PlacesAgent")
         log_agent_raw("   ✓ Google Places service (Nearby + Text Search)", agent_name="PlacesAgent")
         log_agent_raw("   ✓ Weather-aware activity planning", agent_name="PlacesAgent")
         log_agent_raw("   ✓ Cuisine-driven restaurant search", agent_name="PlacesAgent")
+        log_agent_raw("   ✓ Structured recommendation storage (v5)", agent_name="PlacesAgent")
 
     # ══════════════════════════════════════════════════════════════════════
     # HELPERS — preference access
@@ -131,7 +128,7 @@ Be enthusiastic, knowledgeable, and specific!
         config: Any = None,
     ) -> str:
         """Generate reply with preference-driven, weather-aware place results."""
-        log_agent_raw("🔍 PlacesAgent v4 processing request...", agent_name="PlacesAgent")
+        log_agent_raw("🔍 PlacesAgent v5 processing request...", agent_name="PlacesAgent")
 
         # Log incoming message
         if messages and len(messages) > 0:
@@ -198,6 +195,7 @@ Be enthusiastic, knowledgeable, and specific!
             self._store_results(restaurants, activities, preferences, api_duration)
 
             # ── 8. Generate day-by-day recommendation via LLM ─────────
+            #       v5: also extracts & stores recommendations
             recommendation = self._generate_daily_plan(
                 restaurants, activities, trip_days, preferences
             )
@@ -717,6 +715,141 @@ Be enthusiastic, knowledgeable, and specific!
         )
 
     # ══════════════════════════════════════════════════════════════════════
+    # v5 NEW: EXTRACT MENTIONED PLACES & STORE RECOMMENDATIONS
+    # ══════════════════════════════════════════════════════════════════════
+
+    def _extract_mentioned_ids(
+        self, plan_text: str, places: List[Dict], label: str
+    ) -> List[str]:
+        """
+        Find which restaurants/activities the LLM mentioned in the daily plan
+        by matching place names against the plan text.
+
+        Returns list of place IDs in the order they first appear in the text.
+        """
+        mentioned = []
+        seen = set()
+
+        # Sort by name length descending so longer names match first
+        # (avoids "Rules" matching before "Rules Restaurant")
+        sorted_places = sorted(
+            places, key=lambda p: len(p.get("name", "")), reverse=True
+        )
+
+        for place in sorted_places:
+            name = place.get("name", "")
+            place_id = place.get("id", "")
+            if name and place_id and name in plan_text and place_id not in seen:
+                seen.add(place_id)
+                mentioned.append(place_id)
+
+        log_agent_raw(
+            f"📌 Extracted {len(mentioned)} {label} from daily plan "
+            f"(out of {len(places)} available)",
+            agent_name="PlacesAgent",
+        )
+        return mentioned
+
+    def _store_place_recommendations(
+        self,
+        plan_text: str,
+        restaurants: List[Dict],
+        activities: List[Dict],
+    ):
+        """
+        Extract which restaurants/activities the LLM chose for the daily plan,
+        then store structured recommendations (same pattern as FlightAgent).
+
+        This enables:
+        - Sticky-note display of top picks on the dashboard
+        - Auto-selection of recommended items into the itinerary sidebar
+        """
+
+        # ── Restaurant recommendations ────────────────────────────────
+        rec_restaurant_ids = self._extract_mentioned_ids(
+            plan_text, restaurants, "restaurants"
+        )
+
+        if rec_restaurant_ids:
+            primary_id = rec_restaurant_ids[0]
+            primary = next(
+                (r for r in restaurants if r.get("id") == primary_id), None
+            )
+
+            self.trip_storage.store_recommendation(
+                trip_id=self.trip_id,
+                category="restaurant",
+                recommended_id=primary_id,
+                reason=(
+                    f"Top dining pick from {len(restaurants)} options — "
+                    f"{primary.get('cuisine_tag', '')} cuisine, "
+                    f"{primary.get('rating', 0):.1f}★"
+                    if primary
+                    else "Best match for your cuisine preferences"
+                ),
+                metadata={
+                    "name": primary.get("name", "") if primary else "",
+                    "rating": primary.get("rating", 0) if primary else 0,
+                    "cuisine": primary.get("cuisine_tag", "") if primary else "",
+                    "all_recommended_ids": rec_restaurant_ids,
+                    "total_options_reviewed": len(restaurants),
+                },
+            )
+            log_agent_raw(
+                f"⭐ Restaurant recommendation stored: "
+                f"{primary.get('name', '?') if primary else '?'} "
+                f"+ {len(rec_restaurant_ids) - 1} others",
+                agent_name="PlacesAgent",
+            )
+        else:
+            log_agent_raw(
+                "⚠️  No restaurant names matched in plan text",
+                agent_name="PlacesAgent",
+            )
+
+        # ── Activity recommendations ──────────────────────────────────
+        rec_activity_ids = self._extract_mentioned_ids(
+            plan_text, activities, "activities"
+        )
+
+        if rec_activity_ids:
+            primary_id = rec_activity_ids[0]
+            primary = next(
+                (a for a in activities if a.get("id") == primary_id), None
+            )
+
+            self.trip_storage.store_recommendation(
+                trip_id=self.trip_id,
+                category="activity",
+                recommended_id=primary_id,
+                reason=(
+                    f"Top activity from {len(activities)} options — "
+                    f"{primary.get('interest_tag', '')}, "
+                    f"{primary.get('rating', 0):.1f}★"
+                    if primary
+                    else "Best match for your interests"
+                ),
+                metadata={
+                    "name": primary.get("name", "") if primary else "",
+                    "rating": primary.get("rating", 0) if primary else 0,
+                    "interest": primary.get("interest_tag", "") if primary else "",
+                    "all_recommended_ids": rec_activity_ids,
+                    "total_options_reviewed": len(activities),
+                },
+            )
+            log_agent_raw(
+                f"⭐ Activity recommendation stored: "
+                f"{primary.get('name', '?') if primary else '?'} "
+                f"+ {len(rec_activity_ids) - 1} others",
+                agent_name="PlacesAgent",
+            )
+        else:
+            log_agent_raw(
+                "⚠️  No activity names matched in plan text",
+                agent_name="PlacesAgent",
+            )
+
+    # ══════════════════════════════════════════════════════════════════════
     # LLM — day-by-day plan with weather & cuisine rotation
     # ══════════════════════════════════════════════════════════════════════
 
@@ -733,6 +866,9 @@ Be enthusiastic, knowledgeable, and specific!
         - Assigns restaurants to lunch & dinner with cuisine rotation
         - Avoids same cuisine on consecutive days
         - Highlights ⭐ preferred places
+
+        v5: After generating the plan, extracts mentioned place names
+        and stores structured recommendations for frontend auto-selection.
         """
         if not restaurants and not activities:
             return "No places found matching your interests."
@@ -795,11 +931,12 @@ Be enthusiastic, knowledgeable, and specific!
             1. On days marked "indoor" → prefer [indoor] activities. On "outdoor" days → prefer [outdoor] activities.
             2. Assign a restaurant for EACH meal slot (lunch, dinner) EACH day.
             3. ROTATE cuisines: never assign the same cuisine for consecutive meals.
-            e.g. if lunch is Italian, dinner should be different; if dinner is Indian, next day's lunch should be different.
+               e.g. if lunch is Italian, dinner should be different; if dinner is Indian, next day's lunch should be different.
             4. ⭐ Preferred cuisines should appear MORE often than ☆ interested ones.
             5. ⭐ Preferred activities should be scheduled on the BEST weather days.
             6. Keep it conversational, enthusiastic, and practical (4-6 sentences per day).
             7. Mention specific restaurant and activity names with their ratings.
+            8. Use the EXACT restaurant and activity names as listed above — do not rename or abbreviate them.
 
             Write a concise day-by-day plan (one short paragraph per day).
             """
@@ -820,18 +957,58 @@ Be enthusiastic, knowledgeable, and specific!
                 temperature=0.8,
                 max_tokens=800,
             )
-            return response.choices[0].message.content.strip()
+            plan_text = response.choices[0].message.content.strip()
 
         except Exception as e:
             log_agent_raw(f"⚠️ LLM recommendation failed: {e}", agent_name="PlacesAgent")
             total = len(restaurants) + len(activities)
-            return (
+            plan_text = (
                 f"I found {total} amazing places in {preferences.destination}! "
                 f"Including {len(restaurants)} restaurants across "
                 f"{len(set(r.get('cuisine_tag', '') for r in restaurants))} cuisines "
                 f"and {len(activities)} activities. "
                 f"Check the full list for details."
             )
+
+        # ══════════════════════════════════════════════════════════════
+        # v5: Extract mentioned places → store recommendations
+        # ══════════════════════════════════════════════════════════════
+        try:
+            self._store_place_recommendations(plan_text, restaurants, activities)
+        except Exception as e:
+            log_agent_raw(
+                f"⚠️ Failed to store place recommendations: {e}",
+                agent_name="PlacesAgent",
+            )
+
+        # ══════════════════════════════════════════════════════════════
+        # v6 NEW: Store daily plan text as a recommendation so the
+        #         frontend can display it in the recommendations panel
+        # ══════════════════════════════════════════════════════════════
+        try:
+            self.trip_storage.store_recommendation(
+                trip_id=self.trip_id,
+                category="daily_plan",
+                recommended_id="daily_plan",
+                reason=plan_text,
+                metadata={
+                    "destination": preferences.destination,
+                    "num_days": len(trip_days),
+                    "num_restaurants": len(restaurants),
+                    "num_activities": len(activities),
+                },
+            )
+            log_agent_raw(
+                f"📅 Daily plan stored in recommendations ({len(trip_days)} days)",
+                agent_name="PlacesAgent",
+            )
+        except Exception as e:
+            log_agent_raw(
+                f"⚠️ Failed to store daily plan: {e}",
+                agent_name="PlacesAgent",
+            )
+
+        return plan_text
 
 
 # ══════════════════════════════════════════════════════════════════════════
