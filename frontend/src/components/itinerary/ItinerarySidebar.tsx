@@ -21,17 +21,11 @@ export const ItinerarySidebar: React.FC = () => {
   const { flight, hotel, restaurants, activities, removeItem, budget } = useItinerary();
 
   return (
-    <div className="itinerary-paper h-full overflow-y-auto p-4 sticky top-0">
-      {/* Header — minimal */}
-      <div className="mb-3 flex items-center justify-center gap-2">
-        <span className="text-[15px]">✈️</span>
-        <h2 className="handwritten-title text-2xl">Your Itinerary</h2>
-        <span className="text-[15px]">✈️</span>
-      </div>
+    <div className="itinerary-paper h-full overflow-y-auto pt-2 px-4 pb-4 sticky top-0">
 
       {/* ── Flight ─────────────────────────────────── */}
-      <div className="mb-4">
-        <h3 className="handwritten-subtitle text-lg mb-2 sketch-underline">
+      <div className="mb-3">
+        <h3 className="handwritten-subtitle text-lg mb-1.5 sketch-underline">
           ✈️ Flight
         </h3>
         {flight ? (
@@ -45,8 +39,8 @@ export const ItinerarySidebar: React.FC = () => {
       </div>
 
       {/* ── Hotel ──────────────────────────────────── */}
-      <div className="mb-4">
-        <h3 className="handwritten-subtitle text-lg mb-2 sketch-underline">
+      <div className="mb-3">
+        <h3 className="handwritten-subtitle text-lg mb-1.5 sketch-underline">
           🏨 Hotel
         </h3>
         {hotel ? (
@@ -60,14 +54,14 @@ export const ItinerarySidebar: React.FC = () => {
       </div>
 
       {/* ── Restaurants — 2-col grid ───────────────── */}
-      <div className="mb-4">
-        <h3 className="handwritten-subtitle text-lg mb-2 sketch-underline">
+      <div className="mb-3">
+        <h3 className="handwritten-subtitle text-lg mb-1 sketch-underline">
           🍽️ Restaurants {restaurants.length > 0 && (
             <span className="text-[13px] text-gray-500 ml-1">({restaurants.length})</span>
           )}
         </h3>
         {restaurants.length > 0 ? (
-          <div>
+          <>
             <div className="grid grid-cols-2 gap-4">
               {restaurants.map((restaurant) => (
                 <ItineraryRestaurantCard
@@ -78,11 +72,11 @@ export const ItinerarySidebar: React.FC = () => {
               ))}
             </div>
             {restaurants.length < 10 && (
-              <button className="w-full mt-2 text-[12px] text-purple-600 hover:text-purple-700 handwritten">
+              <button className="w-full mt-1.5 text-[12px] text-purple-600 hover:text-purple-700 handwritten">
                 + Add more
               </button>
             )}
-          </div>
+          </>
         ) : (
           <div className="empty-doodle !py-3 !text-[13px]">
             <div className="text-base mb-1">🍽️</div>
@@ -92,14 +86,14 @@ export const ItinerarySidebar: React.FC = () => {
       </div>
 
       {/* ── Activities — 2-col grid ────────────────── */}
-      <div className="mb-4">
-        <h3 className="handwritten-subtitle text-lg mb-2 sketch-underline">
+      <div className="mb-3">
+        <h3 className="handwritten-subtitle text-lg mb-1 sketch-underline">
           🎭 Activities {activities.length > 0 && (
             <span className="text-[13px] text-gray-500 ml-1">({activities.length})</span>
           )}
         </h3>
         {activities.length > 0 ? (
-          <div>
+          <>
             <div className="grid grid-cols-2 gap-4">
               {activities.map((activity) => (
                 <ItineraryActivityCard
@@ -110,11 +104,11 @@ export const ItinerarySidebar: React.FC = () => {
               ))}
             </div>
             {activities.length < 10 && (
-              <button className="w-full mt-2 text-[12px] text-purple-600 hover:text-purple-700 handwritten">
+              <button className="w-full mt-1.5 text-[12px] text-purple-600 hover:text-purple-700 handwritten">
                 + Add more
               </button>
             )}
-          </div>
+          </>
         ) : (
           <div className="empty-doodle !py-3 !text-[13px]">
             <div className="text-base mb-1">🎭</div>

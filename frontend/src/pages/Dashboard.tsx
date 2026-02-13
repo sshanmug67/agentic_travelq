@@ -308,19 +308,52 @@ export const Dashboard: React.FC = () => {
         const planText: string = dailyPlanRec?.reason || '';
 
         // Parse markdown plan into day blocks
+        // Handles two LLM output formats:
+        //   Format A: ### Day 1 (date)\n body...
+        //   Format B: **Day 1 (date):** body...  (inline bold)
         const dayBlocks: { title: string; body: string }[] = [];
         if (planText) {
-          const sections = planText.split(/(?=###\s)/);
-          for (const section of sections) {
-            const trimmed = section.trim();
-            if (!trimmed) continue;
-            const newlineIdx = trimmed.indexOf('\n');
-            if (newlineIdx === -1) {
-              dayBlocks.push({ title: trimmed.replace(/^#+\s*/, ''), body: '' });
-            } else {
-              const heading = trimmed.slice(0, newlineIdx).replace(/^#+\s*/, '').trim();
-              const body = trimmed.slice(newlineIdx + 1).trim();
-              dayBlocks.push({ title: heading, body });
+          // First try splitting on ### headings
+          const hashSections = planText.split(/(?=###\s)/);
+          const hasHashHeadings = hashSections.some(s => s.trim().startsWith('###'));
+
+          if (hasHashHeadings) {
+            for (const section of hashSections) {
+              const trimmed = section.trim();
+              if (!trimmed) continue;
+              const newlineIdx = trimmed.indexOf('\n');
+              if (newlineIdx === -1) {
+                dayBlocks.push({ title: trimmed.replace(/^#+\s*/, ''), body: '' });
+              } else {
+                const heading = trimmed.slice(0, newlineIdx).replace(/^#+\s*/, '').trim();
+                const body = trimmed.slice(newlineIdx + 1).trim();
+                dayBlocks.push({ title: heading, body });
+              }
+            }
+          } else {
+            // Fallback: split on **Day N** bold patterns
+            const boldDaySections = planText.split(/(?=\*\*Day\s+\d)/);
+            for (const section of boldDaySections) {
+              const trimmed = section.trim();
+              if (!trimmed) continue;
+              // Extract the bold title: **Day 1 (Feb 20, 2026):**
+              const titleMatch = trimmed.match(/^\*\*(.+?)\*\*:?\s*/);
+              if (titleMatch) {
+                const title = titleMatch[1].trim();
+                const body = trimmed.slice(titleMatch[0].length).trim();
+                dayBlocks.push({ title, body });
+              } else {
+                // No bold title — treat first sentence as title
+                const colonIdx = trimmed.indexOf(':');
+                if (colonIdx > 0 && colonIdx < 80) {
+                  dayBlocks.push({
+                    title: trimmed.slice(0, colonIdx).replace(/\*\*/g, ''),
+                    body: trimmed.slice(colonIdx + 1).trim(),
+                  });
+                } else {
+                  dayBlocks.push({ title: 'Schedule', body: trimmed });
+                }
+              }
             }
           }
         }
