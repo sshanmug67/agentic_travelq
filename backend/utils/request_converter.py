@@ -3,8 +3,14 @@ Request Converter - Converts frontend TripRequest to backend TravelPreferences
 Location: backend/utils/request_converter.py
 
 Uses logging_config.py for consistent logging to travel_dashboard_*.log files.
+
+Changes (v2):
+  - Fixed: preferred_chains now extracted from frontend hotelChains payload
+    Frontend sends: hotelChains: [{name: "Marriott", preferred: true}, ...]
+    Converter now filters preferred=true and passes names to HotelPreferences
+  - Added: Detailed logging of all hotel preferences used in search
 """
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 from datetime import datetime
 
 from models.user_preferences import (
@@ -16,6 +22,41 @@ from models.user_preferences import (
     BudgetConstraints
 )
 from utils.logging_config import log_info_raw, log_error_raw, log_warning_raw, log_json_raw
+
+
+def _extract_preferred_chains(request_data: Dict[str, Any]) -> List[str]:
+    """
+    Extract preferred hotel chain names from frontend hotelChains payload.
+    
+    Frontend sends:
+        hotelChains: [
+            {name: "Marriott", preferred: true},
+            {name: "Hilton", preferred: false}
+        ]
+    
+    Returns: ["Marriott"]  (only chains with preferred=true)
+    """
+    hotel_chains = request_data.get('hotel_chains', [])
+    
+    if not hotel_chains:
+        return []
+    
+    preferred = [
+        chain.get('name', '')
+        for chain in hotel_chains
+        if isinstance(chain, dict) and chain.get('preferred', False)
+    ]
+    
+    # Filter out empty names
+    preferred = [name for name in preferred if name]
+    
+    if preferred:
+        log_info_raw(f"   🏷️  Preferred hotel chains: {', '.join(preferred)}")
+    else:
+        all_chains = [c.get('name', '') for c in hotel_chains if isinstance(c, dict)]
+        log_info_raw(f"   ℹ️  Hotel chains present ({', '.join(all_chains)}) but none marked preferred")
+    
+    return preferred
 
 
 def convert_trip_request_to_preferences(request_data: Dict[str, Any]) -> TravelPreferences:
@@ -48,15 +89,36 @@ def convert_trip_request_to_preferences(request_data: Dict[str, Any]) -> TravelP
         
         # Extract hotel preferences
         hotel_data = request_data.get('hotel_prefs', {})
-        log_info_raw(f"   ✓ Hotel preferences: {hotel_data.get('min_rating', 4.0)} stars, {hotel_data.get('price_range', 'moderate')}")
+        
+        # preferred_chains lives inside hotel_prefs (embedded by to_legacy_trip_request)
+        preferred_chains = hotel_data.get('preferred_chains', [])
+        if preferred_chains:
+            log_info_raw(f"   🏷️  Preferred hotel chains: {', '.join(preferred_chains)}")
+        else:
+            log_info_raw(f"   ℹ️  No preferred hotel chains specified")
+        
+        log_info_raw(f"   ✓ Hotel preferences: {hotel_data.get('min_rating', 4.0)} stars, "
+                     f"{hotel_data.get('price_range', 'moderate')}, "
+                     f"location: {hotel_data.get('preferred_location', 'city_center')}")
         
         hotel_prefs = HotelPreferences(
             min_rating=hotel_data.get('min_rating', 4.0),
             preferred_location=hotel_data.get('preferred_location', 'city_center'),
             amenities=hotel_data.get('amenities', ['wifi']),
             room_type=hotel_data.get('room_type', 'standard'),
-            price_range=hotel_data.get('price_range', 'moderate')
+            price_range=hotel_data.get('price_range', 'moderate'),
+            preferred_chains=preferred_chains,
         )
+        
+        # Log ALL hotel preferences that will be used in search
+        log_json_raw({
+            "min_rating": hotel_prefs.min_rating,
+            "preferred_location": hotel_prefs.preferred_location,
+            "amenities": hotel_prefs.amenities,
+            "room_type": hotel_prefs.room_type,
+            "price_range": hotel_prefs.price_range,
+            "preferred_chains": hotel_prefs.preferred_chains,
+        }, label="🏨 Hotel Preferences for Search", include_borders=False)
         
         # Extract activity preferences
         activity_data = request_data.get('activity_prefs', {})
@@ -118,9 +180,13 @@ def convert_trip_request_to_preferences(request_data: Dict[str, Any]) -> TravelP
             "dates": f"{preferences.departure_date} to {preferences.return_date}",
             "travelers": preferences.num_travelers,
             "budget": preferences.budget.total_budget,
+            "hotel_budget_per_night": preferences.budget.hotel_budget_per_night,
             "interests": preferences.activity_prefs.interests,
             "cabin_class": preferences.flight_prefs.cabin_class,
             "hotel_rating": preferences.hotel_prefs.min_rating,
+            "hotel_chains": preferences.hotel_prefs.preferred_chains,
+            "hotel_location": preferences.hotel_prefs.preferred_location,
+            "hotel_amenities": preferences.hotel_prefs.amenities,
             "pace": preferences.activity_prefs.pace
         }, label="✅ Converted Preferences Summary", include_borders=False)
         

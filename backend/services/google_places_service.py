@@ -7,6 +7,11 @@ This version avoids unsupported types and uses only validated included types.
 
 Documentation: https://developers.google.com/maps/documentation/places/web-service/op-overview
 
+Changes (v2):
+  - Added search_hotels_by_text() for chain-specific hotel discovery
+    Uses Places Text Search API to find hotels by name/brand
+    Called by HotelAgent when user has preferred_chains
+
 Location: backend/services/google_places_service.py
 """
 import logging
@@ -95,8 +100,14 @@ class GooglePlacesService:
         log = agent_logger or logger
         
         log.info("=" * 80)
-        log.info("🔍 GooglePlacesService.search_hotels() - Places API (New)")
+        log.info("🔍 GooglePlacesService.search_hotels() - Nearby Search")
         log.info("=" * 80)
+        log.info(f"   📋 Preferences used in search:")
+        log.info(f"      Location: {location or f'{latitude},{longitude}'}")
+        log.info(f"      Radius: {radius}m")
+        log.info(f"      Min Rating: {min_rating}")
+        log.info(f"      ℹ️  Note: budget, amenities, chains not supported by Nearby Search API")
+        log.info(f"      ℹ️  These are handled by HotelAgent post-filtering and LLM recommendation")
         
         if not self.client:
             log.error("❌ Google Places client not initialized")
@@ -125,7 +136,6 @@ class GooglePlacesService:
             log.info(f"   Radius: {radius}m")
             
             # Build request body - only use validated types
-            # NO excluded types to avoid compatibility issues
             included_types = [
                 "hotel",           # Traditional hotels
                 "resort_hotel"     # Resort properties  
@@ -143,7 +153,7 @@ class GooglePlacesService:
                         "radius": radius
                     }
                 },
-                "rankPreference": "POPULARITY"  # Get highly-rated hotels first
+                "rankPreference": "POPULARITY"
             }
             
             log.info(f"   Included types: {', '.join(included_types)}")
@@ -194,7 +204,6 @@ class GooglePlacesService:
                 log.warning(f"⚠️  Only {len(places)} hotels found with strict filters")
                 log.info(f"   Retrying with 'lodging' type...")
                 
-                # Retry with broader type
                 request_body["includedTypes"] = ["lodging"]
                 request_body["maxResultCount"] = 20
                 
@@ -224,9 +233,7 @@ class GooglePlacesService:
                 if primary_type:
                     log.info(f"      Type: {primary_type}")
                 
-                # Filter by rating
                 if rating == 0:
-                    # No rating - keep as backup
                     hotel = self._parse_place_result(place, log)
                     if hotel and primary_type in ['hotel', 'resort_hotel', 'motel']:
                         hotels_no_rating.append(hotel)
@@ -274,6 +281,146 @@ class GooglePlacesService:
             log.error(f"   Error: {str(e)}")
             log.exception("   Traceback:")
             log.error("=" * 80)
+            return []
+
+    def search_hotels_by_text(
+        self,
+        query: str,
+        location: str = None,
+        latitude: float = None,
+        longitude: float = None,
+        radius: int = 5000,
+        min_rating: float = 3.0,
+        max_results: int = 10,
+        agent_logger: Optional[logging.Logger] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for hotels using Google Places Text Search API.
+        
+        Use this for targeted searches like "Marriott hotel in London" or
+        "Hilton near Times Square". Unlike Nearby Search, this uses a free-text
+        query so it can find specific hotel chains or brands.
+        
+        Endpoint: POST /v1/places:searchText
+        Docs: https://developers.google.com/maps/documentation/places/web-service/text-search
+
+        Args:
+            query: Free-text search (e.g., "Marriott hotel in London")
+            location: Location name for geocoding bias (optional if lat/lon given)
+            latitude: Latitude for location bias
+            longitude: Longitude for location bias
+            radius: Bias radius in meters (not a hard boundary)
+            min_rating: Minimum rating filter (0-5)
+            max_results: Max results to return (API max: 20)
+            agent_logger: Optional agent-specific logger
+            
+        Returns:
+            List of hotel dictionaries (same format as search_hotels)
+        """
+        log = agent_logger or logger
+        
+        log.info(f"🔎 GooglePlacesService.search_hotels_by_text()")
+        log.info(f"   📋 Preferences used in search:")
+        log.info(f"      Text query: \"{query}\"")
+        log.info(f"      Location bias: {location or f'{latitude},{longitude}' if latitude else 'None'}")
+        log.info(f"      Radius: {radius}m")
+        log.info(f"      Min Rating: {min_rating}")
+        log.info(f"      Max Results: {max_results}")
+        log.info(f"      ℹ️  This search is driven by user's preferred hotel chain")
+        
+        if not self.client:
+            log.error("❌ Google Places client not initialized")
+            return []
+        
+        try:
+            # Resolve location to coordinates for bias (optional but improves results)
+            if location and not (latitude and longitude):
+                coords = self._geocode_location(location, log)
+                if coords:
+                    latitude, longitude = coords
+            
+            # Build request body
+            request_body = {
+                "textQuery": query,
+                "includedType": "hotel",   # Restrict to hotels
+                "maxResultCount": min(max_results, 20),
+                "rankPreference": "RELEVANCE",
+            }
+            
+            # Add location bias if coordinates available
+            if latitude and longitude:
+                request_body["locationBias"] = {
+                    "circle": {
+                        "center": {
+                            "latitude": latitude,
+                            "longitude": longitude
+                        },
+                        "radius": radius
+                    }
+                }
+                log.info(f"   Location bias: {latitude}, {longitude} (radius {radius}m)")
+            
+            # Headers
+            headers = {
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": self.api_key,
+                "X-Goog-FieldMask": (
+                    "places.id,"
+                    "places.displayName,"
+                    "places.formattedAddress,"
+                    "places.location,"
+                    "places.rating,"
+                    "places.userRatingCount,"
+                    "places.priceLevel,"
+                    "places.primaryType,"
+                    "places.photos,"
+                    "places.types,"
+                    "places.businessStatus,"
+                    "places.currentOpeningHours,"
+                    "places.internationalPhoneNumber,"
+                    "places.websiteUri"
+                )
+            }
+            
+            # Make request
+            url = f"{self.BASE_URL}:searchText"
+            response = requests.post(url, json=request_body, headers=headers, timeout=30)
+            
+            if response.status_code != 200:
+                log.warning(f"   ⚠️  Text Search API error: {response.status_code}")
+                log.warning(f"   Response: {response.text[:300]}")
+                return []
+            
+            data = response.json()
+            places = data.get('places', [])
+            
+            log.info(f"   ✓ Text Search returned {len(places)} results")
+            
+            if not places:
+                return []
+            
+            # Parse and filter
+            hotels = []
+            for place in places:
+                rating = place.get('rating', 0)
+                
+                # Skip low-rated (but allow unrated = 0 for chain results)
+                if rating > 0 and rating < min_rating:
+                    continue
+                
+                parsed = self._parse_place_result(place, log)
+                if parsed:
+                    hotels.append(parsed)
+            
+            log.info(f"   ✓ After filtering: {len(hotels)} hotels")
+            
+            return hotels
+            
+        except requests.exceptions.RequestException as e:
+            log.error(f"❌ Text Search request error: {str(e)}")
+            return []
+        except Exception as e:
+            log.error(f"❌ Text Search exception: {str(e)}")
             return []
     
     def _geocode_location(
@@ -338,16 +485,18 @@ class GooglePlacesService:
             
         Returns:
             Dictionary with place types as keys, lists of places as values
-            Example: {
-                "restaurant": [{...}, {...}],
-                "tourist_attraction": [{...}, {...}]
-            }
         """
         log = agent_logger or logger
         
         log.info("=" * 80)
         log.info("🔍 GooglePlacesService.search_places() - Places API (New)")
         log.info("=" * 80)
+        log.info(f"   📋 Preferences used in search:")
+        log.info(f"      Location: {location or f'{latitude},{longitude}'}")
+        log.info(f"      Radius: {radius}m")
+        log.info(f"      Place types: {place_types or 'default set'}")
+        log.info(f"      Min Rating: {min_rating}")
+        log.info(f"      Max Results per category: {max_results}")
         
         if not self.client:
             log.error("❌ Google Places client not initialized")
@@ -393,7 +542,6 @@ class GooglePlacesService:
                 log.info(f"\n🔎 Searching: {place_type}")
                 log.info("-" * 80)
                 
-                # Build request body
                 request_body = {
                     "includedTypes": [place_type],
                     "maxResultCount": max_results,
@@ -409,7 +557,6 @@ class GooglePlacesService:
                     "rankPreference": "POPULARITY"
                 }
                 
-                # Headers
                 headers = {
                     "Content-Type": "application/json",
                     "X-Goog-Api-Key": self.api_key,
@@ -431,7 +578,6 @@ class GooglePlacesService:
                     )
                 }
                 
-                # Make request
                 url = f"{self.BASE_URL}:searchNearby"
                 response = requests.post(url, json=request_body, headers=headers, timeout=30)
                 
@@ -445,17 +591,12 @@ class GooglePlacesService:
                 
                 log.info(f"   ✓ Found {len(places)} results")
                 
-                # Filter by rating
                 filtered_places = []
                 for place in places:
                     rating = place.get('rating', 0)
-                    
-                    # Skip if no rating or below minimum
                     if rating == 0 or rating < min_rating:
                         continue
-                    
                     parsed = self._parse_place_result(place, log)
-                    
                     if parsed:
                         filtered_places.append(parsed)
                 
@@ -464,7 +605,6 @@ class GooglePlacesService:
                 if filtered_places:
                     results[place_type] = filtered_places
             
-            # Summary
             total_places = sum(len(places) for places in results.values())
             log.info(f"\n📊 Search Complete:")
             log.info(f"   Categories found: {len(results)}")

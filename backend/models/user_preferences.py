@@ -1,6 +1,11 @@
 """
 User Preferences Model for TravelQ
 Contains hardcoded user preferences for testing and development
+
+Changes (v2):
+  - Added preferred_chains to HotelPreferences for chain-specific hotel search
+
+Location: backend/models/user_preferences.py
 """
 from datetime import datetime
 from typing import List, Optional
@@ -23,6 +28,7 @@ class HotelPreferences(BaseModel):
     amenities: List[str] = Field(default_factory=list, description="Required amenities")
     room_type: str = Field(default="standard", description="standard, deluxe, suite")
     price_range: str = Field(default="moderate", description="budget, moderate, luxury")
+    preferred_chains: List[str] = Field(default_factory=list, description="Preferred hotel chains (e.g. Marriott, Hilton)")
 
 
 class ActivityPreferences(BaseModel):

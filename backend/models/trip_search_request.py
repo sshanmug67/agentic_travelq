@@ -9,6 +9,10 @@ The frontend payload has 5 top-level fields:
   3. tripDetails   — the Summary Bar data (destination, dates, budget, travelers)
   4. preferences   — user preferences (both UI lists and detailed settings)
   5. currentItinerary — what the user has already selected (flight, hotel, restaurants, activities)
+
+Changes (v2):
+  - Fixed: to_legacy_trip_request() now extracts hotelChains → hotel_chains
+    so preferred hotel chains flow through to HotelAgent's text search
 """
 from pydantic import BaseModel, Field
 from typing import Optional, List, Any
@@ -168,6 +172,13 @@ class TripSearchRequest(BaseModel):
         return [a.name for a in self.preferences.airlines if a.preferred]
 
     @property
+    def preferred_hotel_chains(self) -> List[str]:
+        """Extract preferred hotel chain names from UI hotelChains list."""
+        if not self.preferences:
+            return []
+        return [c.name for c in self.preferences.hotelChains if c.preferred]
+
+    @property
     def preferred_cuisines(self) -> List[str]:
         if not self.preferences:
             return []
@@ -195,7 +206,7 @@ class TripSearchRequest(BaseModel):
 
         This bridge merges:
           - tripDetails (dates, destination, budget)
-          - preferences.airlines/activities/cuisines (UI lists)
+          - preferences.airlines/hotelChains/activities/cuisines (UI lists)
           - preferences.flightPrefs/hotelPrefs/etc. (detailed settings)
 
         into the flat structure that TravelPreferences expects.
@@ -234,6 +245,14 @@ class TripSearchRequest(BaseModel):
         interests = self.all_activity_names
         if ap.interests and not interests:
             interests = ap.interests
+
+        # ── Extract preferred hotel chains from UI list ────────────────
+        # Frontend sends: hotelChains: [{name: "Marriott", preferred: true}, ...]
+        # We convert to a list of dicts for the converter to extract names.
+        hotel_chains = [
+            {"name": c.name, "preferred": c.preferred}
+            for c in prefs.hotelChains
+        ]
 
         # ── Budget: use frontend-computed constraints if available,
         #    otherwise compute from total ───────────────────────────────
@@ -278,6 +297,9 @@ class TripSearchRequest(BaseModel):
                 "amenities": hp.amenities,
                 "room_type": hp.roomType,
                 "price_range": hp.priceRange,
+                "preferred_chains": [
+                    c.name for c in prefs.hotelChains if c.preferred
+                ],
             },
             "activity_prefs": {
                 "interests": interests,
