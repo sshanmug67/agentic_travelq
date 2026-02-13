@@ -1,4 +1,11 @@
 // frontend/src/components/itinerary/ItineraryFlightCard.tsx
+//
+// Changes (v2 — Compact):
+//   - Single-row route display instead of two-column leg panels
+//   - Inline outbound + return on same line with arrow
+//   - Smaller AI Pick badge as a pill
+//   - Price and stops on one metadata line
+//   - ~60% height reduction
 
 import React from 'react';
 import type { Flight } from '../../types/trip';
@@ -14,106 +21,75 @@ export const ItineraryFlightCard: React.FC<ItineraryFlightCardProps> = ({
 }) => {
   const isAiSelected = flight.selectedBy === 'ai';
 
-  const formatDate = (dateString: string) =>
-    new Date(dateString).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const fmtDate = (d: string) =>
+    new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const fmtTime = (d: string) =>
+    new Date(d).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
-  const formatTime = (dateString: string) =>
-    new Date(dateString).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-
-  const FlightLeg: React.FC<{
-    label: string;
-    color: string;
-    departure_airport: string;
-    arrival_airport: string;
-    departure_time: string;
-    arrival_time: string;
-    stops: number;
-    layovers?: string[];
-  }> = ({ label, color, departure_airport, arrival_airport, departure_time, arrival_time, stops, layovers }) => (
-    <div className="flex-1 min-w-0">
-      <div className={`font-semibold text-[17px] ${color} mb-1`}>📅 {label}</div>
-      <div className="text-[17px] font-bold text-gray-800">
-        {departure_airport} → {arrival_airport}
-      </div>
-      <div className="text-[15px] text-gray-600 mt-0.5">
-        {formatDate(departure_time)} {formatTime(departure_time)} – {formatTime(arrival_time)}
-      </div>
-      {stops > 0 && (
-        <div className="text-[15px] text-gray-500 mt-0.5">
-          🔄 {stops} stop{stops > 1 ? 's' : ''}
-          {layovers && layovers.length > 0 && ` (${layovers.join(', ')})`}
-        </div>
-      )}
-    </div>
-  );
+  const ob = flight.outbound;
+  const rt = flight.return_flight;
 
   return (
-    <div className="itinerary-card">
-      {/* Header: badge + delete */}
-      <div className="flex justify-between items-start mb-3">
-        {isAiSelected ? (
-          <span className="ai-sticker text-[15px]">🤖 AI Pick</span>
-        ) : (
-          <span className="user-badge text-[15px] text-white">👤 You Chose</span>
-        )}
-        <button onClick={onDelete} className="paper-delete" aria-label="Delete flight">
+    <div className="itinerary-card !p-3">
+      {/* Row 1: Badge + Airline + Delete */}
+      <div className="flex items-center justify-between mb-1.5">
+        <div className="flex items-center gap-2">
+          {isAiSelected ? (
+            <span className="ai-sticker !text-[11px] !px-1.5 !py-0.5">🤖 AI</span>
+          ) : (
+            <span className="user-badge !text-[11px] !px-1.5 !py-0.5 text-white">👤</span>
+          )}
+          <span className="font-bold text-[15px] text-gray-800 handwritten-body">
+            {flight.airline_code} {ob?.flight_number || ''}
+          </span>
+        </div>
+        <button onClick={onDelete} className="paper-delete !w-5 !h-5 !text-sm" aria-label="Delete flight">
           ×
         </button>
       </div>
 
-      <div className="handwritten-body">
-        {/* Airline name */}
-        <div className="font-bold text-[19px] mb-3">
-          {flight.airline_code} {flight.outbound?.flight_number || ''}
-        </div>
-
-        {/* Side-by-side legs */}
-        <div className="flex gap-4">
-          {flight.outbound && (
-            <FlightLeg
-              label="Outbound"
-              color="text-purple-700"
-              departure_airport={flight.outbound.departure_airport}
-              arrival_airport={flight.outbound.arrival_airport}
-              departure_time={flight.outbound.departure_time}
-              arrival_time={flight.outbound.arrival_time}
-              stops={flight.outbound.stops}
-              layovers={flight.outbound.layovers}
-            />
-          )}
-
-          {flight.return_flight && (
-            <>
-              {/* Divider */}
-              <div className="w-px bg-gray-300 self-stretch" />
-
-              <FlightLeg
-                label="Return"
-                color="text-pink-700"
-                departure_airport={flight.return_flight.departure_airport}
-                arrival_airport={flight.return_flight.arrival_airport}
-                departure_time={flight.return_flight.departure_time}
-                arrival_time={flight.return_flight.arrival_time}
-                stops={flight.return_flight.stops}
-                layovers={flight.return_flight.layovers}
-              />
-            </>
-          )}
-        </div>
-
-        {/* Price */}
-        <div className="mt-3 pt-2 border-t border-dashed border-gray-300">
-          <div className="flex justify-between items-center">
-            <span className="font-bold text-[19px] text-green-700">
-              💰 ${flight.price}
+      {/* Row 2: Route — Outbound */}
+      {ob && (
+        <div className="flex items-center gap-2 text-[13px] handwritten-body text-gray-700">
+          <span className="font-semibold text-purple-700">{ob.departure_airport}</span>
+          <span className="text-gray-400">→</span>
+          <span className="font-semibold text-purple-700">{ob.arrival_airport}</span>
+          <span className="text-gray-400">·</span>
+          <span>{fmtDate(ob.departure_time)} {fmtTime(ob.departure_time)}–{fmtTime(ob.arrival_time)}</span>
+          {ob.stops > 0 && (
+            <span className="text-gray-400 text-[12px]">
+              · {ob.stops} stop{ob.stops > 1 ? 's' : ''}{ob.layovers?.length ? ` (${ob.layovers.join(',')})` : ''}
             </span>
-            {!isAiSelected && flight.priceDifference !== undefined && flight.priceDifference !== 0 && (
-              <span className="text-[15px] text-gray-600">
-                {flight.priceDifference > 0 ? '+' : ''}${flight.priceDifference.toFixed(2)} vs AI
-              </span>
-            )}
-          </div>
+          )}
         </div>
+      )}
+
+      {/* Row 3: Route — Return */}
+      {rt && (
+        <div className="flex items-center gap-2 text-[13px] handwritten-body text-gray-700 mt-0.5">
+          <span className="font-semibold text-pink-700">{rt.departure_airport}</span>
+          <span className="text-gray-400">→</span>
+          <span className="font-semibold text-pink-700">{rt.arrival_airport}</span>
+          <span className="text-gray-400">·</span>
+          <span>{fmtDate(rt.departure_time)} {fmtTime(rt.departure_time)}–{fmtTime(rt.arrival_time)}</span>
+          {rt.stops > 0 && (
+            <span className="text-gray-400 text-[12px]">
+              · {rt.stops} stop{rt.stops > 1 ? 's' : ''}{rt.layovers?.length ? ` (${rt.layovers.join(',')})` : ''}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Row 4: Price */}
+      <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-dashed border-gray-300">
+        <span className="font-bold text-[15px] text-green-700 handwritten-body">
+          💰 ${flight.price}
+        </span>
+        {!isAiSelected && flight.priceDifference !== undefined && flight.priceDifference !== 0 && (
+          <span className="text-[12px] text-gray-500 handwritten-body">
+            {flight.priceDifference > 0 ? '+' : ''}${flight.priceDifference.toFixed(2)} vs AI
+          </span>
+        )}
       </div>
     </div>
   );
