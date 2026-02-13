@@ -57,6 +57,8 @@ export const Dashboard: React.FC = () => {
 
     setIsPlanning(true);
 
+
+    
     try {
       const response = await tripApi.planTrip({
         tripId: tripData.id,
