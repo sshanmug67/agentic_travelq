@@ -572,7 +572,7 @@ export const Dashboard: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {flights.map((flight, index) => (
                           <FlightCard
                             key={flight.id || index}
@@ -605,7 +605,7 @@ export const Dashboard: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="space-y-4">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {hotels.map((hotel, index) => (
                           <HotelCard
                             key={hotel.id || index}

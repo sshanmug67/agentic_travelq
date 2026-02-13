@@ -1,4 +1,10 @@
 // frontend/src/components/hotel/HotelCard.tsx
+//
+// Changes (v2 — Grid-friendly):
+//   - Details row wraps for half-width cards
+//   - Photo + address on one line, dates + price on next
+//   - Compact header with name truncation
+//   - Works in both single-col and 2-col grid
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -21,17 +27,15 @@ export const HotelCard: React.FC<HotelCardProps> = ({
   const [showPhotos, setShowPhotos] = useState(false);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
 
-  // Handle photos being either string[] or {url: string}[]
   const rawPhotos = hotel.photos?.slice(0, 5) || [];
   const photoUrls: string[] = rawPhotos.map((p: any) => (typeof p === 'string' ? p : p?.url)).filter(Boolean);
 
   const renderStars = (rating: number) => {
     const full = Math.floor(rating);
-    const half = rating - full >= 0.3;
     return (
-      <span className="flex items-center gap-0.5">
+      <span className="inline-flex gap-0.5">
         {[...Array(5)].map((_, i) => (
-          <span key={i} className={i < full ? 'text-yellow-500' : (i === full && half) ? 'text-yellow-400' : 'text-gray-300'}>★</span>
+          <span key={i} className={i < full ? 'text-yellow-500' : 'text-gray-300'} style={{ fontSize: '11px' }}>★</span>
         ))}
       </span>
     );
@@ -53,106 +57,97 @@ export const HotelCard: React.FC<HotelCardProps> = ({
       }`}
       onClick={onSelect}
     >
-      {/* AI Recommendation Badge — slim */}
+      {/* AI Badge */}
       {isAiRecommended && !isSelected && (
-        <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 px-3 py-0.5 flex items-center justify-center gap-2">
-          <span className="text-[13px] font-bold text-yellow-900">🤖 AI Recommended</span>
+        <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 px-3 py-0.5 flex items-center justify-center">
+          <span className="text-[12px] font-bold text-yellow-900">🤖 AI Recommended</span>
         </div>
       )}
 
-      <div className="px-4 py-3">
-        {/* Header row: radio + name + rating ... price */}
+      <div className="p-3">
+        {/* Header: radio + name + stars ... price */}
         <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 min-w-0">
             <input
               type="radio"
               checked={isSelected}
               onChange={onSelect}
-              className="w-4 h-4 text-purple-600 cursor-pointer"
+              className="w-3.5 h-3.5 text-purple-600 cursor-pointer flex-shrink-0"
             />
-            <div className="flex items-center gap-2">
-              <span className="font-bold text-[15px] text-gray-800 truncate max-w-[240px]">
-                {hotel.name}
-              </span>
-              {isAiRecommended && <span className="text-[15px]" title="AI Recommended">🌟</span>}
-              <span className="flex items-center gap-1 text-[13px]">
-                {renderStars(hotel.google_rating)}
-                <span className="font-semibold text-gray-700 ml-0.5">{hotel.google_rating}</span>
-              </span>
-              <span className="text-[13px] text-gray-400">
-                ({hotel.user_ratings_total?.toLocaleString()})
-              </span>
-            </div>
+            <span className="font-bold text-[14px] text-gray-800 truncate">
+              {hotel.name}
+            </span>
+            {isAiRecommended && <span className="text-[13px] flex-shrink-0" title="AI Recommended">🌟</span>}
           </div>
-          <div className="text-right flex-shrink-0">
-            <span className="text-[19px] font-bold text-green-600">${hotel.total_price}</span>
-            <span className="text-[13px] text-gray-400 ml-1">total</span>
+          <div className="text-right flex-shrink-0 ml-2">
+            <span className="text-[17px] font-bold text-green-600">${hotel.total_price}</span>
           </div>
         </div>
 
-        {/* Details row: photo thumbnail + address + dates + per-night */}
-        <div className="flex items-center gap-3 py-1.5 px-2 bg-blue-50/60 rounded text-[15px]">
-          {/* Small thumbnail */}
-          {photoUrls.length > 0 ? (
-            <img
-              src={photoUrls[0]}
-              alt={hotel.name}
-              className="w-12 h-12 rounded object-cover flex-shrink-0"
-            />
-          ) : (
-            <div className="w-12 h-12 rounded bg-gray-200 flex items-center justify-center flex-shrink-0">
-              <span className="text-[19px]">🏨</span>
+        {/* Rating row */}
+        <div className="flex items-center gap-1.5 mb-2">
+          {renderStars(hotel.google_rating)}
+          <span className="font-semibold text-[13px] text-gray-700">{hotel.google_rating}</span>
+          <span className="text-[11px] text-gray-400">({hotel.user_ratings_total?.toLocaleString()})</span>
+        </div>
+
+        {/* Info block: photo + details stacked */}
+        <div className="bg-blue-50/60 rounded p-2">
+          <div className="flex items-start gap-2.5">
+            {/* Photo thumbnail */}
+            {photoUrls.length > 0 ? (
+              <img
+                src={photoUrls[0]}
+                alt={hotel.name}
+                className="w-12 h-12 rounded object-cover flex-shrink-0"
+              />
+            ) : (
+              <div className="w-12 h-12 rounded bg-gray-200 flex items-center justify-center flex-shrink-0">
+                <span className="text-[17px]">🏨</span>
+              </div>
+            )}
+
+            {/* Address + dates */}
+            <div className="flex-1 min-w-0 text-[12px] text-gray-600 space-y-0.5">
+              <div className="flex items-start gap-1">
+                <span className="flex-shrink-0">📍</span>
+                <span className="truncate">{hotel.address}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <span className="flex-shrink-0">🗓️</span>
+                <span>{formatDate(hotel.check_in_date)} – {formatDate(hotel.check_out_date)}</span>
+                <span className="text-gray-400">· {hotel.num_nights}n</span>
+              </div>
+              <div className="text-[12px] font-semibold text-gray-600">
+                ${hotel.price_per_night}/night
+              </div>
             </div>
-          )}
-
-          {/* Address */}
-          <div className="flex items-center gap-1 flex-1 min-w-0">
-            <span className="text-[13px] text-gray-500">📍</span>
-            <span className="text-[13px] text-gray-700 truncate">{hotel.address}</span>
-          </div>
-
-          {/* Dates */}
-          <div className="flex items-center gap-1 flex-shrink-0">
-            <span className="text-[13px] text-gray-500">🗓️</span>
-            <span className="text-[13px] text-gray-700">
-              {formatDate(hotel.check_in_date)} – {formatDate(hotel.check_out_date)}
-            </span>
-          </div>
-
-          {/* Per-night price */}
-          <div className="flex-shrink-0 text-right">
-            <span className="text-[13px] font-semibold text-gray-600">
-              ${hotel.price_per_night}/night
-            </span>
-            <span className="text-[13px] text-gray-400 ml-1">
-              • {hotel.num_nights}n
-            </span>
           </div>
         </div>
 
-        {/* Footer row: highlights + actions */}
-        <div className="mt-2 flex items-center justify-between text-[13px] text-gray-500">
-          <div className="flex items-center gap-2">
-            {hotel.highlights && hotel.highlights.slice(0, 3).map((h, idx) => (
-              <span key={idx} className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-[13px]">
+        {/* Footer: highlights + actions */}
+        <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {hotel.highlights && hotel.highlights.slice(0, 2).map((h, idx) => (
+              <span key={idx} className="bg-blue-50 text-blue-700 px-1.5 py-0.5 rounded-full text-[11px]">
                 ✨ {h}
               </span>
             ))}
             {(!hotel.highlights || hotel.highlights.length === 0) && (
-              <span className="text-[13px] text-gray-400">{hotel.num_nights} nights stay</span>
+              <span>{hotel.num_nights} nights stay</span>
             )}
           </div>
-          <div className="flex gap-3">
+          <div className="flex gap-2 flex-shrink-0">
             <button
               onClick={(e) => { e.stopPropagation(); setShowDetails(!showDetails); }}
-              className="text-purple-600 hover:text-purple-700 font-semibold hover:underline"
+              className="text-purple-600 hover:text-purple-700 font-semibold hover:underline text-[12px]"
             >
               {showDetails ? 'Hide' : 'Details'}
             </button>
             {photoUrls.length > 0 && (
               <button
                 onClick={(e) => { e.stopPropagation(); setShowPhotos(true); }}
-                className="text-purple-600 hover:text-purple-700 font-semibold hover:underline"
+                className="text-purple-600 hover:text-purple-700 font-semibold hover:underline text-[12px]"
               >
                 📷 {photoUrls.length}
               </button>
@@ -163,7 +158,7 @@ export const HotelCard: React.FC<HotelCardProps> = ({
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="text-purple-600 hover:text-purple-700 font-semibold hover:underline"
+                className="text-purple-600 hover:text-purple-700 font-semibold hover:underline text-[12px]"
               >
                 Book
               </a>
@@ -177,7 +172,7 @@ export const HotelCard: React.FC<HotelCardProps> = ({
           animate={{ height: showDetails ? 'auto' : 0 }}
           className="overflow-hidden"
         >
-          <div className="mt-2 pt-2 border-t border-gray-200 text-[13px] space-y-1">
+          <div className="mt-2 pt-2 border-t border-gray-200 text-[12px] space-y-1">
             <div className="flex justify-between">
               <span className="text-gray-500">Address:</span>
               <span className="font-semibold text-right max-w-[60%]">{hotel.address}</span>
@@ -189,10 +184,6 @@ export const HotelCard: React.FC<HotelCardProps> = ({
             <div className="flex justify-between">
               <span className="text-gray-500">Check-out:</span>
               <span className="font-semibold">{hotel.check_out_date}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Price per Night:</span>
-              <span className="font-semibold text-green-600">${hotel.price_per_night}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-500">Total ({hotel.num_nights} nights):</span>
