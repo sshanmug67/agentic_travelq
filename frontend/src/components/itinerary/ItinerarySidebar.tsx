@@ -68,7 +68,7 @@ export const ItinerarySidebar: React.FC = () => {
         </h3>
         {restaurants.length > 0 ? (
           <div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               {restaurants.map((restaurant) => (
                 <ItineraryRestaurantCard
                   key={restaurant.id}
@@ -100,7 +100,7 @@ export const ItinerarySidebar: React.FC = () => {
         </h3>
         {activities.length > 0 ? (
           <div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               {activities.map((activity) => (
                 <ItineraryActivityCard
                   key={activity.id}

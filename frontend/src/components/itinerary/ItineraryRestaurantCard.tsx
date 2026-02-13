@@ -35,7 +35,7 @@ export const ItineraryRestaurantCard: React.FC<ItineraryRestaurantCardProps> = (
       : null);
 
   return (
-    <div className="relative bg-orange-50 border-2 border-orange-300 rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow group">
+    <div className="relative bg-white border-2 border-amber-400 rounded-lg overflow-hidden shadow-sm hover:shadow-md transition-shadow group">
       {/* Delete button */}
       <button
         onClick={onDelete}
