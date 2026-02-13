@@ -1,6 +1,10 @@
 """
 User Proxy Agent for TravelQ
 Represents the user and their preferences in the multi-agent travel planning system
+
+Changes (v4):
+  - get_preferences_summary(): activity_prefs.interests → preferred/interested split
+  - Added restaurant preferences section to summary
 """
 from autogen import UserProxyAgent
 from typing import Dict, Any, Optional
@@ -81,6 +85,14 @@ class TravelQUserProxy(UserProxyAgent):
         """
         prefs = self.user_preferences
         
+        # Build activity interests display
+        priority_activities = prefs.activity_prefs.preferred_interests
+        interested_activities = prefs.activity_prefs.interested_interests
+        
+        # Build cuisine display
+        priority_cuisines = prefs.restaurant_prefs.preferred_cuisines
+        interested_cuisines = prefs.restaurant_prefs.interested_cuisines
+        
         summary = f"""
 === USER TRAVEL PREFERENCES ===
 
@@ -100,7 +112,8 @@ BUDGET:
 - Transportation: ${prefs.budget.transport_budget:,.2f}
 
 FLIGHT PREFERENCES:
-- Preferred Carriers: {', '.join(prefs.flight_prefs.preferred_carriers)}
+- ⭐ Preferred Carriers: {', '.join(prefs.flight_prefs.preferred_carriers) or 'None'}
+- ☆ Interested Carriers: {', '.join(prefs.flight_prefs.interested_carriers) or 'None'}
 - Max Stops: {prefs.flight_prefs.max_stops}
 - Cabin Class: {prefs.flight_prefs.cabin_class}
 - Time Preference: {prefs.flight_prefs.time_preference}
@@ -110,12 +123,21 @@ HOTEL PREFERENCES:
 - Location: {prefs.hotel_prefs.preferred_location}
 - Amenities: {', '.join(prefs.hotel_prefs.amenities)}
 - Room Type: {prefs.hotel_prefs.room_type}
+- ⭐ Preferred Chains: {', '.join(prefs.hotel_prefs.preferred_chains) or 'None'}
+- ☆ Interested Chains: {', '.join(prefs.hotel_prefs.interested_chains) or 'None'}
 
 ACTIVITY PREFERENCES:
-- Interests: {', '.join(prefs.activity_prefs.interests)}
+- ⭐ Priority Interests: {', '.join(priority_activities) or 'None'}
+- ☆ Interested In: {', '.join(interested_activities) or 'None'}
 - Pace: {prefs.activity_prefs.pace}
 - Entertainment Hours/Day: {prefs.activity_prefs.entertainment_hours_per_day} hours
 - Preferred Times: {', '.join(prefs.activity_prefs.preferred_times)}
+
+RESTAURANT PREFERENCES:
+- ⭐ Priority Cuisines: {', '.join(priority_cuisines) or 'None'}
+- ☆ Interested Cuisines: {', '.join(interested_cuisines) or 'None'}
+- Meals: {', '.join(prefs.restaurant_prefs.meals)}
+- Price Level: {', '.join(prefs.restaurant_prefs.price_level)}
 
 TRANSPORT PREFERENCES:
 - Preferred Modes: {', '.join(prefs.transport_prefs.preferred_modes)}

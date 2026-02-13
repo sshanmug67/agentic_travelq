@@ -1,4 +1,9 @@
 // frontend/src/services/api.ts
+//
+// Changes (v3):
+//   - PlanTripRequest.preferences type now includes detailed prefs
+//     (flightPrefs, hotelPrefs, etc.) that Dashboard already sends
+//   - No runtime change — just type accuracy so TS catches mismatches
 
 import axios from 'axios';
 
@@ -10,7 +15,83 @@ const api = axios.create({
   },
 });
 
+// ── Shared sub-types ────────────────────────────────────────────────────────
+
+interface NamedPreference {
+  name: string;
+  preferred?: boolean;
+}
+
+interface BudgetTiers {
+  meals: string;
+  accommodation: string;
+  activities: string;
+}
+
+interface FlightPrefs {
+  maxStops: number;
+  cabinClass: string;
+  timePreference: string;
+  seatPreference: string;
+}
+
+interface HotelPrefs {
+  minRating: number;
+  preferredLocation: string;
+  amenities: string[];
+  roomType: string;
+  priceRange: string;
+}
+
+interface ActivityPrefs {
+  pace: string;
+  preferredTimes: string[];
+  accessibilityNeeds?: string;
+  entertainmentHoursPerDay: number;
+}
+
+interface RestaurantPrefs {
+  meals: string[];
+  priceLevel: string[];
+}
+
+interface TransportPrefs {
+  preferredModes: string[];
+  maxWalkDistance: number;
+  comfortLevel: string;
+}
+
+interface BudgetConstraints {
+  totalBudget: number;
+  flightBudget: number;
+  hotelBudgetPerNight: number;
+  dailyActivityBudget: number;
+  dailyFoodBudget: number;
+  transportBudget: number;
+}
+
 // ── Request/Response types (match backend TripSearchRequest) ────────────────
+
+interface PlanTripPreferences {
+  // UI Preferences (PreferencesPanel chip lists)
+  airlines: NamedPreference[];
+  hotelChains: NamedPreference[];
+  cuisines: NamedPreference[];
+  activities: NamedPreference[];
+  budget: BudgetTiers;
+
+  // Detailed preferences (Advanced settings, sent alongside UI lists)
+  flightPrefs?: FlightPrefs;
+  hotelPrefs?: HotelPrefs;
+  activityPrefs?: ActivityPrefs;
+  restaurantPrefs?: RestaurantPrefs;
+  transportPrefs?: TransportPrefs;
+  budgetConstraints?: BudgetConstraints;
+
+  // Additional
+  tripPurpose?: string;
+  specialRequirements?: string;
+}
 
 interface PlanTripRequest {
   tripId: string | null;     // null = new trip, string = existing trip
@@ -23,17 +104,7 @@ interface PlanTripRequest {
     travelers: number;
     budget: number;
   };
-  preferences: {
-    airlines: Array<{ name: string; preferred?: boolean }>;
-    hotelChains: Array<{ name: string; preferred?: boolean }>;
-    cuisines: Array<{ name: string; preferred?: boolean }>;
-    activities: Array<{ name: string; preferred?: boolean }>;
-    budget: {
-      meals: string;
-      accommodation: string;
-      activities: string;
-    };
-  };
+  preferences: PlanTripPreferences;
   currentItinerary: {
     flight: any | null;
     hotel: any | null;
@@ -44,8 +115,10 @@ interface PlanTripRequest {
 
 interface PlanTripResponse {
   status: string;
-  tripId: string;              // Backend always returns a tripId
+  tripId: string;
+  trip_id?: string;
   final_recommendation: string;
+  recommendations?: Record<string, any>;
   message?: string;
   options?: Record<string, any[]>;
   results?: Record<string, any[]>;
@@ -62,6 +135,10 @@ export const tripApi = {
    *  - New trip search (tripId = null)
    *  - Refine existing trip (tripId set, query/prefs changed)
    *  - Save selections (tripId set, itinerary changed)
+   *
+   * The preferences object carries both the UI chip lists (with preferred
+   * flags) and the detailed prefs. The backend uses `preferred: true` items
+   * as priority search targets and `preferred: false` as secondary interests.
    */
   planTrip: async (request: PlanTripRequest): Promise<PlanTripResponse> => {
     const response = await api.post('/trips/search', request);

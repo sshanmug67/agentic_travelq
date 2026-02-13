@@ -4,7 +4,9 @@ Location: backend/agents/places_agent.py
 
 Searches for restaurants, attractions, shopping, museums, parks, etc.
 
-Changes (v2):
+Changes (v3):
+  - Fixed activity_prefs.interests → preferred_interests + interested_interests
+  - Added restaurant_prefs.preferred_cuisines to search logic
   - Added deduplication by place_id to prevent same place appearing multiple times
   - Use settings for max_restaurant / max_activity counts
   - Added segregation summary log
@@ -72,6 +74,13 @@ Be enthusiastic, knowledgeable, and helpful!
         log_agent_raw("📍 PlacesAgent initialized", agent_name="PlacesAgent")
         log_agent_raw("   ✓ Google Places service", agent_name="PlacesAgent")
     
+    def _get_all_interests(self, preferences) -> List[str]:
+        """Combine preferred + interested activity interests into one list."""
+        return (
+            preferences.activity_prefs.preferred_interests
+            + preferences.activity_prefs.interested_interests
+        )
+
     def generate_reply(
         self,
         messages: List[Dict[str, Any]] = None,
@@ -229,7 +238,7 @@ Be enthusiastic, knowledgeable, and helpful!
     
     def _determine_categories(self, preferences) -> List[str]:
         """Determine which categories to search based on user interests"""
-        interests = preferences.activity_prefs.interests if preferences.activity_prefs.interests else []
+        interests = self._get_all_interests(preferences)
         
         log_agent_raw(f"📋 User interests: {', '.join(interests) if interests else 'None specified'}", 
                      agent_name="PlacesAgent")
@@ -386,6 +395,10 @@ Be enthusiastic, knowledgeable, and helpful!
                 top_place = max(places, key=lambda p: p.rating or 0)
                 summary_parts.append(f"- {category.title()}: {len(places)} options (top: {top_place.name}, {top_place.rating:.1f}★)")
         
+        # Combine interests for display
+        all_interests = self._get_all_interests(preferences)
+        interests_display = ', '.join(all_interests) if all_interests else 'General sightseeing'
+
         # Build prompt
         prompt = f"""
 Based on places search results, provide enthusiastic recommendations.
@@ -394,7 +407,7 @@ DESTINATION: {preferences.destination}
 SEARCH RESULTS:
 {chr(10).join(summary_parts)}
 
-USER INTERESTS: {', '.join(preferences.activity_prefs.interests) if preferences.activity_prefs.interests else 'General sightseeing'}
+USER INTERESTS: {interests_display}
 
 Provide a conversational recommendation (4-5 sentences):
 - Mention the variety of options found

@@ -1,4 +1,13 @@
 // frontend/src/types/trip.ts
+//
+// Changes (v3):
+//   - FlightPreferences: removed `preferredCarriers` (lives in airlines chip list)
+//   - ActivityPreferences: removed `interests` (lives in activities chip list)
+//   - Added comments showing where each piece of data lives
+//
+// Data ownership rule:
+//   Chip lists (airlines, hotelChains, cuisines, activities) → names + priority
+//   Detailed prefs (flightPrefs, hotelPrefs, etc.)           → settings only
 
 // ============================================================================
 // RESULT TYPES (from backend API responses)
@@ -156,14 +165,32 @@ export interface TripPlanResponse {
 // ============================================================================
 // USER PREFERENCES — camelCase (Dashboard flow, Zustand store)
 // ============================================================================
+//
+// Data ownership:
+//   ┌───────────────────────────────────────────────────────────────────┐
+//   │ Chip Lists (PreferencesPanel)     │ What they own               │
+//   │ airlines[]                        │ airline names + ⭐/☆ flag    │
+//   │ hotelChains[]                     │ chain names + ⭐/☆ flag      │
+//   │ cuisines[]                        │ cuisine names + ⭐/☆ flag    │
+//   │ activities[]                      │ activity names + ⭐/☆ flag   │
+//   ├───────────────────────────────────┼─────────────────────────────┤
+//   │ Detailed Prefs                    │ What they own (settings)    │
+//   │ flightPrefs                       │ maxStops, cabin, time, seat │
+//   │ hotelPrefs                        │ rating, location, amenities │
+//   │ activityPrefs                     │ pace, times, hours/day      │
+//   │ restaurantPrefs                   │ meals, priceLevel           │
+//   │ transportPrefs                    │ modes, walk distance, comfort│
+//   └───────────────────────────────────┴─────────────────────────────┘
+//
+// NO field in detailed prefs duplicates data from the chip lists.
 
 export interface NamedPreference {
   name: string;
-  preferred?: boolean;
+  preferred?: boolean;  // true = ⭐ priority, false = ☆ interested
 }
 
 export interface FlightPreferences {
-  preferredCarriers: string[];
+  // ❌ NO preferredCarriers here — lives in airlines chip list
   maxStops: number;
   cabinClass: string;
   timePreference: string;
@@ -179,11 +206,17 @@ export interface HotelPreferences {
 }
 
 export interface ActivityPreferences {
-  interests: string[];
+  // ❌ NO interests here — lives in activities chip list
   pace: string;
   preferredTimes: string[];
   accessibilityNeeds?: string;
   entertainmentHoursPerDay: number;
+}
+
+export interface RestaurantPreferences {
+  // ❌ NO cuisine names here — lives in cuisines chip list
+  meals: string[];         // e.g. ['lunch', 'dinner'] — which meal slots to fill
+  priceLevel: string[];    // e.g. ['moderate', 'upscale'] — maps to Google price_level
 }
 
 export interface TransportPreferences {
@@ -208,21 +241,22 @@ export interface BudgetTiers {
 }
 
 export interface UserPreferences {
-  // ── UI Preferences (PreferencesPanel) ──────────────────────────────────
+  // ── Chip Lists (PreferencesPanel) — owns NAMES + PRIORITY ─────────────
   airlines: NamedPreference[];
   hotelChains: NamedPreference[];
   cuisines: NamedPreference[];
   activities: NamedPreference[];
-  budget: BudgetTiers;               // ← "budget" — matches useTripData store
+  budget: BudgetTiers;
 
-  // ── Detailed Preferences ───────────────────────────────────────────────
+  // ── Detailed Preferences — owns SETTINGS ONLY, no name lists ──────────
   flightPrefs: FlightPreferences;
   hotelPrefs: HotelPreferences;
   activityPrefs: ActivityPreferences;
+  restaurantPrefs: RestaurantPreferences;
   transportPrefs: TransportPreferences;
   budgetConstraints: BudgetConstraints;
 
-  // ── Additional ─────────────────────────────────────────────────────────
+  // ── Additional ────────────────────────────────────────────────────────
   tripPurpose: string;
   specialRequirements?: string;
 }

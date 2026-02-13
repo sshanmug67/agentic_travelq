@@ -10,9 +10,14 @@ The frontend payload has 5 top-level fields:
   4. preferences   — user preferences (both UI lists and detailed settings)
   5. currentItinerary — what the user has already selected (flight, hotel, restaurants, activities)
 
-Changes (v2):
-  - Fixed: to_legacy_trip_request() now extracts hotelChains → hotel_chains
-    so preferred hotel chains flow through to HotelAgent's text search
+Changes (v4):
+  - Data ownership rule: chip lists own names, detailed prefs own settings
+  - FlightPrefs: removed preferredCarriers (lives in airlines chip list)
+  - ActivityPrefs: removed interests (lives in activities chip list)
+  - RestaurantPrefs: meals + priceLevel (cuisine names live in cuisines chip list)
+  - to_request_dict(): reads names from chip lists ONLY, no fallbacks
+  - Passes priority vs interested split for all categories
+  - cuisine_prefs includes meals + price_level from RestaurantPrefs settings
 """
 from pydantic import BaseModel, Field
 from typing import Optional, List, Any
@@ -23,7 +28,13 @@ from typing import Optional, List, Any
 # ============================================================================
 
 class NamedPreference(BaseModel):
-    """A single named preference with a preferred flag."""
+    """A single named preference with a preferred flag.
+
+    Semantics (set by PreferencesPanel UI):
+      - In list + preferred=True  → ⭐ Priority: agents search harder for these
+      - In list + preferred=False → ☆ Interested: include if available
+      - Not in list               → Not sent: user doesn't care
+    """
     name: str
     preferred: bool = False
 
@@ -36,8 +47,10 @@ class BudgetTiers(BaseModel):
 
 
 class FlightPrefs(BaseModel):
-    """Detailed flight preferences."""
-    preferredCarriers: List[str] = Field(default_factory=list)
+    """Flight settings only — carrier names live in airlines chip list.
+
+    ❌ No preferredCarriers here (was duplicate of airlines[].name)
+    """
     maxStops: int = 1
     cabinClass: str = "economy"
     timePreference: str = "flexible"
@@ -45,7 +58,7 @@ class FlightPrefs(BaseModel):
 
 
 class HotelPrefs(BaseModel):
-    """Detailed hotel preferences."""
+    """Hotel settings only — chain names live in hotelChains chip list."""
     minRating: float = 3.5
     preferredLocation: str = "city_center"
     amenities: List[str] = Field(default_factory=lambda: ["wifi", "breakfast"])
@@ -54,12 +67,23 @@ class HotelPrefs(BaseModel):
 
 
 class ActivityPrefs(BaseModel):
-    """Detailed activity preferences."""
-    interests: List[str] = Field(default_factory=list)
+    """Activity settings only — interest names live in activities chip list.
+
+    ❌ No interests here (was duplicate of activities[].name)
+    """
     pace: str = "moderate"
     preferredTimes: List[str] = Field(default_factory=lambda: ["morning", "afternoon"])
     accessibilityNeeds: Optional[str] = None
     entertainmentHoursPerDay: int = 6
+
+
+class RestaurantPrefs(BaseModel):
+    """Restaurant settings only — cuisine names live in cuisines chip list.
+
+    ❌ No cuisine names here (those live in cuisines[].name)
+    """
+    meals: List[str] = Field(default_factory=lambda: ["lunch", "dinner"])
+    priceLevel: List[str] = Field(default_factory=lambda: ["moderate"])
 
 
 class TransportPrefs(BaseModel):
@@ -82,29 +106,37 @@ class BudgetConstraints(BaseModel):
 class Preferences(BaseModel):
     """
     All user preferences from the frontend.
-    Combines UI lists (airlines, cuisines, etc.) + detailed settings.
+
+    Data ownership:
+      Chip lists (airlines, hotelChains, cuisines, activities)
+        → Own NAMES + ⭐/☆ priority flags
+      Detailed prefs (flightPrefs, hotelPrefs, activityPrefs, restaurantPrefs, transportPrefs)
+        → Own SETTINGS ONLY (maxStops, pace, amenities, meals, priceLevel, etc.)
+        → NO duplicate name lists
+
     Every field has defaults so partial payloads are fine.
     """
-    # UI Preferences (PreferencesPanel)
+    # ── Chip Lists — own NAMES + PRIORITY ────────────────────────────────
     airlines: List[NamedPreference] = Field(default_factory=list)
     hotelChains: List[NamedPreference] = Field(default_factory=list)
     cuisines: List[NamedPreference] = Field(default_factory=list)
     activities: List[NamedPreference] = Field(default_factory=list)
-    budget: Optional[BudgetTiers] = None          # Tier labels from PreferencesPanel UI
+    budget: Optional[BudgetTiers] = None
 
-    # Detailed Preferences
+    # ── Detailed Prefs — own SETTINGS ONLY ───────────────────────────────
     flightPrefs: Optional[FlightPrefs] = None
     hotelPrefs: Optional[HotelPrefs] = None
     activityPrefs: Optional[ActivityPrefs] = None
+    restaurantPrefs: Optional[RestaurantPrefs] = None
     transportPrefs: Optional[TransportPrefs] = None
-    budgetConstraints: Optional[BudgetConstraints] = None  # Numeric budget splits
+    budgetConstraints: Optional[BudgetConstraints] = None
 
-    # Additional
+    # ── Additional ───────────────────────────────────────────────────────
     tripPurpose: str = "leisure"
     specialRequirements: Optional[str] = None
 
     class Config:
-        extra = "allow"  # Accept fields we don't know about yet
+        extra = "allow"
 
 
 # ============================================================================
@@ -148,7 +180,7 @@ class TripSearchRequest(BaseModel):
     preferences: Optional[Preferences] = Field(default=None)
     currentItinerary: Optional[CurrentItinerary] = Field(default=None)
 
-    # --- Helper properties ---------------------------------------------------
+    # ── Helper properties ────────────────────────────────────────────────
 
     @property
     def is_new_trip(self) -> bool:
@@ -165,6 +197,8 @@ class TripSearchRequest(BaseModel):
         itin = self.currentItinerary
         return bool(itin.flight or itin.hotel or itin.restaurants or itin.activities)
 
+    # ── Chip list extractors (⭐ priority vs ☆ interested) ───────────────
+
     @property
     def preferred_airlines(self) -> List[str]:
         if not self.preferences:
@@ -172,11 +206,28 @@ class TripSearchRequest(BaseModel):
         return [a.name for a in self.preferences.airlines if a.preferred]
 
     @property
+    def interested_airlines(self) -> List[str]:
+        if not self.preferences:
+            return []
+        return [a.name for a in self.preferences.airlines if not a.preferred]
+
+    @property
+    def all_airline_names(self) -> List[str]:
+        if not self.preferences:
+            return []
+        return [a.name for a in self.preferences.airlines]
+
+    @property
     def preferred_hotel_chains(self) -> List[str]:
-        """Extract preferred hotel chain names from UI hotelChains list."""
         if not self.preferences:
             return []
         return [c.name for c in self.preferences.hotelChains if c.preferred]
+
+    @property
+    def interested_hotel_chains(self) -> List[str]:
+        if not self.preferences:
+            return []
+        return [c.name for c in self.preferences.hotelChains if not c.preferred]
 
     @property
     def preferred_cuisines(self) -> List[str]:
@@ -185,40 +236,56 @@ class TripSearchRequest(BaseModel):
         return [c.name for c in self.preferences.cuisines if c.preferred]
 
     @property
+    def interested_cuisines(self) -> List[str]:
+        if not self.preferences:
+            return []
+        return [c.name for c in self.preferences.cuisines if not c.preferred]
+
+    @property
+    def all_cuisine_names(self) -> List[str]:
+        if not self.preferences:
+            return []
+        return [c.name for c in self.preferences.cuisines]
+
+    @property
     def preferred_activities(self) -> List[str]:
         if not self.preferences:
             return []
         return [a.name for a in self.preferences.activities if a.preferred]
 
     @property
+    def interested_activities(self) -> List[str]:
+        if not self.preferences:
+            return []
+        return [a.name for a in self.preferences.activities if not a.preferred]
+
+    @property
     def all_activity_names(self) -> List[str]:
-        """All activity names (not just preferred), for interests list."""
         if not self.preferences:
             return []
         return [a.name for a in self.preferences.activities]
 
-    # --- Bridge to legacy TravelPreferences ----------------------------------
+    # ── Convert to search dict ───────────────────────────────────────────
 
-    def to_legacy_trip_request(self) -> dict:
+    def to_request_dict(self) -> dict:
         """
-        Convert to the old TripRequest-compatible dict that feeds into
-        trip_planning_service → user_proxy_agent → orchestrator.
+        Convert frontend camelCase payload to snake_case dict for the
+        request converter and planning service.
 
-        This bridge merges:
-          - tripDetails (dates, destination, budget)
-          - preferences.airlines/hotelChains/activities/cuisines (UI lists)
-          - preferences.flightPrefs/hotelPrefs/etc. (detailed settings)
+        Data sources (no duplication):
+          Names      → from chip lists ONLY (airlines, hotelChains, cuisines, activities)
+          Settings   → from detailed prefs ONLY (flightPrefs, hotelPrefs, etc.)
+          Budget     → from budgetConstraints or computed from total
 
-        into the flat structure that TravelPreferences expects.
-
-        All fields are guaranteed non-None so downstream code
-        (user_proxy_agent.get_preferences_summary) won't crash.
+        Each category carries two name lists for agents to weight:
+          preferred_*   → ⭐ starred items  → search harder, rank higher
+          interested_*  → ☆ unstarred items → include but lower weight
         """
         td = self.tripDetails
         prefs = self.preferences or Preferences()
         total = td.budget or 0
 
-        # ── Compute trip duration for per-day/per-night splits ──────────
+        # ── Compute trip duration ───────────────────────────────────────
         num_days = 5  # fallback
         if td.startDate and td.endDate:
             from datetime import datetime
@@ -229,33 +296,28 @@ class TripSearchRequest(BaseModel):
             except ValueError:
                 num_days = 5
 
-        # ── Read detailed prefs with safe defaults ─────────────────────
+        # ── Settings from detailed prefs (no name lists here) ──────────
         fp = prefs.flightPrefs or FlightPrefs()
         hp = prefs.hotelPrefs or HotelPrefs()
         ap = prefs.activityPrefs or ActivityPrefs()
+        rp = prefs.restaurantPrefs or RestaurantPrefs()
         tp = prefs.transportPrefs or TransportPrefs()
         bc = prefs.budgetConstraints or BudgetConstraints()
 
-        # ── Merge: preferred airline names into carriers list ──────────
-        carriers = self.preferred_airlines
-        if fp.preferredCarriers and not carriers:
-            carriers = fp.preferredCarriers
+        # ── Names from chip lists ONLY ─────────────────────────────────
+        priority_carriers = self.preferred_airlines
+        interested_carriers = self.interested_airlines
 
-        # ── Merge: all activity names into interests list ──────────────
-        interests = self.all_activity_names
-        if ap.interests and not interests:
-            interests = ap.interests
+        priority_chains = self.preferred_hotel_chains
+        interested_chains = self.interested_hotel_chains
 
-        # ── Extract preferred hotel chains from UI list ────────────────
-        # Frontend sends: hotelChains: [{name: "Marriott", preferred: true}, ...]
-        # We convert to a list of dicts for the converter to extract names.
-        hotel_chains = [
-            {"name": c.name, "preferred": c.preferred}
-            for c in prefs.hotelChains
-        ]
+        priority_interests = self.preferred_activities
+        interested_interests = self.interested_activities
 
-        # ── Budget: use frontend-computed constraints if available,
-        #    otherwise compute from total ───────────────────────────────
+        priority_cuisines = self.preferred_cuisines
+        interested_cuisines = self.interested_cuisines
+
+        # ── Budget ─────────────────────────────────────────────────────
         flight_budget = bc.flightBudget if bc.flightBudget > 0 else round(total * 0.30, 2)
         hotel_per_night = bc.hotelBudgetPerNight if bc.hotelBudgetPerNight > 0 else (
             round((total * 0.35) / num_days, 2) if num_days else 0
@@ -285,27 +347,34 @@ class TripSearchRequest(BaseModel):
                 "currency": "USD",
             },
             "flight_prefs": {
-                "preferred_carriers": carriers,
-                "max_stops": fp.maxStops,
+                "preferred_carriers": priority_carriers,       # ⭐ from chip list
+                "interested_carriers": interested_carriers,    # ☆ from chip list
+                "max_stops": fp.maxStops,                      # from settings
                 "cabin_class": fp.cabinClass,
                 "time_preference": fp.timePreference,
                 "seat_preference": fp.seatPreference,
             },
             "hotel_prefs": {
-                "min_rating": hp.minRating,
+                "preferred_chains": priority_chains,           # ⭐ from chip list
+                "interested_chains": interested_chains,        # ☆ from chip list
+                "min_rating": hp.minRating,                    # from settings
                 "preferred_location": hp.preferredLocation,
                 "amenities": hp.amenities,
                 "room_type": hp.roomType,
                 "price_range": hp.priceRange,
-                "preferred_chains": [
-                    c.name for c in prefs.hotelChains if c.preferred
-                ],
             },
             "activity_prefs": {
-                "interests": interests,
-                "pace": ap.pace,
+                "preferred_interests": priority_interests,     # ⭐ from chip list
+                "interested_interests": interested_interests,  # ☆ from chip list
+                "pace": ap.pace,                               # from settings
                 "preferred_times": ap.preferredTimes,
                 "entertainment_hours_per_day": ap.entertainmentHoursPerDay,
+            },
+            "cuisine_prefs": {
+                "preferred_cuisines": priority_cuisines,        # ⭐ from chip list
+                "interested_cuisines": interested_cuisines,     # ☆ from chip list
+                "meals": rp.meals,                              # from settings
+                "price_level": rp.priceLevel,                   # from settings
             },
             "transport_prefs": {
                 "preferred_modes": tp.preferredModes,

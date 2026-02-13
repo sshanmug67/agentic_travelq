@@ -1,4 +1,13 @@
 // frontend/src/hooks/useTripData.ts
+//
+// Changes (v3):
+//   - flightPrefs: removed preferredCarriers (lives in airlines chip list)
+//   - activityPrefs: removed interests (lives in activities chip list)
+//   - Added clear comments on data ownership
+//
+// Data ownership rule:
+//   Chip lists → names + ⭐/☆ priority
+//   Detailed prefs → settings only (no name lists)
 
 import { create } from 'zustand';
 import type { Flight, Hotel, Restaurant, Activity, UserPreferences } from '../types/trip';
@@ -30,15 +39,21 @@ const DEFAULT_TRIP_DATA: TripData = {
 };
 
 /**
- * Default preferences matching backend's TravelPreferences structure.
+ * Default preferences.
  *
- * These serve as the "user profile" until we have DB-backed user accounts.
- * The PreferencesPanel UI modifies the top-level lists (airlines, cuisines, etc.).
- * The detailed prefs (flightPrefs, hotelPrefs, etc.) use these defaults
- * and will eventually be editable via an "Advanced Preferences" UI.
+ * Data ownership:
+ *   Chip lists (airlines, hotelChains, cuisines, activities)
+ *     → Own the NAMES + ⭐/☆ priority flags
+ *     → PreferencesPanel UI modifies these
+ *
+ *   Detailed prefs (flightPrefs, hotelPrefs, activityPrefs, transportPrefs)
+ *     → Own SETTINGS ONLY (maxStops, pace, amenities, etc.)
+ *     → NO name lists here — avoids duplication with chip lists
+ *     → Will eventually be editable via an "Advanced Preferences" UI
  */
 const DEFAULT_PREFERENCES: UserPreferences = {
-  // ── UI Preferences (shown in PreferencesPanel) ────────────────────────
+  // ── Chip Lists (shown in PreferencesPanel) ────────────────────────────
+  // These are the SINGLE SOURCE OF TRUTH for names + priority
   airlines: [
     { name: 'United Airlines', preferred: true },
     { name: 'British Airways', preferred: false },
@@ -65,18 +80,15 @@ const DEFAULT_PREFERENCES: UserPreferences = {
     activities: 'Mostly free/low-cost',
   },
 
-  // ── Detailed Flight Preferences ───────────────────────────────────────
-  // Backend: FlightPreferences in user_preferences.py
+  // ── Flight Settings (no carrier names — those live in airlines[]) ─────
   flightPrefs: {
-    preferredCarriers: ['United Airlines'],  // Matches starred airlines above
     maxStops: 1,
     cabinClass: 'economy',
     timePreference: 'flexible',
     seatPreference: 'window',
   },
 
-  // ── Detailed Hotel Preferences ────────────────────────────────────────
-  // Backend: HotelPreferences in user_preferences.py
+  // ── Hotel Settings (no chain names — those live in hotelChains[]) ─────
   hotelPrefs: {
     minRating: 3.5,
     preferredLocation: 'city_center',
@@ -85,17 +97,20 @@ const DEFAULT_PREFERENCES: UserPreferences = {
     priceRange: 'moderate',
   },
 
-  // ── Detailed Activity Preferences ─────────────────────────────────────
-  // Backend: ActivityPreferences in user_preferences.py
+  // ── Activity Settings (no interests — those live in activities[]) ─────
   activityPrefs: {
-    interests: ['Museums', 'Historic Landmarks', 'Walking Tours', 'Theater'],
     pace: 'moderate',
     preferredTimes: ['morning', 'afternoon'],
     entertainmentHoursPerDay: 6,
   },
 
-  // ── Detailed Transport Preferences ────────────────────────────────────
-  // Backend: TransportPreferences in user_preferences.py
+  // ── Restaurant Settings (no cuisine names — those live in cuisines[]) ─
+  restaurantPrefs: {
+    meals: ['lunch', 'dinner'],       // which meal slots to search for
+    priceLevel: ['moderate'],         // maps to Google Places price_level
+  },
+
+  // ── Transport Settings ────────────────────────────────────────────────
   transportPrefs: {
     preferredModes: ['metro', 'walk', 'cab'],
     maxWalkDistance: 1.0,
@@ -103,14 +118,12 @@ const DEFAULT_PREFERENCES: UserPreferences = {
   },
 
   // ── Budget Constraints (computed from totalBudget) ────────────────────
-  // Backend: BudgetConstraints in user_preferences.py
-  // These are recalculated whenever totalBudget changes (see helper below)
   budgetConstraints: {
     totalBudget: 4000,
     flightBudget: 1200,            // 30%
     hotelBudgetPerNight: 280,      // 35% ÷ nights
     dailyActivityBudget: 160,      // 20% ÷ days
-    dailyFoodBudget: 80,           // 10% ÷ days  (was included in activ. split)
+    dailyFoodBudget: 80,           // 10% ÷ days
     transportBudget: 200,          // 5%
   },
 

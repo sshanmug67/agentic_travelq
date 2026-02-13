@@ -1,4 +1,11 @@
 // frontend/src/components/common/TripSummaryBar.tsx
+//
+// v4: Only spacing changes — all font sizes identical to original
+//   - py-4 → py-2
+//   - mb-2 → mb-1
+//   - mt-3 → mt-1
+//   - Budget bar h-2 → h-1.5
+//   - Everything else: UNCHANGED from original
 
 import React, { useState } from 'react';
 import { useTripData } from '../../hooks/useTripData';
@@ -55,11 +62,8 @@ export const TripSummaryBar: React.FC = () => {
       'Start a new trip? This will clear your current itinerary.'
     );
     if (confirmed) {
-      // Use resetTrip() which resets everything: id → null, origin → 'New York', etc.
       resetTrip();
       clearItinerary();
-
-      // Sync temp values with the fresh defaults
       setTempValues({
         origin: 'New York',
         destination: 'London, UK',
@@ -69,7 +73,7 @@ export const TripSummaryBar: React.FC = () => {
         budget: 4000,
       });
       setShowOrigin(true);
-      setEditMode({ field: 'destination' }); // Focus on destination input
+      setEditMode({ field: 'destination' });
     }
     setShowTripMenu(false);
   };
@@ -99,8 +103,8 @@ export const TripSummaryBar: React.FC = () => {
 
   return (
     <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-xl">
-      <div className="px-6 py-4">
-        <div className="flex items-center justify-between mb-2">
+      <div className="px-6 py-2">
+        <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold opacity-90">
               {tripData.id ? 'Current Trip' : 'New Trip'}
@@ -434,12 +438,12 @@ export const TripSummaryBar: React.FC = () => {
 
         {/* Budget Progress Bar */}
         {budget.total > 0 && (
-          <div className="mt-3">
+          <div className="mt-1">
             <div className="flex justify-between text-xs mb-1">
               <span>Spent: ${budget.selected.toLocaleString()}</span>
               <span>Remaining: ${budget.remaining.toLocaleString()}</span>
             </div>
-            <div className="h-2 bg-white/30 rounded-full overflow-hidden">
+            <div className="h-1.5 bg-white/30 rounded-full overflow-hidden">
               <div
                 className={`h-full transition-all duration-500 ${
                   budget.selected / budget.total >= 0.9

@@ -8,25 +8,25 @@ Single POST /api/trips/search endpoint that handles:
   3. Selection saves          (tripId set, currentItinerary changed)
   4. Combined refine + save   (tripId set, multiple things changed)
 
+Changes (v4):
+  - Removed TripRequest intermediary — passes request dict directly to service
+  - Old: to_request_dict() → TripRequest(**dict) → plan_trip(TripRequest)
+    ❌ TripRequest silently dropped cuisine_prefs, interested_carriers, etc.
+  - New: to_request_dict() → plan_trip(dict)
+    ✅ All data flows through to the converter
+
 Logging: Uses standard Python logging via logging.getLogger(__name__).
-         main.py calls setup_logging() which configures the root logger
-         with console + file handlers. Any child logger (like this one)
-         automatically inherits those handlers and writes to the same files.
 """
 import logging
 import traceback
 
 from fastapi import APIRouter, HTTPException
 
-from models.trip import TripRequest, TripResponse
+from models.trip import TripResponse
 from models.trip_search_request import TripSearchRequest
 from services.trip_planning_service import trip_planning_service
-from utils.logging_config import log_json_raw
+from utils.logging_config import log_json_raw, log_info_raw
 
-# ── Logger ───────────────────────────────────────────────────────────────────
-# Creates a logger named "api.routes.trips" (matching module path).
-# Inherits the root logger's handlers from setup_logging() in main.py,
-# so output goes to console + travel_dashboard_all_messages.log, etc.
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/trips", tags=["trips"])
@@ -51,7 +51,7 @@ async def search_trip(request: TripSearchRequest):
     logger.info("=" * 80)
 
     try:
-        # ── Log incoming request summary (JSON format) ────────────────────
+        # ── Log incoming request summary ──────────────────────────────
         td = request.tripDetails
         log_json_raw({
             "tripId": request.tripId or "(new trip)",
@@ -75,9 +75,11 @@ async def search_trip(request: TripSearchRequest):
         # ── Route to the right handler ──────────────────────────────────
         if request.is_new_trip:
             logger.info("🆕 New trip — running full search")
+            log_info_raw("🆕 New trip — running full search")
             result = await _handle_new_trip(request)
         else:
             logger.info(f"🔄 Existing trip {request.tripId} — determining changes")
+            log_info_raw(f"🔄 Existing trip {request.tripId} — determining changes")
             result = await _handle_existing_trip(request)
 
         response = TripResponse(**result)
@@ -104,18 +106,17 @@ async def _handle_new_trip(request: TripSearchRequest) -> dict:
     """
     Brand-new trip. Run full planning pipeline.
 
-    Bridge strategy: convert TripSearchRequest → legacy TripRequest so
-    existing trip_planning_service works unchanged.
+    Passes the request dict directly to trip_planning_service — no TripRequest
+    intermediary that would silently drop fields like cuisine_prefs.
     """
-    legacy_data = request.to_legacy_trip_request()
-    legacy_request = TripRequest(**legacy_data)
+    request_dict = request.to_request_dict()
 
     logger.info("📤 Delegating to TripPlanningService (new trip)")
-    logger.info(f"   Legacy request: origin={legacy_request.origin}, "
-                f"dest={legacy_request.destination}, "
-                f"dates={legacy_request.departure_date}→{legacy_request.return_date}")
+    logger.info(f"   origin={request_dict.get('origin')}, "
+                f"dest={request_dict.get('destination')}, "
+                f"dates={request_dict.get('departure_date')}→{request_dict.get('return_date')}")
 
-    result = await trip_planning_service.plan_trip(legacy_request)
+    result = await trip_planning_service.plan_trip(request_dict)
     return result
 
 
@@ -126,11 +127,10 @@ async def _handle_existing_trip(request: TripSearchRequest) -> dict:
     TODO: Implement differential logic once trip state storage exists.
     For now, treat every existing-trip request as a full re-plan.
     """
-    legacy_data = request.to_legacy_trip_request()
-    legacy_request = TripRequest(**legacy_data)
+    request_dict = request.to_request_dict()
 
     logger.info(f"📤 Delegating to TripPlanningService (existing trip: {request.tripId})")
-    result = await trip_planning_service.plan_trip(legacy_request)
+    result = await trip_planning_service.plan_trip(request_dict)
     return result
 
 

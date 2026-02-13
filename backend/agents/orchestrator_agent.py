@@ -6,6 +6,7 @@ Changes:
   - orchestrate() now reads recommendations from storage via get_recommendations()
   - Attaches recommendations dict to the returned result
   - _generate_final_recommendation() receives recommendations for better context
+  - v4: Fixed activity_prefs.interests → preferred_interests + interested_interests
 """
 from typing import List, Dict, Any
 
@@ -413,13 +414,17 @@ Instead, you delegate to specialized agents and coordinate their results.
         # Helper to safely format budget
         def format_budget(value):
             return f"${value:.0f}" if value else "unspecified"
-        
+
+        # Combine preferred + interested for display
+        all_interests = preferences.activity_prefs.preferred_interests + preferences.activity_prefs.interested_interests
+        interests_display = ', '.join(all_interests) if all_interests else 'general sightseeing'
+
         agent_descriptions = {
             "flight": f"FlightAgent will find flights from {preferences.origin} to {preferences.destination} within {format_budget(preferences.budget.flight_budget)} budget",
             "hotel": f"HotelAgent will find hotels in {preferences.destination} meeting {preferences.hotel_prefs.min_rating}-star requirement at {format_budget(preferences.budget.hotel_budget_per_night)}/night",
-            "weather": f"WeatherAgent will provide {self.calculate_trip_duration(preferences)}-day weather forecast for {preferences.destination}",  # ✅ ADD THIS
-            "events": f"EventsAgent will find events and activities matching interests: {', '.join(preferences.activity_prefs.interests)}",
-            "places": f"PlacesAgent will recommend restaurants and attractions for: {', '.join(preferences.activity_prefs.interests)}"
+            "weather": f"WeatherAgent will provide {self.calculate_trip_duration(preferences)}-day weather forecast for {preferences.destination}",
+            "events": f"EventsAgent will find events and activities matching interests: {interests_display}",
+            "places": f"PlacesAgent will recommend restaurants and attractions for: {interests_display}"
         }
         
         active_agents = [agent_descriptions[agent] for agent in agents_needed if agent in agent_descriptions]
