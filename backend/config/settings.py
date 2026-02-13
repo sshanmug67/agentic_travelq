@@ -93,15 +93,18 @@ class Settings:
         self.flight_agent_max_results: int = 10
         
         self.hotel_agent_enabled: bool = True
-        
+        self.hotel_agent_max_results: int = 10
+
         self.weather_agent_enabled: bool = True
         self.weather_agent_forecast_days: int = 5
         
         self.events_agent_enabled: bool = True
         self.events_agent_max_results: int = 20
-        
+
         self.places_agent_enabled: bool = True
         self.places_agent_max_results: int = 20
+        self.places_agent_restaurants_max_results: int = 15
+        self.places_agent_activities_max_results: int = 15
         
         self.orchestrator_agent_enabled: bool = True
         self.orchestrator_parallel_execution: bool = True
@@ -250,10 +253,8 @@ class Settings:
                 if "hotel" in agents:
                     hotel = agents["hotel"]
                     self.hotel_agent_enabled = hotel.get("enabled", self.hotel_agent_enabled)
-                
-                if "hotel" in agents:
-                    hotel = agents["hotel"]
-                    self.hotel_agent_enabled = hotel.get("enabled", self.hotel_agent_enabled)
+                    # FIX: was reading from `flight` dict — now correctly reads from `hotel`
+                    self.hotel_agent_max_results = hotel.get("max_results", self.hotel_agent_max_results)
                 
                 if "weather" in agents:
                     weather = agents["weather"]
@@ -264,11 +265,13 @@ class Settings:
                     events = agents["events"]
                     self.events_agent_enabled = events.get("enabled", self.events_agent_enabled)
                     self.events_agent_max_results = events.get("max_results", self.events_agent_max_results)
-                
+
                 if "places" in agents:
                     places = agents["places"]
                     self.places_agent_enabled = places.get("enabled", self.places_agent_enabled)
                     self.places_agent_max_results = places.get("max_results", self.places_agent_max_results)
+                    self.places_agent_restaurants_max_results = places.get("restaurants_max_results", self.places_agent_restaurants_max_results)
+                    self.places_agent_activities_max_results = places.get("activities_max_results", self.places_agent_activities_max_results)
                 
                 if "orchestrator" in agents:
                     orchestrator = agents["orchestrator"]
@@ -432,10 +435,11 @@ class Settings:
         logger.info("\n📋 Agent Status:")
         agents_status = {
             "Flight":       (self.flight_agent_enabled,       f"max_results={self.flight_agent_max_results}"),
-            "Hotel":        (self.hotel_agent_enabled,        None),
+            # FIX: was referencing flight_agent_max_results — now correctly uses hotel_agent_max_results
+            "Hotel":        (self.hotel_agent_enabled,        f"max_results={self.hotel_agent_max_results}"),
             "Weather":      (self.weather_agent_enabled,      f"forecast_days={self.weather_agent_forecast_days}"),
             "Events":       (self.events_agent_enabled,       f"max_results={self.events_agent_max_results}"),
-            "Places":       (self.places_agent_enabled,       f"max_results={self.places_agent_max_results}"),
+            "Places":       (self.places_agent_enabled,       f"max_results={self.places_agent_max_results}, restaurants={self.places_agent_restaurants_max_results}, activities={self.places_agent_activities_max_results}"),
             "Orchestrator": (self.orchestrator_agent_enabled, f"parallel={self.orchestrator_parallel_execution}"),
         }
         for name, (enabled, extra) in agents_status.items():

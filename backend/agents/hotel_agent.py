@@ -16,6 +16,11 @@ Changes (v2):
   - Summary is the conversational message; recommended_id gets stored
   - store_recommendation() called so frontend can read recommendations.hotel
 
+Changes (v3):
+  - Fixed: max_results now flows from settings.hotel_agent_max_results
+  - Fixed: reviews-per-hotel limit decoupled from hotel max_results
+  - Fixed: generate_reply passes max_results to _search_hotels_complete
+
 Location: backend/agents/hotel_agent.py
 """
 import json
@@ -35,6 +40,9 @@ from models.trip import Hotel, HotelAmenities, HotelReview
 from utils.logging_config import log_agent_raw, log_agent_json
 from config.settings import settings
 import openai
+
+# Maximum number of reviews to store per hotel (independent of hotel max_results)
+MAX_REVIEWS_PER_HOTEL = 5
 
 
 class HotelAgent(TravelQBaseAgent):
@@ -82,6 +90,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         log_agent_raw("   ✓ Xotelo pricing service", agent_name="HotelAgent")
         log_agent_raw("   ✓ Amadeus fallback", agent_name="HotelAgent")
         log_agent_raw("   ✓ Booking link generator", agent_name="HotelAgent")
+        log_agent_raw(f"   ✓ Max results: {settings.hotel_agent_max_results}", agent_name="HotelAgent")
     
     def generate_reply(
         self,
@@ -129,13 +138,14 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         try:
             start_time = time.time()
             
-            # Search hotels with complete workflow
+            # FIX: Pass max_results from settings instead of relying on hardcoded default
             hotels = self._search_hotels_complete(
                 destination=search_params["destination"],
                 check_in_date=search_params["check_in_date"],
                 check_out_date=search_params["check_out_date"],
                 adults=search_params["num_travelers"],
-                min_rating=search_params["min_rating"]
+                min_rating=search_params["min_rating"],
+                max_results=settings.hotel_agent_max_results
             )
             
             api_duration = time.time() - start_time
@@ -196,7 +206,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             return self.signal_completion(error_msg)
     
     # ─────────────────────────────────────────────────────────────────────
-    # HOTEL SEARCH WORKFLOW (unchanged)
+    # HOTEL SEARCH WORKFLOW
     # ─────────────────────────────────────────────────────────────────────
 
     def _search_hotels_complete(
@@ -206,7 +216,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         check_out_date: str,
         adults: int = 2,
         min_rating: float = 3.0,
-        max_results: int = 5
+        max_results: int = 10
     ) -> List[Hotel]:
         """
         Complete hotel search workflow
@@ -216,6 +226,10 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         3. Estimation → Fallback
         4. Amadeus → Backup if Google fails
         5. Booking Links → All hotels
+        
+        Args:
+            max_results: Maximum number of hotels to return. 
+                         Driven by settings.hotel_agent_max_results (default 10).
         """
         log_agent_raw("=" * 80, agent_name="HotelAgent")
         log_agent_raw("🔍 COMPLETE HOTEL SEARCH WORKFLOW", agent_name="HotelAgent")
@@ -233,6 +247,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         log_agent_raw(f"   Nights: {num_nights}", agent_name="HotelAgent")
         log_agent_raw(f"   Adults: {adults}", agent_name="HotelAgent")
         log_agent_raw(f"   Min Rating: {min_rating}", agent_name="HotelAgent")
+        log_agent_raw(f"   Max Results: {max_results}", agent_name="HotelAgent")
         
         # STRATEGY 1: Try Google Places (preferred)
         log_agent_raw("", agent_name="HotelAgent")
@@ -291,6 +306,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                         ratings=ratings,
                         radius=20,
                         radius_unit="KM",
+                        max_results=max_results,
                         agent_logger=self.logger
                     )
                     
@@ -473,10 +489,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         num_nights: int
     ) -> Hotel:
         """Create Hotel object from Google Places + pricing + links"""
-        
+
+        # FIX: Use dedicated constant for review limit (was incorrectly using hotel_agent_max_results)
         reviews = []
         if google_data.get('reviews'):
-            for review_dict in google_data['reviews'][:5]:
+            for review_dict in google_data['reviews'][:MAX_REVIEWS_PER_HOTEL]:
                 try:
                     reviews.append(HotelReview(**review_dict))
                 except:

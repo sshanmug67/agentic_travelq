@@ -65,19 +65,25 @@ agents:
   flight:
     enabled: true
     max_results: 10             # Max flight results to return
-    
+
+  hotel:
+    enabled: true
+    max_results: 15             # Max hotel results to return
+
   weather:
     enabled: true
     forecast_days: 5            # Number of days to forecast
-    
+
   events:
     enabled: true
     max_results: 20             # Max events to return
-    
+
   places:
     enabled: true
-    max_results: 20             # Max places to return
-    
+    max_results: 50             # Max places to return (fallback for uncategorized)
+    restaurants_max_results: 15 # Max restaurant results to return
+    activities_max_results: 15  # Max activity results to return
+
   orchestrator:
     enabled: true
     parallel_execution: true    # Run agents in parallel
@@ -86,7 +92,7 @@ agents:
 rate_limit:
   enabled: false
   requests_per_minute: 60
-  
+
 # --- Caching ---
 cache:
   enabled: true
