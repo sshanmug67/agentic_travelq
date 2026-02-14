@@ -113,26 +113,36 @@ AIRLINE_NAMES: Dict[str, str] = {
     "WS": "WestJet",
     "PD": "Porter Airlines",
     # Europe
+    "A3": "Aegean Airlines",
     "AF": "Air France",
     "AY": "Finnair",
     "AZ": "ITA Airways",
     "BA": "British Airways",
+    "BT": "airBaltic",
+    "DY": "Norwegian",
     "EI": "Aer Lingus",
     "EW": "Eurowings",
+    "FI": "Icelandair",
     "FR": "Ryanair",
     "IB": "Iberia",
+    "JU": "Air Serbia",
     "KL": "KLM Royal Dutch Airlines",
     "LH": "Lufthansa",
     "LO": "LOT Polish Airlines",
     "LX": "Swiss International Air Lines",
     "OS": "Austrian Airlines",
+    "OU": "Croatia Airlines",
+    "PC": "Pegasus Airlines",
+    "RO": "TAROM",
     "SK": "SAS Scandinavian Airlines",
     "SN": "Brussels Airlines",
     "TP": "TAP Air Portugal",
     "TK": "Turkish Airlines",
     "U2": "easyJet",
+    "VS": "Virgin Atlantic",
     "VY": "Vueling",
     "W6": "Wizz Air",
+    "WK": "Edelweiss Air",
     # Middle East & Africa
     "EK": "Emirates",
     "ET": "Ethiopian Airlines",
@@ -1023,11 +1033,6 @@ CRITICAL RULES:
             agent_name="FlightAgent"
         )
 
-        log_agent_raw(
-            f"\n\n{prompt}\n",
-            agent_name="FlightAgent"
-        )
-
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
 
@@ -1383,9 +1388,6 @@ CRITICAL RULES:
         log_agent_raw("🤖 Asking LLM to pick best flight based on preferences...", 
                      agent_name="FlightAgent")
         
-        log_agent_raw("\n\n{prompt}\n\n", 
-                     agent_name="FlightAgent")
-
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
             
