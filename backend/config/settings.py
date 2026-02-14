@@ -48,6 +48,11 @@ class Settings:
         ]
         
         # =============================================================
+        # Redis (Async Pipeline)
+        # =============================================================
+        self.redis_url: str = "redis://localhost:6379/0"
+
+        # =============================================================
         # Supabase
         # =============================================================
         self.supabase_url: Optional[str] = None
@@ -202,6 +207,11 @@ class Settings:
                 cors = data["cors"]
                 self.cors_origins = cors.get("origins", self.cors_origins)
             
+            # --- Redis ---
+            if "redis" in data:
+                redis_conf = data["redis"]
+                self.redis_url = redis_conf.get("url", self.redis_url)
+                
             # --- Supabase ---
             if "supabase" in data:
                 supabase = data["supabase"]
@@ -300,6 +310,11 @@ class Settings:
     def _load_from_environment(self):
         """Load configuration from environment variables (highest priority)"""
         
+        # --- Redis ---
+        if os.getenv("REDIS_URL"):
+            self.redis_url = os.getenv("REDIS_URL")
+            logger.info(f"✓ REDIS_URL: {self.redis_url}")
+
         # --- Supabase ---
         if os.getenv("SUPABASE_URL"):
             self.supabase_url = os.getenv("SUPABASE_URL")

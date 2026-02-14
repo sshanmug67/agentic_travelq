@@ -2,15 +2,23 @@
 Smart Orchestrator Agent - Dynamic Agent Selection with Storage
 Location: backend/agents/orchestrator_agent.py
 
-Changes:
-  - orchestrate() now reads recommendations from storage via get_recommendations()
+Changes (v5 — Async Pipeline):
+  - orchestrate() accepts optional trip_id + trip_storage parameters
+  - When called from Celery task, uses external Redis-backed storage
+  - When called directly (legacy), creates its own InMemoryTripStorage
+  - Agents write to whatever storage was injected → Redis updates in real-time
+  - Removed duplicate trip_id/storage creation block
+
+Changes (v4):
+  - orchestrate() reads recommendations from storage via get_recommendations()
   - Attaches recommendations dict to the returned result
   - _generate_final_recommendation() receives recommendations for better context
-  - v4: Fixed activity_prefs.interests → preferred_interests + interested_interests
+  - Fixed activity_prefs.interests → preferred_interests + interested_interests
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from services.storage.inmemory_storage import get_trip_storage
+from services.storage.storage_base import TripStorageInterface
 from utils.logging_config import log_agent_raw, log_agent_json
 from config.settings import settings
 import os
@@ -232,7 +240,12 @@ Instead, you delegate to specialized agents and coordinate their results.
         return log_filename
 
 
-    async def orchestrate(self, user_proxy: TravelQUserProxy) -> Dict[str, Any]:
+    async def orchestrate(
+        self,
+        user_proxy: TravelQUserProxy,
+        trip_id: Optional[str] = None,
+        trip_storage: Optional[TripStorageInterface] = None,
+    ) -> Dict[str, Any]:
         """
         Main orchestration method with centralized storage
         
@@ -243,6 +256,10 @@ Instead, you delegate to specialized agents and coordinate their results.
 
         Args:
             user_proxy: User proxy agent with preferences
+            trip_id: Optional external trip ID (from Celery/Redis pipeline).
+                     If None, generates a new one (legacy behavior).
+            trip_storage: Optional external storage backend (e.g. _RedisBackedTripStorage).
+                          If None, creates InMemoryTripStorage (legacy behavior).
             
         Returns:
             Dictionary with conversation history and results
@@ -252,17 +269,29 @@ Instead, you delegate to specialized agents and coordinate their results.
         
         preferences = user_proxy.user_preferences
         
-        # ✅ Create trip ID and storage
-        trip_id = f"trip_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        trip_storage = get_trip_storage()
+        # ═══════════════════════════════════════════════════════════════════
+        # v5: Use injected trip_id + storage if provided (async pipeline),
+        #     otherwise create defaults (legacy / direct call)
+        # ═══════════════════════════════════════════════════════════════════
+        if trip_id and trip_storage:
+            log_agent_raw(
+                f"📦 Using EXTERNAL storage (injected by Celery task) — trip_id={trip_id}",
+                agent_name="OrchestratorAgent"
+            )
+            log_agent_raw(
+                f"   Storage type: {type(trip_storage).__name__}",
+                agent_name="OrchestratorAgent"
+            )
+        else:
+            # Legacy path: create our own trip_id + in-memory storage
+            trip_id = f"trip_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            trip_storage = get_trip_storage()
+            log_agent_raw(
+                f"📦 Using DEFAULT InMemoryTripStorage — trip_id={trip_id}",
+                agent_name="OrchestratorAgent"
+            )
         
-        log_agent_raw(f"📦 Created trip storage: {trip_id}", agent_name="OrchestratorAgent")
-        
-        # ✅ Create trip ID and storage
-        trip_id = f"trip_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        trip_storage = get_trip_storage()
-        
-        # ✅ STORE PREFERENCES in centralized storage
+        # ✅ STORE PREFERENCES in whatever storage backend we have
         trip_storage.store_preferences(trip_id, preferences)
         log_agent_raw(f"📦 Stored preferences for: {trip_id}", agent_name="OrchestratorAgent")
     

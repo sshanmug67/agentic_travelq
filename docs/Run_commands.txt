@@ -1,3 +1,15 @@
+#Celery
+cd backend
+celery -A celery_app worker --loglevel=info --pool=solo
+
+#Docker
+Open Docker Desktop
+In Powershell
+docker run -d --name travelq-redis -p 6379:6379 redis:7-alpine
+docker ps
+docker restart 5e8fe12be6e7
+
+
 # backend 
 cd backend
 .venv\Scripts\activate.ps1

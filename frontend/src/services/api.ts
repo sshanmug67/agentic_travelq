@@ -1,14 +1,18 @@
 // frontend/src/services/api.ts
 //
+// Changes (v5 — Async Pipeline):
+//   - planTrip() now returns HTTP 202 with {trip_id, status: "queued"} (instant)
+//   - New pollTripStatus() for GET /api/trips/{trip_id}/status
+//   - Timeout reduced since planTrip returns immediately now
+//
 // Changes (v4):
 //   - Timeout increased from 60s to 180s to accommodate multi-agent pipeline
-//     (WeatherAgent + PlacesAgent with ~10 Google Places API calls + LLM)
 
 import axios from 'axios';
 
 const api = axios.create({
   baseURL: '/api',
-  timeout: 180000, // 180 seconds — multi-agent pipeline needs headroom
+  timeout: 30000, // v5: 30s is plenty — POST returns instantly, polling is fast
   headers: {
     'Content-Type': 'application/json',
   },
@@ -69,32 +73,27 @@ interface BudgetConstraints {
   transportBudget: number;
 }
 
-// ── Request/Response types (match backend TripSearchRequest) ────────────────
+// ── Request/Response types ──────────────────────────────────────────────────
 
 interface PlanTripPreferences {
-  // UI Preferences (PreferencesPanel chip lists)
   airlines: NamedPreference[];
   hotelChains: NamedPreference[];
   cuisines: NamedPreference[];
   activities: NamedPreference[];
   budget: BudgetTiers;
-
-  // Detailed preferences (Advanced settings, sent alongside UI lists)
   flightPrefs?: FlightPrefs;
   hotelPrefs?: HotelPrefs;
   activityPrefs?: ActivityPrefs;
   restaurantPrefs?: RestaurantPrefs;
   transportPrefs?: TransportPrefs;
   budgetConstraints?: BudgetConstraints;
-
-  // Additional
   tripPurpose?: string;
   specialRequirements?: string;
 }
 
 interface PlanTripRequest {
-  tripId: string | null;     // null = new trip, string = existing trip
-  userRequest: string;       // NL query (can be empty)
+  tripId: string | null;
+  userRequest: string;
   tripDetails: {
     origin?: string;
     destination: string;
@@ -112,6 +111,32 @@ interface PlanTripRequest {
   };
 }
 
+// v5: POST /search now returns this (HTTP 202 — instant)
+export interface TripSubmitResponse {
+  trip_id: string;
+  status: string;
+  message: string;
+  poll_url: string;
+}
+
+// v5: GET /{trip_id}/status returns this (polling)
+export interface TripPollResponse {
+  trip_id: string;
+  status: 'queued' | 'preprocessing' | 'in_progress' | 'completed' | 'failed';
+  agents: Record<string, 'pending' | 'in_progress' | 'completed' | 'failed'>;
+  preference_changes?: Array<{
+    field: string;
+    action: string;
+    old: string;
+    new: string;
+  }>;
+  created_at?: string;
+  updated_at?: string;
+  results?: any;
+  error?: string;
+}
+
+// v4 legacy type — kept for backward compatibility with Dashboard/types
 interface PlanTripResponse {
   status: string;
   tripId: string;
@@ -130,17 +155,21 @@ interface PlanTripResponse {
 
 export const tripApi = {
   /**
-   * Single endpoint for all trip planning:
-   *  - New trip search (tripId = null)
-   *  - Refine existing trip (tripId set, query/prefs changed)
-   *  - Save selections (tripId set, itinerary changed)
-   *
-   * The preferences object carries both the UI chip lists (with preferred
-   * flags) and the detailed prefs. The backend uses `preferred: true` items
-   * as priority search targets and `preferred: false` as secondary interests.
+   * v5: Submit trip planning request. Returns IMMEDIATELY with trip_id.
+   * The actual planning happens in a Celery worker.
+   * Use pollTripStatus() to track progress.
    */
-  planTrip: async (request: PlanTripRequest): Promise<PlanTripResponse> => {
+  planTrip: async (request: PlanTripRequest): Promise<TripSubmitResponse> => {
     const response = await api.post('/trips/search', request);
+    return response.data;
+  },
+
+  /**
+   * v5: Poll trip planning progress.
+   * Returns agent-by-agent status and final results when complete.
+   */
+  pollTripStatus: async (tripId: string): Promise<TripPollResponse> => {
+    const response = await api.get(`/trips/${tripId}/status`);
     return response.data;
   },
 

@@ -1,28 +1,32 @@
 // frontend/src/pages/Dashboard.tsx
 //
+// Changes (v4 — Async Pipeline):
+//   - handlePlanTrip() now returns instantly (HTTP 202) via useTripSearch hook
+//   - Result processing moved to processResults() callback (fires when polling sees "completed")
+//   - TripStatusBar shows animated per-agent progress below "Plan My Trip" button
+//   - isPlanning = isSubmitting || isPolling (covers the full async lifecycle)
+//   - Removed direct tripApi.planTrip() call — replaced by submitTrip() from hook
+//
 // Changes (v3):
-//   - v2 changes (RestaurantCard, ActivityCard, toggleRestaurant/toggleActivity)
-//   - Fix hasResults to include restaurants + activities (not just flights/hotels)
-//   - Destructure restaurants/activities from useTripData for reactive rendering
-//   - Auto-select AI-recommended restaurants into itinerary sidebar
-//   - Auto-select AI-recommended activities into itinerary sidebar
-//   - Auto-switch to first populated tab when agents return data
-//   - Replace useTripData.getState() calls in JSX with reactive store variables
+//   - RestaurantCard, ActivityCard, toggleRestaurant/toggleActivity
+//   - Fix hasResults to include restaurants + activities
+//   - Auto-select AI-recommended restaurants/activities
+//   - Auto-switch to first populated tab
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { ItinerarySidebar } from '../components/itinerary/ItinerarySidebar';
 import { NaturalLanguageInput } from '../components/common/NaturalLanguageInput';
 import { PreferencesPanel } from '../components/common/PreferencesPanel';
 import { PreferencesSummary } from '../components/common/PreferencesSummary';
 import { TripSummaryBar } from '../components/common/TripSummaryBar';
+import TripStatusBar from '../components/common/TripStatusBar';
 import { FlightCard } from '../components/flight/FlightCard';
 import { HotelCard } from '../components/hotel/HotelCard';
 import { RestaurantCard } from '../components/restaurant/RestaurantCard';
 import { ActivityCard } from '../components/activity/ActivityCard';
 import { useTripData } from '../hooks/useTripData';
 import { useItinerary } from '../hooks/useItinerary';
-import { tripApi } from '../services/api';
-import type { TripPlanResponse } from '../types/trip';
+import { useTripSearch } from '../hooks/useTripSearch';
 
 type ResultsTab = 'flights' | 'hotels' | 'restaurants' | 'activities';
 
@@ -39,13 +43,116 @@ export const Dashboard: React.FC = () => {
   } = useItinerary();
 
   const [naturalLanguageRequest, setNaturalLanguageRequest] = useState('');
-  const [isPlanning, setIsPlanning] = useState(false);
   const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('flights');
   const [aiRecommendedFlightId, setAiRecommendedFlightId] = useState<string | null>(null);
   const [aiRecommendedHotelId, setAiRecommendedHotelId] = useState<string | null>(null);
   const [aiRecommendedRestaurantIds, setAiRecommendedRestaurantIds] = useState<string[]>([]);
   const [aiRecommendedActivityIds, setAiRecommendedActivityIds] = useState<string[]>([]);
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // v4: Process results — fires when Celery task completes (via polling)
+  // Same logic that was previously inside handlePlanTrip after await
+  // ════════════════════════════════════════════════════════════════════════
+  const processResults = useCallback((response: any) => {
+    const resolvedTripId = response.tripId || response.trip_id;
+    if (resolvedTripId) {
+      setTripData({ id: resolvedTripId });
+    }
+
+    const results: Record<string, any> =
+      response.results || response.options || {};
+
+    const flightResults = results.flights || [];
+    const hotelResults = results.hotels || [];
+    const restaurantResults = results.restaurants || [];
+    const activityResults = results.activities || [];
+
+    setFlights(flightResults);
+    setHotels(hotelResults);
+    setRestaurants(restaurantResults);
+    setActivities(activityResults);
+    setWeather(results.weather || []);
+
+    // ── Auto-select AI-recommended flight ──────────────────────────
+    if (flightResults.length > 0) {
+      const recFlightId = response.recommendations?.flight?.recommended_id;
+      const aiPick = recFlightId
+        ? flightResults.find((f: any) => String(f.id) === String(recFlightId))
+        : null;
+      const flightToSelect = aiPick || flightResults[0];
+      setAiRecommendedFlightId(flightToSelect.id);
+      selectFlight(flightToSelect, 'ai');
+    }
+
+    // ── Auto-select AI-recommended hotel ───────────────────────────
+    if (hotelResults.length > 0) {
+      const recHotelId = response.recommendations?.hotel?.recommended_id;
+      const aiHotelPick = recHotelId
+        ? hotelResults.find((h: any) => String(h.id) === String(recHotelId))
+        : null;
+      const hotelToSelect = aiHotelPick || hotelResults[0];
+      setAiRecommendedHotelId(hotelToSelect.id);
+      selectHotel(hotelToSelect, 'ai');
+    }
+
+    // ── Auto-select AI-recommended restaurants ─────────────────────
+    if (restaurantResults.length > 0) {
+      const recRestaurant = response.recommendations?.restaurant;
+      const recIds: string[] = recRestaurant?.metadata?.all_recommended_ids || [];
+      setAiRecommendedRestaurantIds(recIds);
+      if (recIds.length > 0) {
+        for (const recId of recIds) {
+          const match = restaurantResults.find((r: any) => String(r.id) === String(recId));
+          if (match) toggleRestaurant(match);
+        }
+      }
+    }
+
+    // ── Auto-select AI-recommended activities ──────────────────────
+    if (activityResults.length > 0) {
+      const recActivity = response.recommendations?.activity;
+      const recIds: string[] = recActivity?.metadata?.all_recommended_ids || [];
+      setAiRecommendedActivityIds(recIds);
+      if (recIds.length > 0) {
+        for (const recId of recIds) {
+          const match = activityResults.find((a: any) => String(a.id) === String(recId));
+          if (match) toggleActivity(match);
+        }
+      }
+    }
+
+    // ── Auto-switch to first tab that has data ─────────────────────
+    if (flightResults.length > 0) setActiveResultsTab('flights');
+    else if (hotelResults.length > 0) setActiveResultsTab('hotels');
+    else if (restaurantResults.length > 0) setActiveResultsTab('restaurants');
+    else if (activityResults.length > 0) setActiveResultsTab('activities');
+
+    if (response.recommendations) {
+      setRecommendations(response.recommendations);
+    }
+
+    setNaturalLanguageRequest('');
+  }, [setTripData, setFlights, setHotels, setRestaurants, setActivities, setWeather,
+      selectFlight, selectHotel, toggleRestaurant, toggleActivity]);
+
+  // ════════════════════════════════════════════════════════════════════════
+  // v4: Async trip search hook — submit + poll
+  // ════════════════════════════════════════════════════════════════════════
+  const {
+    submitTrip, activeTripId, pollData,
+    isSubmitting, isPolling, error: tripError, clearTrip
+  } = useTripSearch({
+    onComplete: processResults,
+    onError: (err) => {
+      console.error('Trip planning failed:', err);
+      alert('Failed to plan trip: ' + err);
+    },
+    pollInterval: 2500,
+  });
+
+  // v4: Combined "is working" state for button disable
+  const isPlanning = isSubmitting || isPolling;
 
   // v3: Include all four data types in hasResults check
   const hasResults = flights.length > 0 || hotels.length > 0
@@ -61,6 +168,10 @@ export const Dashboard: React.FC = () => {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ════════════════════════════════════════════════════════════════════════
+  // v4: handlePlanTrip — now instant. Just validates + submits.
+  // Result processing happens in processResults callback above.
+  // ════════════════════════════════════════════════════════════════════════
   const handlePlanTrip = async (userRequest: string) => {
     if (!tripData.destination) {
       alert('Please enter a destination');
@@ -71,137 +182,28 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
-    setIsPlanning(true);
+    // Clear previous results
+    clearTrip();
 
-
-    
-    try {
-      const response = await tripApi.planTrip({
-        tripId: tripData.id,
-        userRequest: userRequest,
-        tripDetails: {
-          origin: tripData.origin,
-          destination: tripData.destination,
-          startDate: tripData.startDate,
-          endDate: tripData.endDate,
-          travelers: tripData.travelers,
-          budget: tripData.totalBudget,
-        },
-        preferences: preferences,
-        currentItinerary: {
-          flight: selectedFlight,
-          hotel: selectedHotel,
-          restaurants: selectedRestaurants,
-          activities: selectedActivities,
-        },
-      }) as TripPlanResponse;
-
-      const resolvedTripId = response.tripId || response.trip_id;
-      if (resolvedTripId) {
-        setTripData({ id: resolvedTripId });
-      }
-
-      const results: Record<string, any> =
-        response.results || response.options || {};
-
-      const flightResults = results.flights || [];
-      const hotelResults = results.hotels || [];
-      const restaurantResults = results.restaurants || [];
-      const activityResults = results.activities || [];
-
-      setFlights(flightResults);
-      setHotels(hotelResults);
-      setRestaurants(restaurantResults);
-      setActivities(activityResults);
-      setWeather(results.weather || []);
-
-      // ── Auto-select AI-recommended flight ──────────────────────────
-      if (flightResults.length > 0) {
-        const recFlightId = response.recommendations?.flight?.recommended_id;
-        const aiPick = recFlightId
-          ? flightResults.find((f: any) => String(f.id) === String(recFlightId))
-          : null;
-        const flightToSelect = aiPick || flightResults[0];
-        setAiRecommendedFlightId(flightToSelect.id);
-        selectFlight(flightToSelect, 'ai');
-      }
-
-      // ── Auto-select AI-recommended hotel ───────────────────────────
-      if (hotelResults.length > 0) {
-        const recHotelId = response.recommendations?.hotel?.recommended_id;
-        const aiHotelPick = recHotelId
-          ? hotelResults.find((h: any) => String(h.id) === String(recHotelId))
-          : null;
-        const hotelToSelect = aiHotelPick || hotelResults[0];
-        setAiRecommendedHotelId(hotelToSelect.id);
-        selectHotel(hotelToSelect, 'ai');
-      }
-
-      // ── Auto-select AI-recommended restaurants ─────────────────────
-      if (restaurantResults.length > 0) {
-        const recRestaurant = response.recommendations?.restaurant;
-        const recIds: string[] =
-          recRestaurant?.metadata?.all_recommended_ids || [];
-
-        // v4: Store recommended IDs for badge display
-        setAiRecommendedRestaurantIds(recIds);
-
-        if (recIds.length > 0) {
-          for (const recId of recIds) {
-            const match = restaurantResults.find(
-              (r: any) => String(r.id) === String(recId)
-            );
-            if (match) {
-              toggleRestaurant(match);
-            }
-          }
-        }
-      }
-
-      // ── Auto-select AI-recommended activities ──────────────────────
-      if (activityResults.length > 0) {
-        const recActivity = response.recommendations?.activity;
-        const recIds: string[] =
-          recActivity?.metadata?.all_recommended_ids || [];
-
-        // v4: Store recommended IDs for badge display
-        setAiRecommendedActivityIds(recIds);
-
-        if (recIds.length > 0) {
-          for (const recId of recIds) {
-            const match = activityResults.find(
-              (a: any) => String(a.id) === String(recId)
-            );
-            if (match) {
-              toggleActivity(match);
-            }
-          }
-        }
-      }
-
-      // ── Auto-switch to first tab that has data ─────────────────────
-      if (flightResults.length > 0) {
-        setActiveResultsTab('flights');
-      } else if (hotelResults.length > 0) {
-        setActiveResultsTab('hotels');
-      } else if (restaurantResults.length > 0) {
-        setActiveResultsTab('restaurants');
-      } else if (activityResults.length > 0) {
-        setActiveResultsTab('activities');
-      }
-
-      if (response.recommendations) {
-        setRecommendations(response.recommendations);
-      }
-
-      setNaturalLanguageRequest('');
-
-    } catch (error: any) {
-      console.error('Failed to plan trip:', error);
-      alert('Failed to plan trip: ' + (error.message || 'Unknown error'));
-    } finally {
-      setIsPlanning(false);
-    }
+    await submitTrip({
+      tripId: tripData.id,
+      userRequest: userRequest,
+      tripDetails: {
+        origin: tripData.origin,
+        destination: tripData.destination,
+        startDate: tripData.startDate,
+        endDate: tripData.endDate,
+        travelers: tripData.travelers,
+        budget: tripData.totalBudget,
+      },
+      preferences: preferences,
+      currentItinerary: {
+        flight: selectedFlight,
+        hotel: selectedHotel,
+        restaurants: selectedRestaurants,
+        activities: selectedActivities,
+      },
+    });
   };
 
   const handleSelectFlight = (flight: any) => {
@@ -222,7 +224,6 @@ export const Dashboard: React.FC = () => {
     toggleActivity(activity);
   };
 
-  // v3: Use reactive store variables for tab counts
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
     { id: 'hotels', label: 'Hotels', icon: '🏨', count: hotels.length },
@@ -236,7 +237,6 @@ export const Dashboard: React.FC = () => {
   const isActivitySelected = (id: string) =>
     selectedActivities.some((a) => a.id === id);
 
-  // v4: AI recommendation helpers
   const isRestaurantAiRecommended = (id: string) =>
     aiRecommendedRestaurantIds.includes(id);
 
@@ -295,6 +295,15 @@ export const Dashboard: React.FC = () => {
               <>🚀 Plan My Trip</>
             )}
           </button>
+
+          {/* ════════════════════════════════════════════════════════════
+              v4: Animated Status Bar — shows agent progress in real-time
+              Expands during planning, collapses to summary bar when done
+              ════════════════════════════════════════════════════════════ */}
+          <TripStatusBar
+            pollData={pollData}
+            isActive={isPolling || isSubmitting}
+          />
         </div>
       </div>
 
