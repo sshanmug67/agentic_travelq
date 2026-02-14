@@ -1008,7 +1008,7 @@ Respond with ONLY valid JSON:
   "selected_ids": [<exactly {display_max} flight IDs from the list above, as strings>],
   "recommended_id": "<your #1 pick from the selected IDs>",
   "reason": "<1-2 sentences: why this is the best match>",
-  "summary": "<3-4 sentence friendly recommendation mentioning how many options you reviewed, why you picked this one, and any notable alternatives>"
+  "summary": "<3-4 sentence user-facing recommendation. Open by stating how many flights you reviewed (use the exact number from above), then explain WHY you picked this flight — explain what makes it the best fit for this user's specific preferences (e.g. it's from a preferred airline, best price-to-quality ratio, fewest stops, ideal departure time, matches their budget). Then give specifics: airline name, departure time, price, and connection city. Finally, name 1-2 concrete alternatives from DIFFERENT airlines with their price and what trade-off they offer. NEVER mention flight IDs. NEVER repeat the same airline as both pick and alternative.>"
 }}
 
 CRITICAL RULES:
@@ -1020,6 +1020,11 @@ CRITICAL RULES:
 
         log_agent_raw(
             f"🤖 Asking LLM to curate top {display_max} from {len(all_flights)} flights...",
+            agent_name="FlightAgent"
+        )
+
+        log_agent_raw(
+            f"\n\n{prompt}\n",
             agent_name="FlightAgent"
         )
 
@@ -1098,13 +1103,14 @@ CRITICAL RULES:
                 trip_id=self.trip_id,
                 category="flight",
                 recommended_id=recommended_id,
-                reason=reason,
+                reason=summary or reason,
                 metadata={
                     "airline": recommended_flight.airline,
                     "airline_code": recommended_flight.airline_code,
                     "price": recommended_flight.price,
                     "is_direct": is_direct,
                     "carrier_match": tag,
+                    "reason_short": reason,
                     "total_pool_reviewed": len(all_flights),
                     "curated_count": len(curated),
                     "preferred_in_curated": sum(1 for f in curated if f.airline_code in preferred_codes),
@@ -1365,7 +1371,7 @@ You MUST respond with ONLY a JSON object in this exact format, nothing else:
 {{
   "recommended_id": "<the flight ID from the list above>",
   "reason": "<1-2 sentences explaining why this is the best match for this user's preferences>",
-  "summary": "<3-4 sentence friendly recommendation mentioning how many options you reviewed, why you picked this one (noting carrier preference alignment), and any notable alternatives — especially if a cheaper option exists from another airline>"
+  "summary": "<3-4 sentence user-facing recommendation. Open by stating how many flights you reviewed (use the exact number from above), then explain WHY you picked this flight — explain what makes it the best fit for this user's specific preferences (e.g. it's from a preferred airline, best price-to-quality ratio, fewest stops, ideal departure time, matches their budget). Then give specifics: airline name, departure time, price, and connection city. Finally, name 1-2 concrete alternatives from DIFFERENT airlines with their price and what trade-off they offer. NEVER mention flight IDs. NEVER repeat the same airline as both pick and alternative.>"
 }}
 
 CRITICAL RULES:
@@ -1374,12 +1380,12 @@ CRITICAL RULES:
 - Respond with valid JSON only. No markdown, no backticks, no extra text.
 """
         
-        log_agent_raw("🤖 \n\nFlight LLM System Prompt:", agent_name="FlightAgent")
-        log_agent_raw("{self.system_message}", agent_name="FlightAgent")
-
-        log_agent_raw("🤖 \n\nFlight LLM Prompt:", agent_name="FlightAgent")
-        log_agent_raw("{prompt}\n", agent_name="FlightAgent")
+        log_agent_raw("🤖 Asking LLM to pick best flight based on preferences...", 
+                     agent_name="FlightAgent")
         
+        log_agent_raw("\n\n{prompt}\n\n", 
+                     agent_name="FlightAgent")
+
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
             
@@ -1428,13 +1434,14 @@ CRITICAL RULES:
                 trip_id=self.trip_id,
                 category="flight",
                 recommended_id=recommended_id,
-                reason=reason,
+                reason=summary or reason,
                 metadata={
                     "airline": recommended_flight.airline,
                     "airline_code": recommended_flight.airline_code,
                     "price": recommended_flight.price,
                     "is_direct": is_direct,
                     "carrier_match": tag,  # v5: track preference alignment
+                    "reason_short": reason,
                     "total_options_reviewed": len(flights),
                     "preferred_options": preferred_count,
                     "interested_options": interested_count,
