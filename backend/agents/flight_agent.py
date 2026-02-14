@@ -2,7 +2,16 @@
 Flight Agent - Real API with Centralized Storage
 Location: backend/agents/flight_agent.py
 
-Changes (v3):
+Changes (v4):
+  - _parse_amadeus_offer now extracts rich metadata: amenities, branded fare,
+    last ticketing date, seats remaining, price breakdown, validating carrier
+  - _parse_flight_segment now builds per-hop SegmentDetail[] with terminals,
+    aircraft codes/names, operating carriers, and calculates layover durations
+  - Added AIRCRAFT_NAMES lookup for common IATA aircraft codes
+  - Added _parse_segment_details(), _extract_amenities(), _calc_layover_duration()
+  - _parse_baggage updated to read includedCabinBags from fare details
+
+Previous changes (v3):
   - Removed deterministic _pick_recommended_flight()
   - LLM now picks the recommended flight ID based on full user preferences
   - LLM returns structured JSON: { recommended_id, reason, summary }
@@ -18,11 +27,138 @@ from agents.base_agent import TravelQBaseAgent
 from services.storage.storage_base import TripStorageInterface
 from services.amadeus_service import get_amadeus_service
 from services.airport_lookup_service import get_airport_lookup_service
-from models.trip import Flight, FlightSegment
+from models.trip import Flight, FlightSegment, SegmentDetail, FlightAmenity
 
 from utils.logging_config import log_agent_raw, log_agent_json
 from config.settings import settings
 import openai
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# AIRCRAFT CODE → DISPLAY NAME (common IATA codes)
+# ─────────────────────────────────────────────────────────────────────────
+
+AIRCRAFT_NAMES: Dict[str, str] = {
+    # Regional jets
+    "E75": "Embraer E175",
+    "E90": "Embraer E190",
+    "E95": "Embraer E195",
+    "CR9": "Bombardier CRJ-900",
+    "CRJ": "Bombardier CRJ",
+    "DH4": "Dash 8-Q400",
+    # Airbus narrowbody
+    "319": "Airbus A319",
+    "320": "Airbus A320",
+    "321": "Airbus A321",
+    "32A": "Airbus A320",
+    "32B": "Airbus A321",
+    "32N": "Airbus A321neo",
+    "32Q": "Airbus A321neo",
+    # Airbus widebody
+    "332": "Airbus A330-200",
+    "333": "Airbus A330-300",
+    "339": "Airbus A330-900neo",
+    "359": "Airbus A350-900",
+    "35K": "Airbus A350-1000",
+    "388": "Airbus A380",
+    # Boeing narrowbody
+    "738": "Boeing 737-800",
+    "73H": "Boeing 737-800",
+    "7M8": "Boeing 737 MAX 8",
+    "7M9": "Boeing 737 MAX 9",
+    # Boeing widebody
+    "744": "Boeing 747-400",
+    "763": "Boeing 767-300",
+    "764": "Boeing 767-400",
+    "772": "Boeing 777-200",
+    "773": "Boeing 777-300",
+    "77W": "Boeing 777-300ER",
+    "788": "Boeing 787-8 Dreamliner",
+    "789": "Boeing 787-9 Dreamliner",
+    "78X": "Boeing 787-10 Dreamliner",
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# AIRLINE CODE → DISPLAY NAME (common IATA carrier codes)
+# ─────────────────────────────────────────────────────────────────────────
+
+AIRLINE_NAMES: Dict[str, str] = {
+    # North America
+    "AA": "American Airlines",
+    "AC": "Air Canada",
+    "AS": "Alaska Airlines",
+    "B6": "JetBlue",
+    "DL": "Delta Air Lines",
+    "F8": "Flair Airlines",
+    "HA": "Hawaiian Airlines",
+    "NK": "Spirit Airlines",
+    "UA": "United Airlines",
+    "WN": "Southwest Airlines",
+    "WS": "WestJet",
+    "PD": "Porter Airlines",
+    # Europe
+    "AF": "Air France",
+    "AY": "Finnair",
+    "AZ": "ITA Airways",
+    "BA": "British Airways",
+    "EI": "Aer Lingus",
+    "EW": "Eurowings",
+    "FR": "Ryanair",
+    "IB": "Iberia",
+    "KL": "KLM Royal Dutch Airlines",
+    "LH": "Lufthansa",
+    "LO": "LOT Polish Airlines",
+    "LX": "Swiss International Air Lines",
+    "OS": "Austrian Airlines",
+    "SK": "SAS Scandinavian Airlines",
+    "SN": "Brussels Airlines",
+    "TP": "TAP Air Portugal",
+    "TK": "Turkish Airlines",
+    "U2": "easyJet",
+    "VY": "Vueling",
+    "W6": "Wizz Air",
+    # Middle East & Africa
+    "EK": "Emirates",
+    "ET": "Ethiopian Airlines",
+    "EY": "Etihad Airways",
+    "GF": "Gulf Air",
+    "MS": "EgyptAir",
+    "QR": "Qatar Airways",
+    "RJ": "Royal Jordanian",
+    "SA": "South African Airways",
+    "SV": "Saudia",
+    "WY": "Oman Air",
+    # Asia Pacific
+    "AI": "Air India",
+    "CX": "Cathay Pacific",
+    "GA": "Garuda Indonesia",
+    "JL": "Japan Airlines",
+    "KE": "Korean Air",
+    "MH": "Malaysia Airlines",
+    "NH": "ANA All Nippon Airways",
+    "NZ": "Air New Zealand",
+    "OZ": "Asiana Airlines",
+    "PR": "Philippine Airlines",
+    "QF": "Qantas",
+    "SQ": "Singapore Airlines",
+    "TG": "Thai Airways",
+    "TR": "Scoot",
+    "VN": "Vietnam Airlines",
+    # Latin America
+    "AM": "Aeromexico",
+    "AR": "Aerolineas Argentinas",
+    "AV": "Avianca",
+    "CM": "Copa Airlines",
+    "G3": "Gol Airlines",
+    "LA": "LATAM Airlines",
+    # China
+    "CA": "Air China",
+    "CZ": "China Southern Airlines",
+    "HU": "Hainan Airlines",
+    "MU": "China Eastern Airlines",
+}
+
 
 class FlightAgent(TravelQBaseAgent):
     """
@@ -237,6 +373,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
 
             flights = []
             for offer in response.data:
+                log_agent_json(offer, label="\n\nFlight Details from Amadeus: ", 
+                      agent_name="FlightAgent")
+
                 flight = self._parse_amadeus_offer(offer)
                 if flight:
                     flights.append(flight)
@@ -254,24 +393,60 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             return self._generate_mock_flights(origin, destination, departure_date)
     
 
+    # ─────────────────────────────────────────────────────────────────────
+    # v4: RICH AMADEUS PARSING
+    # ─────────────────────────────────────────────────────────────────────
+
     def _parse_amadeus_offer(self, offer: Any) -> Optional[Flight]:
-        """Parse Amadeus flight offer into Flight object (supports round-trip)"""
+        """
+        Parse Amadeus flight offer into Flight object with rich metadata.
+        
+        v4: Now extracts per-segment details (terminals, aircraft, operating
+        carrier), amenities, branded fare, booking metadata, and price breakdown.
+        """
         try:
             itineraries = offer.get('itineraries', [])
             if not itineraries:
                 return None
             
             is_round_trip = len(itineraries) == 2
-            price = float(offer['price']['total'])
+            price_total = float(offer['price']['total'])
+            price_base = float(offer['price'].get('base', 0))
             currency = offer['price']['currency']
             first_segment = itineraries[0]['segments'][0]
             airline_code = first_segment['carrierCode']
-            cabin_class = first_segment.get('cabin', 'ECONOMY')
+
+            # Fare details from first traveler
+            traveler_pricings = offer.get('travelerPricings', [])
+            fare_details: List[Dict] = []
+            if traveler_pricings:
+                fare_details = traveler_pricings[0].get('fareDetailsBySegment', [])
+
+            # Cabin class + branded fare from first segment's fare detail
+            cabin_class = 'ECONOMY'
+            branded_fare = None
+            if fare_details:
+                cabin_class = fare_details[0].get('cabin', 'ECONOMY')
+                branded_fare = (
+                    fare_details[0].get('brandedFareLabel')
+                    or fare_details[0].get('brandedFare')
+                )
+
+            # Baggage
             checked_bags, cabin_bags = self._parse_baggage(offer, cabin_class)
-            
+
+            # Amenities (merged + deduplicated across all segments)
+            amenities = self._extract_amenities(fare_details)
+
+            # Booking metadata
+            last_ticketing_date = offer.get('lastTicketingDate')
+            seats_remaining = offer.get('numberOfBookableSeats')
+            validating_codes = offer.get('validatingAirlineCodes', [])
+            validating_carrier = validating_codes[0] if validating_codes else None
+
             if is_round_trip:
-                outbound = self._parse_flight_segment(itineraries[0])
-                return_flight = self._parse_flight_segment(itineraries[1])
+                outbound = self._parse_flight_segment(itineraries[0], fare_details)
+                return_flight = self._parse_flight_segment(itineraries[1], fare_details)
                 total_duration = f"{outbound.duration} + {return_flight.duration}"
                 
                 return Flight(
@@ -282,14 +457,21 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                     outbound=outbound,
                     return_flight=return_flight,
                     total_duration=total_duration,
-                    price=price,
+                    price=price_total,
                     currency=currency,
                     cabin_class=cabin_class,
                     checked_bags=checked_bags,
-                    cabin_bags=cabin_bags
+                    cabin_bags=cabin_bags,
+                    branded_fare=branded_fare,
+                    amenities=amenities,
+                    last_ticketing_date=last_ticketing_date,
+                    seats_remaining=seats_remaining,
+                    price_base=price_base,
+                    price_taxes=round(price_total - price_base, 2),
+                    validating_carrier=validating_carrier,
                 )
             else:
-                segment = self._parse_flight_segment(itineraries[0])
+                segment = self._parse_flight_segment(itineraries[0], fare_details)
                 
                 return Flight(
                     id=offer['id'],
@@ -304,28 +486,54 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                     flight_number=segment.flight_number,
                     stops=segment.stops,
                     layovers=segment.layovers,
-                    price=price,
+                    price=price_total,
                     currency=currency,
                     cabin_class=cabin_class,
                     checked_bags=checked_bags,
-                    cabin_bags=cabin_bags
+                    cabin_bags=cabin_bags,
+                    branded_fare=branded_fare,
+                    amenities=amenities,
+                    last_ticketing_date=last_ticketing_date,
+                    seats_remaining=seats_remaining,
+                    price_base=price_base,
+                    price_taxes=round(price_total - price_base, 2),
+                    validating_carrier=validating_carrier,
                 )
         except Exception as e:
             log_agent_raw(f"⚠️ Failed to parse flight offer: {str(e)}", agent_name="FlightAgent")
             return None
     
-    def _parse_flight_segment(self, itinerary: Dict) -> FlightSegment:
-        """Parse a single flight segment (outbound or return)"""
+    def _parse_flight_segment(
+        self,
+        itinerary: Dict,
+        fare_details_by_segment: List[Dict]
+    ) -> FlightSegment:
+        """
+        Parse a single itinerary leg into FlightSegment with per-hop details.
+        
+        v4: Now builds SegmentDetail[] for each hop and calculates layover
+        durations between consecutive hops.
+        """
         segments = itinerary['segments']
         first_segment = segments[0]
         last_segment = segments[-1]
         
-        airline = first_segment['carrierCode']
         airline_code = first_segment['carrierCode']
-        flight_number = f"{first_segment['carrierCode']}{first_segment['number']}"
+        airline = AIRLINE_NAMES.get(airline_code, airline_code)
+        flight_number = f"{airline_code}{first_segment['number']}"
         duration = itinerary['duration']
         duration_formatted = self._format_duration(duration)
         layovers = [seg['arrival']['iataCode'] for seg in segments[:-1]]
+
+        # v4: Per-hop details
+        segment_details = self._parse_segment_details(segments, fare_details_by_segment)
+
+        # v4: Layover durations between consecutive hops
+        layover_durations = []
+        for i in range(len(segments) - 1):
+            arr_time = segments[i]['arrival']['at']
+            dep_time = segments[i + 1]['departure']['at']
+            layover_durations.append(self._calc_layover_duration(arr_time, dep_time))
         
         return FlightSegment(
             departure_airport=first_segment['departure']['iataCode'],
@@ -337,11 +545,97 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             airline_code=airline_code,
             flight_number=flight_number,
             stops=len(segments) - 1,
-            layovers=layovers
+            layovers=layovers,
+            segments=segment_details,
+            layover_durations=layover_durations,
         )
 
+    def _parse_segment_details(
+        self,
+        segments: List[Dict],
+        fare_details_by_segment: List[Dict]
+    ) -> List[SegmentDetail]:
+        """
+        Parse each physical hop into a SegmentDetail, merging fare info
+        from travelerPricings[].fareDetailsBySegment[].
+        """
+        # Build lookup: segment_id → fare detail
+        fare_lookup: Dict[str, Dict] = {}
+        for fd in fare_details_by_segment:
+            fare_lookup[str(fd.get('segmentId', ''))] = fd
+
+        details = []
+        for seg in segments:
+            seg_id = str(seg.get('id', ''))
+            fare = fare_lookup.get(seg_id, {})
+            aircraft_code = seg.get('aircraft', {}).get('code')
+
+            operating = seg.get('operating', {})
+            operating_code = operating.get('carrierCode')
+            operating_name = operating.get('carrierName')
+
+            detail = SegmentDetail(
+                segment_id=seg_id,
+                departure_airport=seg['departure']['iataCode'],
+                arrival_airport=seg['arrival']['iataCode'],
+                departure_time=seg['departure']['at'],
+                arrival_time=seg['arrival']['at'],
+                departure_terminal=seg['departure'].get('terminal'),
+                arrival_terminal=seg['arrival'].get('terminal'),
+                duration=self._format_duration(seg.get('duration', 'PT0M')),
+                marketing_carrier=seg['carrierCode'],
+                marketing_flight_number=f"{seg['carrierCode']}{seg['number']}",
+                operating_carrier=operating_code,
+                operating_carrier_name=operating_name,
+                aircraft_code=aircraft_code,
+                aircraft_name=AIRCRAFT_NAMES.get(aircraft_code) if aircraft_code else None,
+                cabin_class=fare.get('cabin'),
+                branded_fare=fare.get('brandedFareLabel') or fare.get('brandedFare'),
+                fare_class=fare.get('class'),
+            )
+            details.append(detail)
+
+        return details
+
+    def _extract_amenities(self, fare_details_by_segment: List[Dict]) -> List[FlightAmenity]:
+        """
+        Merge amenities across all segments, deduplicate by description.
+        Returns a unique list of amenities with chargeable flag.
+        """
+        seen: set = set()
+        amenities: List[FlightAmenity] = []
+        for fd in fare_details_by_segment:
+            for am in fd.get('amenities', []):
+                desc = am.get('description', '')
+                if desc and desc not in seen:
+                    seen.add(desc)
+                    amenities.append(FlightAmenity(
+                        description=desc,
+                        is_chargeable=am.get('isChargeable', True),
+                        amenity_type=am.get('amenityType', 'OTHER'),
+                    ))
+        return amenities
+
+    def _calc_layover_duration(self, arrival_time: str, next_departure_time: str) -> str:
+        """Calculate layover time between two consecutive segments."""
+        try:
+            arr = datetime.fromisoformat(arrival_time)
+            dep = datetime.fromisoformat(next_departure_time)
+            diff = dep - arr
+            total_minutes = int(diff.total_seconds() / 60)
+            hours = total_minutes // 60
+            minutes = total_minutes % 60
+            return f"{hours}h {minutes}m"
+        except Exception:
+            return "—"
+
     def _parse_baggage(self, offer: Dict, cabin_class: str) -> tuple:
-        """Parse baggage allowances - returns (checked_bags, cabin_bags)"""
+        """
+        Parse baggage allowances from Amadeus offer.
+        Returns (checked_bags, cabin_bags).
+        
+        v4: Also reads includedCabinBags quantity from fare details.
+        """
         checked_bags = None
         cabin_bags = None
         
@@ -352,21 +646,28 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 if fare_detail and len(fare_detail) > 0:
                     segment_details = fare_detail[0]
                     
+                    # Checked bags
                     checked_allowance = segment_details.get('includedCheckedBags')
                     if checked_allowance and isinstance(checked_allowance, dict):
                         quantity = checked_allowance.get('quantity')
                         weight = checked_allowance.get('weight')
-                        if quantity or weight:
+                        if quantity is not None or weight:
                             checked_bags = {
                                 "quantity": quantity if quantity else 0,
                                 "weight": weight,
                                 "weight_unit": checked_allowance.get('weightUnit', 'KG')
                             }
                     
-                    if cabin_class.upper() in ['BUSINESS', 'FIRST']:
-                        cabin_bags = {"quantity": 2, "weight": 16, "weight_unit": "KG"}
+                    # Cabin bags — read from fare detail if available
+                    cabin_included = segment_details.get('includedCabinBags')
+                    if cabin_included and isinstance(cabin_included, dict):
+                        cabin_qty = cabin_included.get('quantity', 1)
                     else:
-                        cabin_bags = {"quantity": 1, "weight": 8, "weight_unit": "KG"}
+                        cabin_qty = 2 if cabin_class.upper() in ('BUSINESS', 'FIRST') else 1
+
+                    cabin_wt = 16 if cabin_class.upper() in ('BUSINESS', 'FIRST') else 8
+                    cabin_bags = {"quantity": cabin_qty, "weight": cabin_wt, "weight_unit": "KG"}
+
         except Exception as e:
             log_agent_raw(f"⚠️ Could not parse baggage info: {str(e)}", agent_name="FlightAgent")
             cabin_bags = {"quantity": 1, "weight": 8, "weight_unit": "KG"}

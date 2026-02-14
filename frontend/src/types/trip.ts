@@ -13,6 +13,37 @@
 // RESULT TYPES (from backend API responses)
 // ============================================================================
 
+// ── NEW: Individual hop within a leg ────────────────────────────────────
+
+export interface SegmentDetail {
+  segment_id?: string;
+  departure_airport: string;
+  arrival_airport: string;
+  departure_time: string;
+  arrival_time: string;
+  departure_terminal?: string;        // "7"
+  arrival_terminal?: string;          // "1"
+  duration: string;                   // "1h 30m"
+  marketing_carrier: string;          // "AC"
+  marketing_flight_number: string;    // "AC8899"
+  operating_carrier?: string;         // "AC" or "LX"
+  operating_carrier_name?: string;    // "AIR CANADA EXPRESS - JAZZ"
+  aircraft_code?: string;             // "E75"
+  aircraft_name?: string;             // "Embraer E175"
+  cabin_class?: string;               // "ECONOMY"
+  branded_fare?: string;              // "BASIC"
+  fare_class?: string;                // "L"
+}
+
+// ── NEW: Amenity line item ──────────────────────────────────────────────
+
+export interface FlightAmenity {
+  description: string;                // "COMPLIMENTARY MEAL"
+  is_chargeable: boolean;             // false = included free
+  amenity_type: string;               // "BAGGAGE", "MEAL", "BRANDED_FARES", etc.
+}
+
+
 export interface Flight {
   id: string;
   airline: string;
@@ -34,10 +65,23 @@ export interface Flight {
     weight: number;
     weight_unit: string;
   };
+
+  // v4 additions
+  branded_fare?: string;              // "BASIC", "FLEX", "STANDARD"
+  amenities?: FlightAmenity[];        // merged unique amenities
+  last_ticketing_date?: string;       // "2026-02-16"
+  seats_remaining?: number;           // 9
+  price_base?: number;                // base fare before taxes
+  price_taxes?: number;               // total - base
+  validating_carrier?: string;        // ticketing airline
+
+  // Frontend-only
   ai_recommended?: boolean;
   selectedBy?: 'ai' | 'user';
   priceDifference?: number;
 }
+
+
 
 export interface FlightLeg {
   flight_number: string;
@@ -50,6 +94,10 @@ export interface FlightLeg {
   airline_code?: string;
   stops: number;
   layovers?: string[];
+
+  // v4 additions
+  segments?: SegmentDetail[];         // per-hop breakdown
+  layover_durations?: string[];       // ["8h 0m"] between hops
 }
 
 export interface Hotel {

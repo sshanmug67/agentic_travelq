@@ -2,12 +2,14 @@
 Trip Models - Enhanced for Multi-Agent System
 Location: backend/models/trip.py
 
-Combines:
-- Frontend request models
-- Result data models (Flight, Weather, Event, Place)
-- Multi-agent response models
+Changes (v4):
+  - Added SegmentDetail model (per-hop: terminal, aircraft, operating carrier)
+  - Added FlightAmenity model (included vs paid amenities)
+  - FlightSegment: added segments[] and layover_durations[]
+  - Flight: added branded_fare, amenities, last_ticketing_date, seats_remaining,
+            price_base, price_taxes, validating_carrier
 
-Changes:
+Previous changes:
   - TripResponse: added `recommendations` field for structured agent picks
   - v2: Added PhotoItem model; Hotel.photos and Place.photos now accept
         both {"url": "..."} dicts and plain strings for backward compat
@@ -79,8 +81,46 @@ class PhotoItem(BaseModel):
 
 
 # ============================================================================
-# RESULT DATA MODELS
+# FLIGHT MODELS (v4 — enriched with Amadeus segment details)
 # ============================================================================
+
+class SegmentDetail(BaseModel):
+    """
+    One physical hop within a leg — e.g. JFK → YUL on AC8899.
+    
+    Extracted from Amadeus itineraries[].segments[] and merged with
+    fare details from travelerPricings[].fareDetailsBySegment[].
+    """
+    segment_id: Optional[str] = None             # Amadeus segment id ("3")
+    departure_airport: str
+    arrival_airport: str
+    departure_time: str                          # ISO datetime string
+    arrival_time: str                            # ISO datetime string
+    departure_terminal: Optional[str] = None     # "7"
+    arrival_terminal: Optional[str] = None       # "1"
+    duration: str                                # "1h 30m"
+    marketing_carrier: str                       # "AC"
+    marketing_flight_number: str                 # "AC8899"
+    operating_carrier: Optional[str] = None      # "AC" or "LX"
+    operating_carrier_name: Optional[str] = None # "AIR CANADA EXPRESS - JAZZ"
+    aircraft_code: Optional[str] = None          # "E75", "789"
+    aircraft_name: Optional[str] = None          # "Embraer E175", "Boeing 787-9 Dreamliner"
+    cabin_class: Optional[str] = None            # "ECONOMY"
+    branded_fare: Optional[str] = None           # "BASIC", "BASIC ECONOMY"
+    fare_class: Optional[str] = None             # "L"
+
+
+class FlightAmenity(BaseModel):
+    """
+    One amenity line from Amadeus fareDetailsBySegment.amenities[].
+    
+    Deduplicated across all segments in a flight offer so the frontend
+    gets a single merged list of what's included vs paid.
+    """
+    description: str            # "COMPLIMENTARY MEAL"
+    is_chargeable: bool         # false = included free
+    amenity_type: str           # "BAGGAGE", "MEAL", "BRANDED_FARES", "PRE_RESERVED_SEAT", etc.
+
 
 class BaggageAllowance(BaseModel):
     """Baggage allowance details"""
@@ -88,8 +128,14 @@ class BaggageAllowance(BaseModel):
     weight: Optional[int] = Field(default=None, description="Weight limit in kg")
     weight_unit: Optional[str] = Field(default="KG", description="Weight unit")
 
+
 class FlightSegment(BaseModel):
-    """Individual flight segment (outbound or return)"""
+    """
+    One leg of the journey (outbound or return) — summary + per-hop details.
+    
+    v4: Now carries segments[] (per-hop breakdown) and layover_durations[]
+    (calculated wait times between hops).
+    """
     departure_airport: str
     arrival_airport: str
     departure_time: datetime
@@ -101,8 +147,24 @@ class FlightSegment(BaseModel):
     stops: int
     layovers: List[str] = Field(default_factory=list)
 
+    # v4 additions
+    segments: Optional[List[SegmentDetail]] = Field(
+        default=None,
+        description="Per-hop breakdown with terminals, aircraft, operating carrier"
+    )
+    layover_durations: Optional[List[str]] = Field(
+        default=None,
+        description="Calculated layover durations between consecutive hops, e.g. ['8h 0m']"
+    )
+
+
 class Flight(BaseModel):
-    """Flight information model - supports both one-way and round-trip"""
+    """
+    Flight information model - supports both one-way and round-trip.
+    
+    v4: Enriched with segment details, amenities, fare info, and booking metadata
+    extracted from Amadeus API response.
+    """
     id: str
     airline: str
     airline_code: str
@@ -139,6 +201,36 @@ class Flight(BaseModel):
     cabin_bags: Optional[BaggageAllowance] = Field(
         default=None, 
         description="Cabin baggage allowance"
+    )
+
+    # ── v4 additions ─────────────────────────────────────────────────────
+    branded_fare: Optional[str] = Field(
+        default=None,
+        description="Branded fare label, e.g. 'BASIC', 'FLEX', 'STANDARD'"
+    )
+    amenities: Optional[List[FlightAmenity]] = Field(
+        default=None,
+        description="Merged unique amenities across all segments (included vs paid)"
+    )
+    last_ticketing_date: Optional[str] = Field(
+        default=None,
+        description="Last date to purchase this fare, e.g. '2026-02-16'"
+    )
+    seats_remaining: Optional[int] = Field(
+        default=None,
+        description="Number of bookable seats remaining at this fare"
+    )
+    price_base: Optional[float] = Field(
+        default=None,
+        description="Base fare before taxes and fees"
+    )
+    price_taxes: Optional[float] = Field(
+        default=None,
+        description="Taxes and fees (total - base)"
+    )
+    validating_carrier: Optional[str] = Field(
+        default=None,
+        description="Ticketing/validating airline code"
     )
 
 
@@ -217,6 +309,11 @@ class Hotel(BaseModel):
     
     # Additional info
     property_type: Optional[str] = None  # hotel, apartment, resort, etc.
+    
+    highlights: Optional[List[str]] = Field(
+        default=None,
+        description="Key highlights for display (e.g. 'Great location', 'Free breakfast')"
+    )
     
     @field_validator('photos', mode='before')
     @classmethod
@@ -372,7 +469,7 @@ class TripResponse(BaseModel):
     processing_time: float
     agents_used: List[str]
     
-    # ✅ NEW: Structured AI recommendations from agents
+    # ✅ Structured AI recommendations from agents
     # Each agent stores its top pick; orchestrator collects them here.
     # Shape: { "flight": { "recommended_id": "1", "reason": "...", "metadata": {...} }, ... }
     recommendations: Optional[Dict[str, Any]] = Field(

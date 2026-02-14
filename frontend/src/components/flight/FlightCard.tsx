@@ -1,14 +1,19 @@
 // frontend/src/components/flight/FlightCard.tsx
 //
-// Changes (v2 — Grid-friendly):
-//   - Route rows stack vertically for half-width cards
-//   - Compact airport → airport with time below
-//   - Duration shown inline, not on a stretched line
-//   - Works in both single-col and 2-col grid
+// v5 — Click-to-expand + explicit Add button
+//
+// Interaction model:
+//   - Click card → expand/collapse details
+//   - Click "Add to Itinerary" button → select flight for itinerary
+//   - No radio button — explicit action to commit
+//
+// Summary (collapsed): airline, airports, times, price, stops — compact.
+// Expanded: per-segment timeline, amenities, fare info, price breakdown,
+//           plus "Add to Itinerary" action button.
 
-import React from 'react';
-import { motion } from 'framer-motion';
-import { Flight } from '../../types/trip';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import type { Flight, FlightLeg, FlightAmenity } from '../../types/trip';
 
 interface FlightCardProps {
   flight: Flight;
@@ -23,7 +28,9 @@ export const FlightCard: React.FC<FlightCardProps> = ({
   isAiRecommended,
   onSelect,
 }) => {
-  const [showDetails, setShowDetails] = React.useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // ── Helpers ──────────────────────────────────────────────────────────
 
   const formatTime = (dateStr: string) =>
     new Date(dateStr).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
@@ -34,46 +41,217 @@ export const FlightCard: React.FC<FlightCardProps> = ({
   const stopsLabel = (stops: number) =>
     stops === 0 ? 'Direct' : `${stops} stop${stops > 1 ? 's' : ''}`;
 
-  const LegRow: React.FC<{
-    tag: string;
-    tagColor: string;
-    bgColor: string;
-    leg: any;
+  const stopsColor = (stops: number) =>
+    stops === 0 ? 'text-green-600' : stops === 1 ? 'text-amber-600' : 'text-red-500';
+
+  const isMixedCarrier =
+    flight.return_flight?.airline_code &&
+    flight.return_flight.airline_code !== flight.outbound?.airline_code;
+
+  const toggleExpand = () => {
+    setIsExpanded((prev) => !prev);
+  };
+
+  const handleAddToItinerary = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelect();
+  };
+
+  // ── Summary Leg Row (collapsed) ─────────────────────────────────────
+
+  const SummaryLeg: React.FC<{
+    tag: string; tagColor: string; bgColor: string; leg: FlightLeg;
   }> = ({ tag, tagColor, bgColor, leg }) => (
-    <div className={`${bgColor} rounded px-2.5 py-2`}>
+    <div className={`${bgColor} rounded px-2.5 py-1.5`}>
       <div className="flex items-center justify-between mb-0.5">
-        <span className={`text-[11px] font-bold ${tagColor} uppercase tracking-wide`}>{tag}</span>
-        <span className="text-[11px] text-gray-400">{formatDate(leg.departure_time)}</span>
+        <span className={`text-[10px] font-bold ${tagColor} uppercase tracking-wide`}>{tag}</span>
+        <span className="text-[10px] text-gray-400">{formatDate(leg.departure_time)}</span>
       </div>
-      <div className="flex items-center gap-1.5">
-        <span className="font-bold text-[14px] text-gray-800">{leg.departure_airport}</span>
-        <span className="text-[11px] text-gray-400">{formatTime(leg.departure_time)}</span>
-        <div className="flex-1 flex items-center gap-1 px-1">
+      <div className="flex items-center gap-1">
+        <span className="font-bold text-[13px] text-gray-800">{leg.departure_airport}</span>
+        <span className="text-[10px] text-gray-400">{formatTime(leg.departure_time)}</span>
+        <div className="flex-1 flex items-center gap-1 px-0.5">
           <div className="flex-1 h-px bg-gray-300" />
-          <span className="text-[10px] text-gray-400 whitespace-nowrap">{leg.duration}</span>
+          <span className="text-[9px] text-gray-400 whitespace-nowrap">{leg.duration}</span>
           <div className="flex-1 h-px bg-gray-300" />
         </div>
-        <span className="text-[11px] text-gray-400">{formatTime(leg.arrival_time)}</span>
-        <span className="font-bold text-[14px] text-gray-800">{leg.arrival_airport}</span>
+        <span className="text-[10px] text-gray-400">{formatTime(leg.arrival_time)}</span>
+        <span className="font-bold text-[13px] text-gray-800">{leg.arrival_airport}</span>
       </div>
-      {leg.stops > 0 && (
-        <div className="text-[11px] text-gray-400 mt-0.5">
-          🔄 {stopsLabel(leg.stops)}{leg.layovers?.length ? ` via ${leg.layovers.join(', ')}` : ''}
-        </div>
-      )}
+      <div className="flex items-center gap-2 mt-0.5">
+        <span className={`text-[10px] font-medium ${stopsColor(leg.stops)}`}>
+          {stopsLabel(leg.stops)}
+        </span>
+        {isMixedCarrier && tag === 'Ret' && leg.airline_code && (
+          <span className="text-[10px] text-gray-400">· {leg.airline_code} {leg.flight_number}</span>
+        )}
+      </div>
     </div>
   );
 
+  // ── Expanded: Per-Segment Timeline ──────────────────────────────────
+
+  const SegmentTimeline: React.FC<{
+    tag: string; tagColor: string; tagBg: string; leg: FlightLeg;
+  }> = ({ tag, tagColor, tagBg, leg }) => {
+    const segments = leg.segments || [];
+    const layoverDurations = leg.layover_durations || [];
+
+    // Fallback if backend hasn't been updated yet
+    if (segments.length === 0) {
+      return (
+        <div className="bg-gray-50 rounded-lg p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <span className={`text-[10px] font-bold ${tagColor} ${tagBg} uppercase tracking-wide px-1.5 py-0.5 rounded`}>
+              {tag}
+            </span>
+            <span className="text-[12px] font-semibold text-gray-700">
+              {leg.airline_code} {leg.flight_number}
+            </span>
+          </div>
+          <div className="text-[12px] text-gray-600">
+            {leg.departure_airport} → {leg.arrival_airport} · {leg.duration} · {stopsLabel(leg.stops)}
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="bg-gray-50 rounded-lg p-3 space-y-0">
+        {/* Leg header */}
+        <div className="flex items-center justify-between mb-2">
+          <span className={`text-[10px] font-bold ${tagColor} ${tagBg} uppercase tracking-wide px-1.5 py-0.5 rounded`}>
+            {tag}
+          </span>
+          <span className="text-[11px] text-gray-400">Total: {leg.duration}</span>
+        </div>
+
+        {segments.map((seg, idx) => (
+          <React.Fragment key={seg.segment_id || idx}>
+            {/* ── Segment block ─────────────────────────────── */}
+            <div className="flex gap-2.5 py-1.5">
+              {/* Timeline dots + line */}
+              <div className="flex flex-col items-center w-3 pt-0.5">
+                <div className="w-2 h-2 rounded-full bg-purple-500 flex-shrink-0" />
+                <div className="flex-1 w-px bg-gray-300 my-0.5" />
+                <div className="w-2 h-2 rounded-full bg-green-500 flex-shrink-0" />
+              </div>
+
+              {/* Segment info */}
+              <div className="flex-1 min-w-0">
+                {/* Departure */}
+                <div className="flex items-baseline gap-1.5 mb-1">
+                  <span className="font-bold text-[12px] text-gray-800">{seg.departure_airport}</span>
+                  {seg.departure_terminal && (
+                    <span className="text-[10px] text-gray-400">T{seg.departure_terminal}</span>
+                  )}
+                  <span className="text-[11px] text-gray-600">{formatTime(seg.departure_time)}</span>
+                </div>
+
+                {/* Flight info row */}
+                <div className="flex items-center gap-1.5 flex-wrap mb-1 ml-0.5">
+                  <span className="text-[11px] font-medium text-gray-700">
+                    {seg.marketing_flight_number}
+                  </span>
+                  {seg.operating_carrier && seg.operating_carrier !== seg.marketing_carrier && (
+                    <span className="text-[10px] text-gray-400 italic">
+                      op. {seg.operating_carrier_name || seg.operating_carrier}
+                    </span>
+                  )}
+                  <span className="text-[10px] text-gray-300">|</span>
+                  <span className="text-[10px] text-gray-500">{seg.duration}</span>
+                  {seg.aircraft_name && (
+                    <>
+                      <span className="text-[10px] text-gray-300">|</span>
+                      <span className="text-[10px] text-gray-500">✈ {seg.aircraft_name}</span>
+                    </>
+                  )}
+                  {!seg.aircraft_name && seg.aircraft_code && (
+                    <>
+                      <span className="text-[10px] text-gray-300">|</span>
+                      <span className="text-[10px] text-gray-500">✈ {seg.aircraft_code}</span>
+                    </>
+                  )}
+                </div>
+
+                {/* Arrival */}
+                <div className="flex items-baseline gap-1.5">
+                  <span className="font-bold text-[12px] text-gray-800">{seg.arrival_airport}</span>
+                  {seg.arrival_terminal && (
+                    <span className="text-[10px] text-gray-400">T{seg.arrival_terminal}</span>
+                  )}
+                  <span className="text-[11px] text-gray-600">{formatTime(seg.arrival_time)}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* ── Layover bar between segments ──────────────── */}
+            {idx < segments.length - 1 && (
+              <div className="flex items-center gap-2.5 py-1">
+                <div className="w-3 flex justify-center">
+                  <div className="w-px h-4 bg-amber-300" />
+                </div>
+                <div className="flex-1 flex items-center gap-1.5 bg-amber-50 rounded px-2 py-1 border border-amber-200">
+                  <span className="text-[10px] font-semibold text-amber-700">
+                    ⏱ {layoverDurations[idx] || '—'} layover
+                  </span>
+                  <span className="text-[10px] text-amber-600">
+                    at {seg.arrival_airport}
+                    {seg.arrival_terminal ? ` (T${seg.arrival_terminal})` : ''}
+                  </span>
+                </div>
+              </div>
+            )}
+          </React.Fragment>
+        ))}
+      </div>
+    );
+  };
+
+  // ── Amenities Grid ──────────────────────────────────────────────────
+
+  const AmenitiesGrid: React.FC<{ amenities: FlightAmenity[] }> = ({ amenities }) => {
+    if (!amenities || amenities.length === 0) return null;
+
+    const included = amenities.filter((a) => !a.is_chargeable);
+    const paid = amenities.filter((a) => a.is_chargeable);
+
+    const formatLabel = (desc: string) =>
+      desc.charAt(0) + desc.slice(1).toLowerCase().replace(/_/g, ' ');
+
+    return (
+      <div className="bg-gray-50 rounded-lg p-3">
+        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+          What's Included
+        </p>
+        <div className="flex flex-wrap gap-1.5">
+          {included.map((a, i) => (
+            <span key={i} className="text-[10px] bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded-full">
+              ✅ {formatLabel(a.description)}
+            </span>
+          ))}
+          {paid.map((a, i) => (
+            <span key={i} className="text-[10px] bg-gray-100 text-gray-500 border border-gray-200 px-1.5 py-0.5 rounded-full">
+              💰 {formatLabel(a.description)}
+            </span>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  // ── Main Render ─────────────────────────────────────────────────────
+
   return (
     <motion.div
-      whileHover={{ scale: 1.01 }}
-      transition={{ duration: 0.15 }}
+      layout
+      transition={{ duration: 0.2 }}
       className={`rounded-lg overflow-hidden cursor-pointer transition-all duration-200 ${
         isSelected
           ? 'ring-2 ring-purple-500 shadow-lg bg-gradient-to-br from-purple-50 to-pink-50'
           : 'hover:shadow-md bg-white border border-gray-200'
       }`}
-      onClick={onSelect}
+      onClick={toggleExpand}
     >
       {/* AI Badge */}
       {isAiRecommended && !isSelected && (
@@ -83,76 +261,231 @@ export const FlightCard: React.FC<FlightCardProps> = ({
       )}
 
       <div className="p-3">
-        {/* Header: radio + airline + price */}
+        {/* ═══════════════════════════════════════════════════════════════
+            HEADER: airline + badges ... price + Add button
+            ═══════════════════════════════════════════════════════════════ */}
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2">
-            <input
-              type="radio"
-              checked={isSelected}
-              onChange={onSelect}
-              className="w-3.5 h-3.5 text-purple-600 cursor-pointer"
-            />
             <span className="font-bold text-[14px] text-gray-800">
-              {flight.airline_code} {flight.outbound?.flight_number || ''}
+              {flight.airline} {flight.outbound?.flight_number || ''}
             </span>
             {isAiRecommended && <span className="text-[13px]" title="AI Recommended">🌟</span>}
-            <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[11px] font-medium">
-              {flight.cabin_class}
+            <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px] font-medium">
+              {flight.branded_fare || flight.cabin_class}
             </span>
+            {isMixedCarrier && (
+              <span className="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded text-[10px] font-medium">
+                Mixed
+              </span>
+            )}
           </div>
-          <span className="text-[17px] font-bold text-green-600">${flight.price}</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[17px] font-bold text-green-600">
+              ${flight.price}
+              {flight.currency && flight.currency !== 'USD' && (
+                <span className="text-[10px] text-gray-400 ml-0.5 font-normal">{flight.currency}</span>
+              )}
+            </span>
+            <button
+              onClick={handleAddToItinerary}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all duration-200 ${
+                isSelected
+                  ? 'bg-orange-500 text-white shadow-sm'
+                  : 'bg-orange-50 text-orange-700 border border-orange-300 hover:bg-orange-100'
+              }`}
+            >
+              {isSelected ? '✓ Added' : '+ Add'}
+            </button>
+          </div>
         </div>
 
-        {/* Outbound leg */}
+        {/* ═══════════════════════════════════════════════════════════════
+            SUMMARY VIEW (always visible)
+            ═══════════════════════════════════════════════════════════════ */}
         {flight.outbound && (
-          <LegRow tag="Out" tagColor="text-blue-600" bgColor="bg-blue-50/60" leg={flight.outbound} />
+          <SummaryLeg tag="Out" tagColor="text-blue-600" bgColor="bg-blue-50/60" leg={flight.outbound} />
         )}
-
-        {/* Return leg */}
         {flight.return_flight && (
           <div className="mt-1">
-            <LegRow tag="Ret" tagColor="text-purple-600" bgColor="bg-purple-50/60" leg={flight.return_flight} />
+            <SummaryLeg tag="Ret" tagColor="text-purple-600" bgColor="bg-purple-50/60" leg={flight.return_flight} />
           </div>
         )}
 
-        {/* Footer: baggage + actions */}
+        {/* Footer: baggage + urgency + expand indicator */}
         <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
           <div className="flex items-center gap-2">
-            {flight.cabin_bags && (
-              <span>💼 {flight.cabin_bags.quantity} cabin</span>
-            )}
-            {flight.checked_bags && (
+            {flight.cabin_bags && <span>💼 {flight.cabin_bags.quantity} cabin</span>}
+            {flight.checked_bags && flight.checked_bags.quantity > 0 && (
               <span>🧳 {flight.checked_bags.quantity} checked</span>
+            )}
+            {flight.checked_bags && flight.checked_bags.quantity === 0 && (
+              <span className="text-amber-500">🧳 No checked bag</span>
             )}
             {!flight.cabin_bags && !flight.checked_bags && (
               <span>{stopsLabel(flight.outbound?.stops ?? 0)}</span>
             )}
+            {flight.seats_remaining != null && flight.seats_remaining <= 5 && (
+              <span className="text-red-500 font-semibold">🔥 {flight.seats_remaining} left</span>
+            )}
           </div>
-          <button
-            onClick={(e) => { e.stopPropagation(); setShowDetails(!showDetails); }}
-            className="text-purple-600 hover:text-purple-700 font-semibold hover:underline text-[12px]"
-          >
-            {showDetails ? 'Hide' : 'Details'}
-          </button>
+          <span className="text-purple-500 text-[11px] flex items-center gap-1">
+            {isExpanded ? 'Less' : 'Details'}
+            <motion.span
+              animate={{ rotate: isExpanded ? 180 : 0 }}
+              transition={{ duration: 0.2 }}
+              className="inline-block text-[9px]"
+            >
+              ▼
+            </motion.span>
+          </span>
         </div>
 
-        {/* Expandable Details */}
-        <motion.div
-          initial={false}
-          animate={{ height: showDetails ? 'auto' : 0 }}
-          className="overflow-hidden"
-        >
-          <div className="mt-2 pt-2 border-t border-gray-200 text-[12px] space-y-1">
-            <div className="flex justify-between">
-              <span className="text-gray-500">Total Duration:</span>
-              <span className="font-semibold">{flight.total_duration}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Cancellation:</span>
-              <span className="font-semibold text-green-600">Flexible</span>
-            </div>
-          </div>
-        </motion.div>
+        {/* ═══════════════════════════════════════════════════════════════
+            EXPANDED VIEW — all NEW data, no duplication
+            ═══════════════════════════════════════════════════════════════ */}
+        <AnimatePresence initial={false}>
+          {isExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25, ease: 'easeInOut' }}
+              className="overflow-hidden"
+            >
+              <div className="mt-3 pt-3 border-t border-gray-200 space-y-3">
+
+                {/* ── Segment Timelines ──────────────────────────────── */}
+                {flight.outbound && (
+                  <SegmentTimeline tag="Outbound" tagColor="text-blue-700" tagBg="bg-blue-100" leg={flight.outbound} />
+                )}
+                {flight.return_flight && (
+                  <SegmentTimeline tag="Return" tagColor="text-purple-700" tagBg="bg-purple-100" leg={flight.return_flight} />
+                )}
+
+                {/* ── Amenities ──────────────────────────────────────── */}
+                {flight.amenities && flight.amenities.length > 0 && (
+                  <AmenitiesGrid amenities={flight.amenities} />
+                )}
+
+                {/* ── Fare & Booking Info ────────────────────────────── */}
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">
+
+                    {flight.branded_fare && (
+                      <div className="flex justify-between col-span-2">
+                        <span className="text-gray-500">Fare</span>
+                        <span className="font-semibold text-gray-700">{flight.branded_fare}</span>
+                      </div>
+                    )}
+
+                    {flight.validating_carrier && (
+                      <div className="flex justify-between col-span-2">
+                        <span className="text-gray-500">Ticketed by</span>
+                        <span className="font-semibold text-gray-700">{flight.validating_carrier}</span>
+                      </div>
+                    )}
+
+                    {isMixedCarrier && (
+                      <div className="flex justify-between col-span-2">
+                        <span className="text-gray-500">Carriers</span>
+                        <span className="font-semibold text-gray-700">
+                          {flight.outbound?.airline_code || flight.airline_code} → {flight.return_flight?.airline_code}
+                        </span>
+                      </div>
+                    )}
+
+                    {flight.cabin_bags && (
+                      <div className="flex justify-between col-span-2">
+                        <span className="text-gray-500">💼 Cabin bag</span>
+                        <span className="font-semibold text-gray-700">
+                          {flight.cabin_bags.quantity} × {flight.cabin_bags.weight}{flight.cabin_bags.weight_unit}
+                        </span>
+                      </div>
+                    )}
+                    {flight.checked_bags && (
+                      <div className="flex justify-between col-span-2">
+                        <span className="text-gray-500">🧳 Checked bag</span>
+                        <span className={`font-semibold ${flight.checked_bags.quantity === 0 ? 'text-amber-600' : 'text-gray-700'}`}>
+                          {flight.checked_bags.quantity === 0
+                            ? 'Not included (paid add-on)'
+                            : `${flight.checked_bags.quantity} × ${flight.checked_bags.weight}${flight.checked_bags.weight_unit}`
+                          }
+                        </span>
+                      </div>
+                    )}
+
+                    {flight.last_ticketing_date && (
+                      <div className="flex justify-between col-span-2">
+                        <span className="text-gray-500">Book by</span>
+                        <span className="font-semibold text-amber-600">
+                          {new Date(flight.last_ticketing_date + 'T00:00:00').toLocaleDateString('en-US', {
+                            month: 'short', day: 'numeric', year: 'numeric'
+                          })}
+                        </span>
+                      </div>
+                    )}
+                    {flight.seats_remaining != null && (
+                      <div className="flex justify-between col-span-2">
+                        <span className="text-gray-500">Seats left</span>
+                        <span className={`font-semibold ${flight.seats_remaining <= 5 ? 'text-red-500' : 'text-gray-700'}`}>
+                          {flight.seats_remaining}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Price breakdown */}
+                    {(flight.price_base != null || flight.price_taxes != null) && (
+                      <>
+                        <div className="col-span-2 border-t border-gray-200 mt-1 pt-1.5">
+                          <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-1">
+                            Price Breakdown
+                          </p>
+                        </div>
+                        {flight.price_base != null && (
+                          <div className="flex justify-between col-span-2">
+                            <span className="text-gray-500">Base fare</span>
+                            <span className="font-semibold text-gray-700">${flight.price_base.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {flight.price_taxes != null && (
+                          <div className="flex justify-between col-span-2">
+                            <span className="text-gray-500">Taxes & fees</span>
+                            <span className="font-semibold text-gray-700">${flight.price_taxes.toFixed(2)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between col-span-2 pt-1 border-t border-gray-200">
+                          <span className="text-gray-600 font-medium">Total</span>
+                          <span className="font-bold text-green-600 text-[14px]">
+                            ${flight.price.toFixed(2)}
+                            {flight.currency && (
+                              <span className="text-[10px] text-gray-400 ml-1 font-normal">{flight.currency}</span>
+                            )}
+                          </span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="flex items-center justify-between text-[11px] text-gray-400">
+                  <span>ID: {flight.id}</span>
+                  {(flight as any).booking_url && (
+                    <a
+                      href={(flight as any).booking_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="text-purple-600 hover:text-purple-700 font-semibold hover:underline text-[12px]"
+                    >
+                      Book Now ↗
+                    </a>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </motion.div>
   );
