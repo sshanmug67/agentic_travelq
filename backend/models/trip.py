@@ -382,19 +382,28 @@ class Event(BaseModel):
 
 
 class Place(BaseModel):
-    """Place/attraction model"""
+    """Place/attraction model — Enhanced with Google Places v4 data"""
     id: str
     name: str
     address: str
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     rating: Optional[float] = None
+    user_ratings_total: Optional[int] = None
     category: str
     description: Optional[str] = None
     photos: Optional[List[PhotoItem]] = []
     opening_hours: Optional[Dict[str, Any]] = None
     price_level: Optional[int] = None  # 0-4 scale
     website: Optional[str] = None
+
+    # v5 additions — Google Places data previously discarded
+    reviews: Optional[List[HotelReview]] = Field(
+        default=None,
+        description="Top reviews from Google Places (reuses HotelReview schema)"
+    )
+    phone_number: Optional[str] = None
+    google_url: Optional[str] = None  # Google Maps link
     
     @field_validator('photos', mode='before')
     @classmethod

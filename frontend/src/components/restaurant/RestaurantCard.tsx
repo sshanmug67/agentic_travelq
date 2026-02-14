@@ -1,19 +1,20 @@
 // frontend/src/components/restaurant/RestaurantCard.tsx
+//
+// v2 — Click-to-expand + Add button + Rich Expanded View
+//
+// Interaction model (same as FlightCard/HotelCard v5):
+//   - Click card → expand/collapse details
+//   - Click "Add to Itinerary" button → select for itinerary
+//
+// Summary (collapsed): photo, name, rating, cuisine, price level, address
+// Expanded: guest reviews, location & contact, cuisine details
 
-import React from 'react';
-import { motion } from 'framer-motion';
+import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import type { Restaurant, HotelReview } from '../../types/trip';
 
 interface RestaurantCardProps {
-  restaurant: {
-    id: string;
-    name: string;
-    rating: number;
-    user_ratings_total: number;
-    category: string;
-    address: string;
-    price_level?: string;
-    photos?: Array<{ url: string }>;
-  };
+  restaurant: Restaurant;
   isSelected: boolean;
   onToggle: () => void;
 }
@@ -23,119 +24,223 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
   isSelected,
   onToggle,
 }) => {
-  const getPriceLevelDisplay = (level?: string) => {
-    if (!level) return '$$';
-    return level === 'PRICE_LEVEL_INEXPENSIVE'
-      ? '$'
-      : level === 'PRICE_LEVEL_MODERATE'
-      ? '$$'
-      : level === 'PRICE_LEVEL_EXPENSIVE'
-      ? '$$$'
-      : level === 'PRICE_LEVEL_VERY_EXPENSIVE'
-      ? '$$$$'
-      : '$$';
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const toggleExpand = () => setIsExpanded((prev) => !prev);
+
+  const handleAddToItinerary = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onToggle();
   };
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+
+  const getPriceLevelDisplay = (level?: string | number) => {
+    if (level == null) return '$$';
+    if (typeof level === 'number') {
+      return ['Free', '$', '$$', '$$$', '$$$$'][level] || '$$';
+    }
+    const map: Record<string, string> = {
+      'PRICE_LEVEL_FREE': 'Free',
+      'PRICE_LEVEL_INEXPENSIVE': '$',
+      'PRICE_LEVEL_MODERATE': '$$',
+      'PRICE_LEVEL_EXPENSIVE': '$$$',
+      'PRICE_LEVEL_VERY_EXPENSIVE': '$$$$',
+    };
+    return map[level] || '$$';
+  };
+
+  const renderMiniStars = (rating: number) => (
+    <span className="inline-flex gap-px">
+      {[...Array(5)].map((_, i) => (
+        <span key={i} className={i < Math.floor(rating) ? 'text-yellow-500' : 'text-gray-200'} style={{ fontSize: '9px' }}>★</span>
+      ))}
+    </span>
+  );
+
+  const ReviewSnippet: React.FC<{ review: HotelReview }> = ({ review }) => {
+    const maxLen = 140;
+    const text = review.text.length > maxLen
+      ? review.text.slice(0, maxLen).trim() + '…'
+      : review.text;
+    return (
+      <div className="bg-white rounded p-2 border border-gray-100">
+        <div className="flex items-center gap-1.5 mb-1">
+          {renderMiniStars(review.rating)}
+          <span className="text-[11px] font-semibold text-gray-700">{review.author_name}</span>
+          {review.relative_time_description && (
+            <span className="text-[10px] text-gray-400">· {review.relative_time_description}</span>
+          )}
+        </div>
+        <p className="text-[11px] text-gray-600 leading-relaxed">{text}</p>
+      </div>
+    );
+  };
+
+  // ── Render ───────────────────────────────────────────────────────────
 
   return (
     <motion.div
-      whileHover={{ scale: 1.02, y: -2 }}
+      layout
       transition={{ duration: 0.2 }}
-      className={`rounded-lg overflow-hidden cursor-pointer transition-all duration-300 ${
+      className={`rounded-lg overflow-hidden cursor-pointer transition-all duration-200 ${
         isSelected
           ? 'ring-2 ring-orange-500 shadow-lg bg-gradient-to-br from-orange-50 to-red-50'
           : 'hover:shadow-md bg-white border border-gray-200'
       }`}
-      onClick={onToggle}
+      onClick={toggleExpand}
     >
       <div className="flex gap-3 p-4">
         {/* Restaurant Photo */}
-        <div className="w-24 h-24 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0">
+        <div className="w-20 h-20 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0">
           {restaurant.photos && restaurant.photos.length > 0 ? (
-            <img
-              src={restaurant.photos[0].url}
-              alt={restaurant.name}
-              className="w-full h-full object-cover"
-            />
+            <img src={restaurant.photos[0].url} alt={restaurant.name} className="w-full h-full object-cover" />
           ) : (
-            <div className="w-full h-full flex items-center justify-center text-3xl">
-              🍽️
-            </div>
+            <div className="w-full h-full flex items-center justify-center text-2xl">🍽️</div>
           )}
         </div>
 
         {/* Restaurant Details */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2 mb-2">
-            <div className="flex-1 min-w-0">
-              <h3 className="font-bold text-base text-gray-800 truncate">
-                {restaurant.name}
-              </h3>
-              <div className="flex items-center gap-2 mt-1">
-                {/* Rating */}
-                <div className="flex items-center gap-1">
-                  <span className="text-yellow-500">⭐</span>
-                  <span className="font-semibold text-sm">{restaurant.rating}</span>
-                </div>
-                <span className="text-xs text-gray-500">
-                  ({restaurant.user_ratings_total?.toLocaleString()})
-                </span>
-                <span className="text-gray-400">•</span>
-                {/* Price Level */}
-                <span className="text-sm font-semibold text-green-700">
-                  {getPriceLevelDisplay(restaurant.price_level)}
-                </span>
-              </div>
+          {/* Row 1: Name ... Price + Add */}
+          <div className="flex items-start justify-between gap-2 mb-1.5">
+            <h3 className="font-bold text-[14px] text-gray-800 truncate">{restaurant.name}</h3>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <span className="text-[14px] font-bold text-green-700">
+                {getPriceLevelDisplay(restaurant.price_level)}
+              </span>
+              <button
+                onClick={handleAddToItinerary}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all duration-200 ${
+                  isSelected
+                    ? 'bg-orange-500 text-white shadow-sm'
+                    : 'bg-orange-50 text-orange-700 border border-orange-300 hover:bg-orange-100'
+                }`}
+              >
+                {isSelected ? '✓ Added' : '+ Add'}
+              </button>
             </div>
-            
-            {/* Add/Remove Button */}
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggle();
-              }}
-              className={`flex-shrink-0 px-3 py-1 rounded-full text-sm font-semibold transition-all ${
-                isSelected
-                  ? 'bg-orange-600 text-white hover:bg-orange-700'
-                  : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-              }`}
-            >
-              {isSelected ? '✓ Added' : '+ Add'}
-            </button>
           </div>
 
-          {/* Cuisine Badge */}
-          <div className="flex items-center gap-2 mb-2">
-            <span className="bg-orange-100 text-orange-700 text-xs px-2 py-1 rounded-full capitalize">
-              {restaurant.category.replace('_', ' ')}
+          {/* Row 2: Rating + cuisine badge */}
+          <div className="flex items-center gap-2 mb-1.5">
+            <div className="flex items-center gap-1">
+              <span className="text-yellow-500 text-[12px]">⭐</span>
+              <span className="font-semibold text-[13px]">{restaurant.rating}</span>
+            </div>
+            <span className="text-[11px] text-gray-400">({restaurant.user_ratings_total?.toLocaleString()})</span>
+            {restaurant.cuisine_tag && (
+              <>
+                <span className="text-gray-300">·</span>
+                <span className="bg-orange-100 text-orange-700 text-[10px] px-1.5 py-0.5 rounded-full font-medium capitalize">
+                  {restaurant.cuisine_tag}
+                </span>
+              </>
+            )}
+            {!restaurant.cuisine_tag && restaurant.category && (
+              <>
+                <span className="text-gray-300">·</span>
+                <span className="bg-orange-100 text-orange-700 text-[10px] px-1.5 py-0.5 rounded-full font-medium capitalize">
+                  {restaurant.category.replace('_', ' ')}
+                </span>
+              </>
+            )}
+          </div>
+
+          {/* Row 3: Address + expand hint */}
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] text-gray-500 truncate">📍 {restaurant.address}</div>
+            <span className="text-purple-500 text-[10px] flex items-center gap-0.5 flex-shrink-0 ml-2">
+              {isExpanded ? 'Less' : 'Details'}
+              <motion.span
+                animate={{ rotate: isExpanded ? 180 : 0 }}
+                transition={{ duration: 0.2 }}
+                className="inline-block text-[8px]"
+              >▼</motion.span>
             </span>
-          </div>
-
-          {/* Address */}
-          <div className="text-xs text-gray-600 truncate">
-            📍 {restaurant.address}
           </div>
         </div>
       </div>
 
-      {/* Selected State Footer */}
-      {isSelected && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          className="bg-orange-500 px-4 py-2 text-white text-xs font-semibold flex items-center justify-between"
-        >
-          <span>✓ Added to your itinerary</span>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              // Add to specific day
-            }}
-            className="hover:underline"
+      {/* ═══════════════════════════════════════════════════════════════
+          EXPANDED VIEW
+          ═══════════════════════════════════════════════════════════════ */}
+      <AnimatePresence initial={false}>
+        {isExpanded && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: 'auto', opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: 'easeInOut' }}
+            className="overflow-hidden"
           >
-            Assign to Day →
-          </button>
-        </motion.div>
-      )}
+            <div className="px-4 pb-4 space-y-3">
+              <div className="border-t border-gray-200 pt-3"></div>
+
+              {/* Guest Reviews */}
+              {restaurant.reviews && restaurant.reviews.length > 0 && (
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                    Guest Reviews
+                  </p>
+                  <div className="space-y-2">
+                    {restaurant.reviews.slice(0, 3).map((review, idx) => (
+                      <ReviewSnippet key={idx} review={review} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Location & Contact */}
+              {(restaurant.google_url || restaurant.website || restaurant.phone_number) && (
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                    Location & Contact
+                  </p>
+                  <div className="space-y-1.5 text-[12px]">
+                    {restaurant.phone_number && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-500">Phone</span>
+                        <a
+                          href={`tel:${restaurant.phone_number}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="font-semibold text-purple-600 hover:underline"
+                        >
+                          {restaurant.phone_number}
+                        </a>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2 mt-1">
+                      {restaurant.google_url && (
+                        <a
+                          href={restaurant.google_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded hover:bg-blue-100 font-medium"
+                        >
+                          📍 Google Maps
+                        </a>
+                      )}
+                      {restaurant.website && (
+                        <a
+                          href={restaurant.website}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-[11px] bg-gray-100 text-gray-700 border border-gray-200 px-2 py-1 rounded hover:bg-gray-200 font-medium"
+                        >
+                          🌐 Website
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </motion.div>
   );
 };

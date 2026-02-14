@@ -157,6 +157,14 @@ export interface Restaurant {
   price_level?: string;
   photos?: Array<{ url: string }>;
   estimatedCost?: number;
+
+  // v5 additions — Google Places data
+  reviews?: HotelReview[];
+  website?: string;
+  phone_number?: string;
+  google_url?: string;
+  cuisine_tag?: string;
+  venue_type?: string;
 }
 
 export interface Activity {
@@ -170,6 +178,14 @@ export interface Activity {
   price?: string;
   photos?: Array<{ url: string }>;
   estimatedCost?: number;
+
+  // v5 additions — Google Places data
+  reviews?: HotelReview[];
+  website?: string;
+  phone_number?: string;
+  google_url?: string;
+  interest_tag?: string;
+  venue_type?: string;
 }
 
 export interface Event {
