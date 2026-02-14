@@ -1,14 +1,17 @@
 // frontend/src/components/hotel/HotelCard.tsx
 //
-// Changes (v2 — Grid-friendly):
-//   - Details row wraps for half-width cards
-//   - Photo + address on one line, dates + price on next
-//   - Compact header with name truncation
-//   - Works in both single-col and 2-col grid
+// v5 — Click-to-expand + Add button + Rich Expanded View
+//
+// Interaction model:
+//   - Click card → expand/collapse details
+//   - Click "Add to Itinerary" button → select hotel for itinerary
+//
+// Summary (collapsed): photo, name, rating, address, dates, price
+// Expanded: guest reviews, location & contact, price details, booking links
 
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Hotel } from '../../types/trip';
+import type { Hotel, HotelReview } from '../../types/trip';
 
 interface HotelCardProps {
   hotel: Hotel;
@@ -23,12 +26,21 @@ export const HotelCard: React.FC<HotelCardProps> = ({
   isAiRecommended,
   onSelect,
 }) => {
-  const [showDetails, setShowDetails] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
   const [showPhotos, setShowPhotos] = useState(false);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
 
   const rawPhotos = hotel.photos?.slice(0, 5) || [];
   const photoUrls: string[] = rawPhotos.map((p: any) => (typeof p === 'string' ? p : p?.url)).filter(Boolean);
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+
+  const toggleExpand = () => setIsExpanded((prev) => !prev);
+
+  const handleAddToItinerary = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onSelect();
+  };
 
   const renderStars = (rating: number) => {
     const full = Math.floor(rating);
@@ -41,21 +53,64 @@ export const HotelCard: React.FC<HotelCardProps> = ({
     );
   };
 
+  const renderMiniStars = (rating: number) => {
+    const full = Math.floor(rating);
+    return (
+      <span className="inline-flex gap-px">
+        {[...Array(5)].map((_, i) => (
+          <span key={i} className={i < full ? 'text-yellow-500' : 'text-gray-200'} style={{ fontSize: '9px' }}>★</span>
+        ))}
+      </span>
+    );
+  };
+
   const formatDate = (dateStr: string) => {
     const d = new Date(dateStr + 'T00:00:00');
     return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   };
 
+  const priceLevelLabel = (level?: number) => {
+    if (level == null) return null;
+    const labels: Record<number, string> = {
+      0: 'Free', 1: 'Budget', 2: 'Moderate', 3: 'Expensive', 4: 'Very Expensive'
+    };
+    return labels[level] || null;
+  };
+
+  // ── Review Snippet ──────────────────────────────────────────────────
+
+  const ReviewSnippet: React.FC<{ review: HotelReview }> = ({ review }) => {
+    const maxLen = 150;
+    const text = review.text.length > maxLen
+      ? review.text.slice(0, maxLen).trim() + '…'
+      : review.text;
+
+    return (
+      <div className="bg-white rounded p-2 border border-gray-100">
+        <div className="flex items-center gap-1.5 mb-1">
+          {renderMiniStars(review.rating)}
+          <span className="text-[11px] font-semibold text-gray-700">{review.author_name}</span>
+          {review.relative_time_description && (
+            <span className="text-[10px] text-gray-400">· {review.relative_time_description}</span>
+          )}
+        </div>
+        <p className="text-[11px] text-gray-600 leading-relaxed">{text}</p>
+      </div>
+    );
+  };
+
+  // ── Main Render ─────────────────────────────────────────────────────
+
   return (
     <motion.div
-      whileHover={{ scale: 1.01 }}
-      transition={{ duration: 0.15 }}
+      layout
+      transition={{ duration: 0.2 }}
       className={`rounded-lg overflow-hidden cursor-pointer transition-all duration-200 ${
         isSelected
           ? 'ring-2 ring-purple-500 shadow-lg bg-gradient-to-br from-purple-50 to-pink-50'
           : 'hover:shadow-md bg-white border border-gray-200'
       }`}
-      onClick={onSelect}
+      onClick={toggleExpand}
     >
       {/* AI Badge */}
       {isAiRecommended && !isSelected && (
@@ -65,33 +120,53 @@ export const HotelCard: React.FC<HotelCardProps> = ({
       )}
 
       <div className="p-3">
-        {/* Header: radio + name + stars ... price */}
+        {/* ═══════════════════════════════════════════════════════════════
+            HEADER: name + badges ... price + Add button
+            ═══════════════════════════════════════════════════════════════ */}
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 min-w-0">
-            <input
-              type="radio"
-              checked={isSelected}
-              onChange={onSelect}
-              className="w-3.5 h-3.5 text-purple-600 cursor-pointer flex-shrink-0"
-            />
             <span className="font-bold text-[14px] text-gray-800 truncate">
               {hotel.name}
             </span>
             {isAiRecommended && <span className="text-[13px] flex-shrink-0" title="AI Recommended">🌟</span>}
+            {hotel.property_type && hotel.property_type !== 'Hotel' && (
+              <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0">
+                {hotel.property_type}
+              </span>
+            )}
           </div>
-          <div className="text-right flex-shrink-0 ml-2">
+          <div className="flex items-center gap-2 flex-shrink-0 ml-2">
             <span className="text-[17px] font-bold text-green-600">${hotel.total_price}</span>
+            <button
+              onClick={handleAddToItinerary}
+              className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all duration-200 ${
+                isSelected
+                  ? 'bg-orange-500 text-white shadow-sm'
+                  : 'bg-orange-50 text-orange-700 border border-orange-300 hover:bg-orange-100'
+              }`}
+            >
+              {isSelected ? '✓ Added' : '+ Add'}
+            </button>
           </div>
         </div>
+
+        {/* ═══════════════════════════════════════════════════════════════
+            SUMMARY VIEW (always visible)
+            ═══════════════════════════════════════════════════════════════ */}
 
         {/* Rating row */}
         <div className="flex items-center gap-1.5 mb-2">
           {renderStars(hotel.google_rating)}
           <span className="font-semibold text-[13px] text-gray-700">{hotel.google_rating}</span>
           <span className="text-[11px] text-gray-400">({hotel.user_ratings_total?.toLocaleString()})</span>
+          {hotel.is_estimated_price === false && hotel.cheapest_provider && (
+            <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full ml-1">
+              via {hotel.cheapest_provider}
+            </span>
+          )}
         </div>
 
-        {/* Info block: photo + details stacked */}
+        {/* Info block */}
         <div className="bg-blue-50/60 rounded p-2">
           <div className="flex items-start gap-2.5">
             {/* Photo thumbnail */}
@@ -120,12 +195,15 @@ export const HotelCard: React.FC<HotelCardProps> = ({
               </div>
               <div className="text-[12px] font-semibold text-gray-600">
                 ${hotel.price_per_night}/night
+                {hotel.is_estimated_price && (
+                  <span className="text-[10px] text-amber-500 font-normal ml-1">(est.)</span>
+                )}
               </div>
             </div>
           </div>
         </div>
 
-        {/* Footer: highlights + actions */}
+        {/* Footer: highlights + expand indicator */}
         <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
           <div className="flex items-center gap-1.5 flex-wrap">
             {hotel.highlights && hotel.highlights.slice(0, 2).map((h, idx) => (
@@ -137,63 +215,183 @@ export const HotelCard: React.FC<HotelCardProps> = ({
               <span>{hotel.num_nights} nights stay</span>
             )}
           </div>
-          <div className="flex gap-2 flex-shrink-0">
-            <button
-              onClick={(e) => { e.stopPropagation(); setShowDetails(!showDetails); }}
-              className="text-purple-600 hover:text-purple-700 font-semibold hover:underline text-[12px]"
+          <span className="text-purple-500 text-[11px] flex items-center gap-1">
+            {isExpanded ? 'Less' : 'Details'}
+            <motion.span
+              animate={{ rotate: isExpanded ? 180 : 0 }}
+              transition={{ duration: 0.2 }}
+              className="inline-block text-[9px]"
             >
-              {showDetails ? 'Hide' : 'Details'}
-            </button>
-            {photoUrls.length > 0 && (
-              <button
-                onClick={(e) => { e.stopPropagation(); setShowPhotos(true); }}
-                className="text-purple-600 hover:text-purple-700 font-semibold hover:underline text-[12px]"
-              >
-                📷 {photoUrls.length}
-              </button>
-            )}
-            {(hotel as any).booking_url && (
-              <a
-                href={(hotel as any).booking_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                onClick={(e) => e.stopPropagation()}
-                className="text-purple-600 hover:text-purple-700 font-semibold hover:underline text-[12px]"
-              >
-                Book
-              </a>
-            )}
-          </div>
+              ▼
+            </motion.span>
+          </span>
         </div>
 
-        {/* Expandable Details */}
-        <motion.div
-          initial={false}
-          animate={{ height: showDetails ? 'auto' : 0 }}
-          className="overflow-hidden"
-        >
-          <div className="mt-2 pt-2 border-t border-gray-200 text-[12px] space-y-1">
-            <div className="flex justify-between">
-              <span className="text-gray-500">Address:</span>
-              <span className="font-semibold text-right max-w-[60%]">{hotel.address}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Check-in:</span>
-              <span className="font-semibold">{hotel.check_in_date}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Check-out:</span>
-              <span className="font-semibold">{hotel.check_out_date}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-gray-500">Total ({hotel.num_nights} nights):</span>
-              <span className="font-semibold text-green-600">${hotel.total_price}</span>
-            </div>
-          </div>
-        </motion.div>
+        {/* ═══════════════════════════════════════════════════════════════
+            EXPANDED VIEW — all NEW data, no duplication
+            ═══════════════════════════════════════════════════════════════ */}
+        <AnimatePresence initial={false}>
+          {isExpanded && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: 'auto', opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={{ duration: 0.25, ease: 'easeInOut' }}
+              className="overflow-hidden"
+            >
+              <div className="mt-3 pt-3 border-t border-gray-200 space-y-3">
+
+                {/* ── Guest Reviews ──────────────────────────────────── */}
+                {hotel.reviews && hotel.reviews.length > 0 && (
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                      Guest Reviews
+                    </p>
+                    <div className="space-y-2">
+                      {hotel.reviews.slice(0, 3).map((review, idx) => (
+                        <ReviewSnippet key={idx} review={review} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Location & Contact ─────────────────────────────── */}
+                {(hotel.google_url || hotel.website || hotel.phone_number || hotel.property_type) && (
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                      Location & Contact
+                    </p>
+                    <div className="grid grid-cols-1 gap-1.5 text-[12px]">
+                      {hotel.property_type && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">Type</span>
+                          <span className="font-semibold text-gray-700">{hotel.property_type}</span>
+                        </div>
+                      )}
+                      {priceLevelLabel(hotel.price_level) && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">Price tier</span>
+                          <span className="font-semibold text-gray-700">{priceLevelLabel(hotel.price_level)}</span>
+                        </div>
+                      )}
+                      {hotel.phone_number && (
+                        <div className="flex justify-between">
+                          <span className="text-gray-500">Phone</span>
+                          <a
+                            href={`tel:${hotel.phone_number}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="font-semibold text-purple-600 hover:underline"
+                          >
+                            {hotel.phone_number}
+                          </a>
+                        </div>
+                      )}
+                      <div className="flex items-center gap-2 mt-1">
+                        {hotel.google_url && (
+                          <a
+                            href={hotel.google_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded hover:bg-blue-100 font-medium"
+                          >
+                            📍 Google Maps
+                          </a>
+                        )}
+                        {hotel.website && (
+                          <a
+                            href={hotel.website}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-[11px] bg-gray-100 text-gray-700 border border-gray-200 px-2 py-1 rounded hover:bg-gray-200 font-medium"
+                          >
+                            🌐 Website
+                          </a>
+                        )}
+                        {photoUrls.length > 0 && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setShowPhotos(true); }}
+                            className="text-[11px] bg-gray-100 text-gray-700 border border-gray-200 px-2 py-1 rounded hover:bg-gray-200 font-medium"
+                          >
+                            📷 {photoUrls.length} photos
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* ── Price Details ──────────────────────────────────── */}
+                <div className="bg-gray-50 rounded-lg p-3">
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                    Price Details
+                  </p>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">
+                    <div className="flex justify-between col-span-2">
+                      <span className="text-gray-500">Per night</span>
+                      <span className="font-semibold text-gray-700">${hotel.price_per_night}/night</span>
+                    </div>
+                    <div className="flex justify-between col-span-2">
+                      <span className="text-gray-500">Total ({hotel.num_nights} nights)</span>
+                      <span className="font-bold text-green-600 text-[14px]">
+                        ${hotel.total_price}
+                        {hotel.currency && hotel.currency !== 'USD' && (
+                          <span className="text-[10px] text-gray-400 ml-1 font-normal">{hotel.currency}</span>
+                        )}
+                      </span>
+                    </div>
+                    <div className="flex justify-between col-span-2">
+                      <span className="text-gray-500">Price source</span>
+                      {hotel.is_estimated_price ? (
+                        <span className="text-[11px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded font-medium">
+                          Estimated
+                        </span>
+                      ) : (
+                        <span className="text-[11px] bg-green-50 text-green-700 border border-green-200 px-1.5 py-0.5 rounded font-medium">
+                          ✓ Real price{hotel.cheapest_provider ? ` via ${hotel.cheapest_provider}` : ''}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Booking Links ──────────────────────────────────── */}
+                {hotel.booking_links && Object.keys(hotel.booking_links).length > 0 && (
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                      Book on
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {Object.entries(hotel.booking_links).map(([provider, url]) => (
+                        <a
+                          key={provider}
+                          href={url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-[11px] bg-purple-50 text-purple-700 border border-purple-200 px-2 py-1 rounded-full hover:bg-purple-100 font-medium transition-colors"
+                        >
+                          {provider} ↗
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Footer */}
+                <div className="flex items-center justify-between text-[11px] text-gray-400">
+                  <span>ID: {hotel.id?.slice(0, 20)}{hotel.id?.length > 20 ? '…' : ''}</span>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
 
-      {/* Photo Gallery Modal */}
+      {/* ═══════════════════════════════════════════════════════════════════
+          PHOTO GALLERY MODAL
+          ═══════════════════════════════════════════════════════════════════ */}
       <AnimatePresence>
         {showPhotos && (
           <motion.div

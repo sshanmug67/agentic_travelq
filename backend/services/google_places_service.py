@@ -2,23 +2,11 @@
 Google Places Service - Hotel Details & Reviews
 Using Places API (NEW) - Direct REST API calls - WORKING VERSION
 
-Google deprecated the legacy Places API. This uses the new REST API directly.
-This version avoids unsupported types and uses only validated included types.
-
-Documentation: https://developers.google.com/maps/documentation/places/web-service/op-overview
-
-Changes (v2):
-  - Added search_hotels_by_text() for chain-specific hotel discovery
-    Uses Places Text Search API to find hotels by name/brand
-    Called by HotelAgent when user has preferred_chains
-
-Changes (v3):
-  - Added search_places_by_text() for cuisine-specific restaurant searches
-    and interest-specific activity searches.
-    Uses Text Search API with free-text queries like:
-      "Italian restaurant in London"
-      "cherry blossom viewing in Tokyo"
-    Called by PlacesAgent when user has cuisine/interest preferences.
+Changes (v4):
+  - Added places.reviews and places.googleMapsUri to ALL field masks
+  - _parse_place_result() now extracts: website, phone_number, reviews, google_url
+  - Reviews parsed inline (no separate get_place_details() call needed)
+  - All data now flows through to Hotel model and frontend
 
 Location: backend/services/google_places_service.py
 """
@@ -30,15 +18,36 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+# ─────────────────────────────────────────────────────────────────────────
+# Shared field mask — used by all search endpoints
+# v4: Added places.reviews, places.googleMapsUri
+# ─────────────────────────────────────────────────────────────────────────
+SEARCH_FIELD_MASK = (
+    "places.id,"
+    "places.displayName,"
+    "places.formattedAddress,"
+    "places.location,"
+    "places.rating,"
+    "places.userRatingCount,"
+    "places.priceLevel,"
+    "places.primaryType,"
+    "places.photos,"
+    "places.types,"
+    "places.businessStatus,"
+    "places.currentOpeningHours,"
+    "places.internationalPhoneNumber,"
+    "places.websiteUri,"
+    "places.reviews,"
+    "places.googleMapsUri"
+)
+
 
 class GooglePlacesService:
     """Service for interacting with Google Places API (New)"""
     
-    # New API base URL
     BASE_URL = "https://places.googleapis.com/v1/places"
     
     def __init__(self, api_key: Optional[str] = None):
-        """Initialize Google Places service"""
         logger.info("=" * 80)
         logger.info("🔧 GooglePlacesService Initialization (Places API New)")
         logger.info("=" * 80)
@@ -46,20 +55,16 @@ class GooglePlacesService:
         self.api_key = api_key
         self.client = None
         
-        # Diagnostic logging
         if api_key:
             masked_key = api_key[:10] + "..." if len(api_key) > 10 else "***"
             logger.info(f"✓ API Key provided: {masked_key}")
             logger.info(f"✓ API Key length: {len(api_key)} characters")
             logger.info(f"✓ Using Places API (New) - REST API")
-            
-            # Set client to True to indicate ready
             self.client = True
             
-            # Test API connection
             try:
                 test_response = requests.get(
-                    f"{self.BASE_URL}/ChIJdd4hrwug2EcRmSrV3Vo6llI",  # Sample place
+                    f"{self.BASE_URL}/ChIJdd4hrwug2EcRmSrV3Vo6llI",
                     headers={"X-Goog-Api-Key": self.api_key},
                     timeout=5
                 )
@@ -69,11 +74,8 @@ class GooglePlacesService:
                     logger.warning(f"⚠️  API test returned status: {test_response.status_code}")
             except Exception as test_e:
                 logger.warning(f"⚠️  API connection test failed: {test_e}")
-                
         else:
             logger.error("❌ API Key is None or empty")
-            logger.error("   Check: settings.google_places_api_key")
-            logger.error("   Check: .env file has GOOGLE_PLACES_API_KEY=your_key")
             self.client = None
         
         logger.info("=" * 80)
@@ -89,22 +91,7 @@ class GooglePlacesService:
         open_now: bool = False,
         agent_logger: Optional[logging.Logger] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Search for hotels using Google Places API (New) - Nearby Search
-        
-        Args:
-            location: Location name (e.g., "London, UK")
-            latitude: Latitude coordinate (alternative to location)
-            longitude: Longitude coordinate (alternative to location)
-            radius: Search radius in meters (max: 50000)
-            min_rating: Minimum rating (0-5)
-            price_level: List of price levels [0-4] (not used in new API)
-            open_now: Only return hotels open now
-            agent_logger: Optional agent-specific logger
-            
-        Returns:
-            List of hotel dictionaries with basic info
-        """
+        """Search for hotels using Nearby Search"""
         log = agent_logger or logger
         
         log.info("=" * 80)
@@ -114,16 +101,12 @@ class GooglePlacesService:
         log.info(f"      Location: {location or f'{latitude},{longitude}'}")
         log.info(f"      Radius: {radius}m")
         log.info(f"      Min Rating: {min_rating}")
-        log.info(f"      ℹ️  Note: budget, amenities, chains not supported by Nearby Search API")
-        log.info(f"      ℹ️  These are handled by HotelAgent post-filtering and LLM recommendation")
         
         if not self.client:
             log.error("❌ Google Places client not initialized")
-            log.error("   Check API key configuration")
             return []
         
         try:
-            # Resolve location to coordinates if needed
             if location and not (latitude and longitude):
                 log.info(f"🔍 Geocoding location: {location}")
                 coords = self._geocode_location(location, log)
@@ -138,16 +121,7 @@ class GooglePlacesService:
                 log.error("❌ Must provide either location name or coordinates")
                 return []
             
-            log.info(f"\n📡 Making API call to Places API (New)")
-            log.info(f"   Endpoint: searchNearby")
-            log.info(f"   Location: {latitude}, {longitude}")
-            log.info(f"   Radius: {radius}m")
-            
-            # Build request body - only use validated types
-            included_types = [
-                "hotel",           # Traditional hotels
-                "resort_hotel"     # Resort properties  
-            ]
+            included_types = ["hotel", "resort_hotel"]
             
             request_body = {
                 "includedTypes": included_types,
@@ -164,131 +138,70 @@ class GooglePlacesService:
                 "rankPreference": "POPULARITY"
             }
             
-            log.info(f"   Included types: {', '.join(included_types)}")
-            log.info(f"   Ranking: POPULARITY")
-            log.info(f"   Max results: 20")
-            
-            # Headers for new API
             headers = {
                 "Content-Type": "application/json",
                 "X-Goog-Api-Key": self.api_key,
-                "X-Goog-FieldMask": (
-                    "places.id,"
-                    "places.displayName,"
-                    "places.formattedAddress,"
-                    "places.location,"
-                    "places.rating,"
-                    "places.userRatingCount,"
-                    "places.priceLevel,"
-                    "places.primaryType,"
-                    "places.photos,"
-                    "places.types,"
-                    "places.businessStatus,"
-                    "places.currentOpeningHours,"
-                    "places.internationalPhoneNumber,"
-                    "places.websiteUri"
-                )
+                "X-Goog-FieldMask": SEARCH_FIELD_MASK
             }
             
-            # Make request
             url = f"{self.BASE_URL}:searchNearby"
             response = requests.post(url, json=request_body, headers=headers, timeout=30)
             
-            log.info(f"\n✅ API Response Received")
-            log.info(f"   Status: {response.status_code}")
+            log.info(f"✅ API Response: {response.status_code}")
             
             if response.status_code != 200:
-                log.error(f"❌ API returned error: {response.status_code}")
-                log.error(f"   Response: {response.text}")
+                log.error(f"❌ API error: {response.status_code} - {response.text}")
                 return []
             
             data = response.json()
             places = data.get('places', [])
-            
             log.info(f"   Results count: {len(places)}")
             
-            # If we got very few results, try again with lodging
+            # Retry with 'lodging' if few results
             if len(places) < 5:
-                log.warning(f"⚠️  Only {len(places)} hotels found with strict filters")
-                log.info(f"   Retrying with 'lodging' type...")
-                
+                log.warning(f"⚠️  Only {len(places)} hotels, retrying with 'lodging'")
                 request_body["includedTypes"] = ["lodging"]
-                request_body["maxResultCount"] = 20
-                
                 response = requests.post(url, json=request_body, headers=headers, timeout=30)
-                
                 if response.status_code == 200:
                     data = response.json()
                     places = data.get('places', [])
-                    log.info(f"   Retry results: {len(places)} hotels")
+                    log.info(f"   Retry results: {len(places)}")
             
             if not places:
-                log.warning(f"⚠️  No hotels found")
+                log.warning("⚠️  No hotels found")
                 return []
             
-            # Parse results
             hotels = []
             hotels_no_rating = []
-            filtered_count = 0
             
             for idx, place in enumerate(places, 1):
                 rating = place.get('rating', 0)
                 name = place.get('displayName', {}).get('text', 'Unknown')
                 primary_type = place.get('primaryType', '')
                 
-                log.info(f"\n   Hotel {idx}: {name}")
-                log.info(f"      Rating: {rating}")
-                if primary_type:
-                    log.info(f"      Type: {primary_type}")
-                
                 if rating == 0:
                     hotel = self._parse_place_result(place, log)
                     if hotel and primary_type in ['hotel', 'resort_hotel', 'motel']:
                         hotels_no_rating.append(hotel)
-                        log.info(f"      ℹ️  No rating - saved as backup")
-                    else:
-                        log.info(f"      ⚠️  No rating, not a hotel type")
                     continue
                 
                 if rating < min_rating:
-                    log.info(f"      ⚠️  Filtered out (rating {rating} < min {min_rating})")
-                    filtered_count += 1
                     continue
                 
                 hotel = self._parse_place_result(place, log)
                 if hotel:
-                    log.info(f"      ✅ Included")
                     hotels.append(hotel)
-                else:
-                    log.warning(f"      ⚠️  Failed to parse")
             
-            # Include unrated hotels if needed
+            # Include unrated if needed
             if len(hotels) < 5 and hotels_no_rating:
                 num_to_add = min(5 - len(hotels), len(hotels_no_rating))
-                log.info(f"\n⚠️  Only {len(hotels)} rated hotels, adding {num_to_add} unrated")
                 hotels.extend(hotels_no_rating[:num_to_add])
             
-            log.info(f"\n📊 Search Summary:")
-            log.info(f"   Total from API: {len(places)}")
-            log.info(f"   With good ratings: {len([h for h in hotels if h.get('google_rating', 0) >= min_rating])}")
-            log.info(f"   Backup (unrated): {len([h for h in hotels if h.get('google_rating', 0) == 0])}")
-            log.info(f"   Final count: {len(hotels)}")
-            log.info("=" * 80)
-            
+            log.info(f"📊 Final count: {len(hotels)} hotels")
             return hotels
             
-        except requests.exceptions.RequestException as e:
-            log.error("=" * 80)
-            log.error(f"❌ REQUEST EXCEPTION")
-            log.error(f"   Error: {str(e)}")
-            log.error("=" * 80)
-            return []
         except Exception as e:
-            log.error("=" * 80)
-            log.error(f"❌ EXCEPTION")
-            log.error(f"   Error: {str(e)}")
-            log.exception("   Traceback:")
-            log.error("=" * 80)
+            log.error(f"❌ Exception: {str(e)}")
             return []
 
     def search_hotels_by_text(
@@ -302,131 +215,68 @@ class GooglePlacesService:
         max_results: int = 10,
         agent_logger: Optional[logging.Logger] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Search for hotels using Google Places Text Search API.
-        
-        Use this for targeted searches like "Marriott hotel in London" or
-        "Hilton near Times Square". Unlike Nearby Search, this uses a free-text
-        query so it can find specific hotel chains or brands.
-        
-        Endpoint: POST /v1/places:searchText
-        Docs: https://developers.google.com/maps/documentation/places/web-service/text-search
-
-        Args:
-            query: Free-text search (e.g., "Marriott hotel in London")
-            location: Location name for geocoding bias (optional if lat/lon given)
-            latitude: Latitude for location bias
-            longitude: Longitude for location bias
-            radius: Bias radius in meters (not a hard boundary)
-            min_rating: Minimum rating filter (0-5)
-            max_results: Max results to return (API max: 20)
-            agent_logger: Optional agent-specific logger
-            
-        Returns:
-            List of hotel dictionaries (same format as search_hotels)
-        """
+        """Search for hotels using Text Search (for chain-specific queries)"""
         log = agent_logger or logger
         
-        log.info(f"🔎 GooglePlacesService.search_hotels_by_text()")
-        log.info(f"   📋 Preferences used in search:")
-        log.info(f"      Text query: \"{query}\"")
-        log.info(f"      Location bias: {location or f'{latitude},{longitude}' if latitude else 'None'}")
-        log.info(f"      Radius: {radius}m")
-        log.info(f"      Min Rating: {min_rating}")
-        log.info(f"      Max Results: {max_results}")
-        log.info(f"      ℹ️  This search is driven by user's preferred hotel chain")
+        log.info(f"🔎 search_hotels_by_text(): \"{query}\"")
         
         if not self.client:
             log.error("❌ Google Places client not initialized")
             return []
         
         try:
-            # Resolve location to coordinates for bias (optional but improves results)
             if location and not (latitude and longitude):
                 coords = self._geocode_location(location, log)
                 if coords:
                     latitude, longitude = coords
             
-            # Build request body
             request_body = {
                 "textQuery": query,
-                "includedType": "hotel",   # Restrict to hotels
+                "includedType": "hotel",
                 "maxResultCount": min(max_results, 20),
                 "rankPreference": "RELEVANCE",
             }
             
-            # Add location bias if coordinates available
             if latitude and longitude:
                 request_body["locationBias"] = {
                     "circle": {
-                        "center": {
-                            "latitude": latitude,
-                            "longitude": longitude
-                        },
+                        "center": {"latitude": latitude, "longitude": longitude},
                         "radius": radius
                     }
                 }
-                log.info(f"   Location bias: {latitude}, {longitude} (radius {radius}m)")
             
-            # Headers
             headers = {
                 "Content-Type": "application/json",
                 "X-Goog-Api-Key": self.api_key,
-                "X-Goog-FieldMask": (
-                    "places.id,"
-                    "places.displayName,"
-                    "places.formattedAddress,"
-                    "places.location,"
-                    "places.rating,"
-                    "places.userRatingCount,"
-                    "places.priceLevel,"
-                    "places.primaryType,"
-                    "places.photos,"
-                    "places.types,"
-                    "places.businessStatus,"
-                    "places.currentOpeningHours,"
-                    "places.internationalPhoneNumber,"
-                    "places.websiteUri"
-                )
+                "X-Goog-FieldMask": SEARCH_FIELD_MASK
             }
             
-            # Make request
             url = f"{self.BASE_URL}:searchText"
             response = requests.post(url, json=request_body, headers=headers, timeout=30)
             
             if response.status_code != 200:
-                log.warning(f"   ⚠️  Text Search API error: {response.status_code}")
-                log.warning(f"   Response: {response.text[:300]}")
+                log.warning(f"⚠️  Text Search error: {response.status_code}")
                 return []
             
             data = response.json()
             places = data.get('places', [])
-            
             log.info(f"   ✓ Text Search returned {len(places)} results")
             
             if not places:
                 return []
             
-            # Parse and filter
             hotels = []
             for place in places:
                 rating = place.get('rating', 0)
-                
-                # Skip low-rated (but allow unrated = 0 for chain results)
                 if rating > 0 and rating < min_rating:
                     continue
-                
                 parsed = self._parse_place_result(place, log)
                 if parsed:
                     hotels.append(parsed)
             
             log.info(f"   ✓ After filtering: {len(hotels)} hotels")
-            
             return hotels
             
-        except requests.exceptions.RequestException as e:
-            log.error(f"❌ Text Search request error: {str(e)}")
-            return []
         except Exception as e:
             log.error(f"❌ Text Search exception: {str(e)}")
             return []
@@ -443,56 +293,21 @@ class GooglePlacesService:
         max_results: int = 10,
         agent_logger: Optional[logging.Logger] = None
     ) -> List[Dict[str, Any]]:
-        """
-        Search for places using Google Places Text Search API.
-
-        Use this for targeted, preference-driven searches like:
-          "Italian restaurant in London"
-          "sushi restaurant in Tokyo"
-          "cherry blossom viewing spot in Tokyo"
-          "indoor museum in Paris"
-
-        Unlike Nearby Search (which only filters by type), Text Search
-        accepts free-text queries so it can match cuisines, themes, and
-        specific interests that have no Google Places type equivalent.
-
-        Endpoint: POST /v1/places:searchText
-        Docs: https://developers.google.com/maps/documentation/places/web-service/text-search
-
-        Args:
-            query:         Free-text search query
-            location:      Location name for geocoding bias
-            latitude:      Latitude for location bias
-            longitude:     Longitude for location bias
-            radius:        Bias radius in meters (not a hard boundary)
-            included_type: Optional Google Places type filter (e.g. "restaurant")
-            min_rating:    Minimum rating filter (0-5)
-            max_results:   Max results to return (API max: 20)
-            agent_logger:  Optional agent-specific logger
-
-        Returns:
-            List of place dictionaries (same format as search_hotels output)
-        """
+        """Search for places using Text Search (for cuisine/interest queries)"""
         log = agent_logger or logger
 
-        log.info(f"🔎 GooglePlacesService.search_places_by_text()")
-        log.info(f"      Text query: \"{query}\"")
-        log.info(f"      Included type: {included_type or '(none)'}")
-        log.info(f"      Location bias: {location or (f'{latitude},{longitude}' if latitude else 'None')}")
-        log.info(f"      Min Rating: {min_rating}, Max Results: {max_results}")
+        log.info(f"🔎 search_places_by_text(): \"{query}\"")
 
         if not self.client:
             log.error("❌ Google Places client not initialized")
             return []
 
         try:
-            # Resolve location to coordinates for bias
             if location and not (latitude and longitude):
                 coords = self._geocode_location(location, log)
                 if coords:
                     latitude, longitude = coords
 
-            # Build request body
             request_body = {
                 "textQuery": query,
                 "maxResultCount": min(max_results, 20),
@@ -502,57 +317,34 @@ class GooglePlacesService:
             if included_type:
                 request_body["includedType"] = included_type
 
-            # Add location bias if coordinates available
             if latitude and longitude:
                 request_body["locationBias"] = {
                     "circle": {
-                        "center": {
-                            "latitude": latitude,
-                            "longitude": longitude
-                        },
+                        "center": {"latitude": latitude, "longitude": longitude},
                         "radius": radius
                     }
                 }
 
-            # Headers
             headers = {
                 "Content-Type": "application/json",
                 "X-Goog-Api-Key": self.api_key,
-                "X-Goog-FieldMask": (
-                    "places.id,"
-                    "places.displayName,"
-                    "places.formattedAddress,"
-                    "places.location,"
-                    "places.rating,"
-                    "places.userRatingCount,"
-                    "places.priceLevel,"
-                    "places.primaryType,"
-                    "places.photos,"
-                    "places.types,"
-                    "places.currentOpeningHours,"
-                    "places.internationalPhoneNumber,"
-                    "places.websiteUri,"
-                    "places.businessStatus"
-                )
+                "X-Goog-FieldMask": SEARCH_FIELD_MASK
             }
 
             url = f"{self.BASE_URL}:searchText"
             response = requests.post(url, json=request_body, headers=headers, timeout=30)
 
             if response.status_code != 200:
-                log.warning(f"   ⚠️  Text Search API error: {response.status_code}")
-                log.warning(f"   Response: {response.text[:300]}")
+                log.warning(f"⚠️  Text Search error: {response.status_code}")
                 return []
 
             data = response.json()
             places = data.get('places', [])
-
             log.info(f"   ✓ Text Search returned {len(places)} results for \"{query}\"")
 
             if not places:
                 return []
 
-            # Parse and filter
             results = []
             for place in places:
                 rating = place.get('rating', 0)
@@ -565,48 +357,30 @@ class GooglePlacesService:
             log.info(f"   ✓ After filtering: {len(results)} places")
             return results
 
-        except requests.exceptions.RequestException as e:
-            log.error(f"❌ Text Search request error: {str(e)}")
-            return []
         except Exception as e:
             log.error(f"❌ Text Search exception: {str(e)}")
             return []
 
-    def _geocode_location(
-        self,
-        location: str,
-        log: logging.Logger = None
-    ) -> Optional[tuple]:
+    def _geocode_location(self, location: str, log: logging.Logger = None) -> Optional[tuple]:
         """Geocode location name to coordinates"""
         log = log or logger
-        
         try:
             url = "https://maps.googleapis.com/maps/api/geocode/json"
             params = {"address": location, "key": self.api_key}
-            
             response = requests.get(url, params=params, timeout=10)
-            
             if response.status_code != 200:
-                log.error(f"❌ Geocoding failed: {response.status_code}")
                 return None
-            
             data = response.json()
-            
             if data.get('status') != 'OK':
-                log.error(f"❌ Geocoding status: {data.get('status')}")
                 return None
-            
             results = data.get('results', [])
             if not results:
                 return None
-            
-            location_data = results[0]['geometry']['location']
-            return (location_data['lat'], location_data['lng'])
-            
+            loc = results[0]['geometry']['location']
+            return (loc['lat'], loc['lng'])
         except Exception as e:
             log.error(f"❌ Geocoding exception: {e}")
             return None
-    
 
     def search_places(
         self,
@@ -619,87 +393,42 @@ class GooglePlacesService:
         max_results: int = 20,
         agent_logger: Optional[logging.Logger] = None
     ) -> Dict[str, List[Dict[str, Any]]]:
-        """
-        Search for places by category using Google Places API (New)
-        
-        Args:
-            location: Location name (e.g., "Paris, France")
-            latitude: Latitude coordinate (alternative to location)
-            longitude: Longitude coordinate (alternative to location)
-            radius: Search radius in meters (default: 5000)
-            place_types: List of place types to search for
-            min_rating: Minimum rating (0-5)
-            max_results: Max results per category
-            agent_logger: Optional agent-specific logger
-            
-        Returns:
-            Dictionary with place types as keys, lists of places as values
-        """
+        """Search for places by category using Nearby Search"""
         log = agent_logger or logger
         
-        log.info("=" * 80)
-        log.info("🔍 GooglePlacesService.search_places() - Places API (New)")
-        log.info("=" * 80)
-        log.info(f"   📋 Preferences used in search:")
-        log.info(f"      Location: {location or f'{latitude},{longitude}'}")
-        log.info(f"      Radius: {radius}m")
-        log.info(f"      Place types: {place_types or 'default set'}")
-        log.info(f"      Min Rating: {min_rating}")
-        log.info(f"      Max Results per category: {max_results}")
+        log.info("🔍 GooglePlacesService.search_places()")
         
         if not self.client:
             log.error("❌ Google Places client not initialized")
             return {}
         
         try:
-            # Resolve location to coordinates if needed
             if location and not (latitude and longitude):
-                log.info(f"🔍 Geocoding location: {location}")
                 coords = self._geocode_location(location, log)
                 if coords:
                     latitude, longitude = coords
-                    log.info(f"✓ Resolved to: {latitude}, {longitude}")
                 else:
-                    log.error(f"❌ Could not geocode location: {location}")
+                    log.error(f"❌ Could not geocode: {location}")
                     return {}
             
             if not latitude or not longitude:
-                log.error("❌ Must provide either location name or coordinates")
+                log.error("❌ Must provide location name or coordinates")
                 return {}
             
-            # Default place types if not provided
             if not place_types:
-                place_types = [
-                    "restaurant",
-                    "tourist_attraction",
-                    "shopping_mall",
-                    "museum",
-                    "park"
-                ]
-            
-            log.info(f"\n📋 Search Parameters:")
-            log.info(f"   Location: {latitude}, {longitude}")
-            log.info(f"   Radius: {radius}m")
-            log.info(f"   Categories: {', '.join(place_types)}")
-            log.info(f"   Min Rating: {min_rating}")
-            log.info(f"   Max per category: {max_results}")
+                place_types = ["restaurant", "tourist_attraction", "shopping_mall", "museum", "park"]
             
             results = {}
             
-            # Search for each place type
             for place_type in place_types:
-                log.info(f"\n🔎 Searching: {place_type}")
-                log.info("-" * 80)
+                log.info(f"🔎 Searching: {place_type}")
                 
                 request_body = {
                     "includedTypes": [place_type],
                     "maxResultCount": max_results,
                     "locationRestriction": {
                         "circle": {
-                            "center": {
-                                "latitude": latitude,
-                                "longitude": longitude
-                            },
+                            "center": {"latitude": latitude, "longitude": longitude},
                             "radius": radius
                         }
                     },
@@ -709,22 +438,7 @@ class GooglePlacesService:
                 headers = {
                     "Content-Type": "application/json",
                     "X-Goog-Api-Key": self.api_key,
-                    "X-Goog-FieldMask": (
-                        "places.id,"
-                        "places.displayName,"
-                        "places.formattedAddress,"
-                        "places.location,"
-                        "places.rating,"
-                        "places.userRatingCount,"
-                        "places.priceLevel,"
-                        "places.primaryType,"
-                        "places.photos,"
-                        "places.types,"
-                        "places.currentOpeningHours,"
-                        "places.internationalPhoneNumber,"
-                        "places.websiteUri,"
-                        "places.businessStatus"
-                    )
+                    "X-Goog-FieldMask": SEARCH_FIELD_MASK
                 }
                 
                 url = f"{self.BASE_URL}:searchNearby"
@@ -732,12 +446,10 @@ class GooglePlacesService:
                 
                 if response.status_code != 200:
                     log.warning(f"   ⚠️  API error: {response.status_code}")
-                    log.warning(f"   Response: {response.text[:200]}")
                     continue
                 
                 data = response.json()
                 places = data.get('places', [])
-                
                 log.info(f"   ✓ Found {len(places)} results")
                 
                 filtered_places = []
@@ -749,31 +461,16 @@ class GooglePlacesService:
                     if parsed:
                         filtered_places.append(parsed)
                 
-                log.info(f"   ✓ After filtering: {len(filtered_places)} places")
-                
                 if filtered_places:
                     results[place_type] = filtered_places
             
-            total_places = sum(len(places) for places in results.values())
-            log.info(f"\n📊 Search Complete:")
-            log.info(f"   Categories found: {len(results)}")
-            log.info(f"   Total places: {total_places}")
-            
-            for category, places in results.items():
-                log.info(f"   - {category}: {len(places)} places")
-            
-            log.info("=" * 80)
-            
+            total_places = sum(len(p) for p in results.values())
+            log.info(f"📊 Search Complete: {total_places} places across {len(results)} categories")
             return results
             
-        except requests.exceptions.RequestException as e:
-            log.error(f"❌ Request exception: {str(e)}")
-            return {}
         except Exception as e:
             log.error(f"❌ Exception: {str(e)}")
-            log.exception("Traceback:")
             return {}
-
 
     def get_place_details(
         self,
@@ -785,7 +482,6 @@ class GooglePlacesService:
         log = agent_logger or logger
         
         if not self.client:
-            log.warning("⚠️  Google Places client not available")
             return None
         
         try:
@@ -804,16 +500,11 @@ class GooglePlacesService:
             response = requests.get(url, headers=headers, timeout=10)
             
             if response.status_code != 200:
-                log.warning(f"⚠️  Place details failed: {response.status_code}")
                 return None
             
             place = response.json()
-            
             if not place:
-                log.warning(f"⚠️  No details for place: {place_id}")
                 return None
-            
-            log.info(f"✅ Retrieved details for: {place.get('displayName', {}).get('text', 'Unknown')}")
             
             return self._parse_place_details(place, log)
             
@@ -821,56 +512,71 @@ class GooglePlacesService:
             log.error(f"❌ Error fetching place details: {e}")
             return None
     
-    def get_photo_url(
-        self,
-        photo_resource_name: str,
-        max_width: int = 400,
-        max_height: Optional[int] = None
-    ) -> str:
+    def get_photo_url(self, photo_resource_name: str, max_width: int = 400, max_height: Optional[int] = None) -> str:
         """Generate photo URL from resource name"""
         if not self.api_key:
             return ""
-        
         base_url = f"https://places.googleapis.com/v1/{photo_resource_name}/media"
-        
         params = [f"maxWidthPx={max_width}"]
         if max_height:
             params.append(f"maxHeightPx={max_height}")
         params.append(f"key={self.api_key}")
-        
         return f"{base_url}?{'&'.join(params)}"
     
-    def _parse_place_result(
-        self,
-        place: Dict[str, Any],
-        log: logging.Logger = None
-    ) -> Optional[Dict[str, Any]]:
-        """Parse nearby search result"""
+    # ─────────────────────────────────────────────────────────────────────
+    # v4: ENRICHED PARSING — extracts all available Google Places data
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _parse_place_result(self, place: Dict[str, Any], log: logging.Logger = None) -> Optional[Dict[str, Any]]:
+        """
+        Parse search result into a flat dict.
+        
+        v4: Now extracts website, phone_number, reviews, google_url
+        that were previously in the field mask but discarded.
+        """
         log = log or logger
         
         try:
             location = place.get('location', {})
             
-            # Extract photos
+            # Photos
             photos = []
             if place.get('photos'):
                 for photo in place['photos'][:5]:
                     photo_url = self.get_photo_url(photo['name'], max_width=400)
                     photos.append({"url": photo_url})
             
-            # Extract name
+            # Name
             display_name = place.get('displayName', {})
             name = display_name.get('text', 'Unknown Hotel') if isinstance(display_name, dict) else str(display_name)
             
-            # Parse price level
+            # Price level
             price_level_str = place.get('priceLevel', 'PRICE_LEVEL_MODERATE')
             price_level = self._parse_price_level(price_level_str)
             
-            # Parse opening status
+            # Opening hours
             opening_hours = place.get('currentOpeningHours', {})
             open_now = opening_hours.get('openNow')
             
-            hotel = {
+            # v4: Reviews — parse inline from search response
+            reviews = []
+            if place.get('reviews'):
+                for review in place['reviews'][:5]:
+                    review_text_obj = review.get('text', {})
+                    review_text = review_text_obj.get('text', '') if isinstance(review_text_obj, dict) else str(review_text_obj)
+                    
+                    author_attr = review.get('authorAttribution', {})
+                    author_name = author_attr.get('displayName', 'Anonymous') if isinstance(author_attr, dict) else 'Anonymous'
+                    
+                    if review_text:  # Only include reviews that have text
+                        reviews.append({
+                            'author_name': author_name,
+                            'rating': review.get('rating', 0),
+                            'text': review_text,
+                            'relative_time_description': review.get('relativePublishTimeDescription', ''),
+                        })
+            
+            result = {
                 'place_id': place.get('id'),
                 'name': name,
                 'address': place.get('formattedAddress', ''),
@@ -883,45 +589,48 @@ class GooglePlacesService:
                 'photos': photos,
                 'types': place.get('types', []),
                 'business_status': place.get('businessStatus'),
-                'open_now': open_now
+                'open_now': open_now,
+                # v4: Previously in field mask but not extracted
+                'website': place.get('websiteUri'),
+                'phone_number': place.get('internationalPhoneNumber'),
+                'google_url': place.get('googleMapsUri'),
+                'reviews': reviews,
             }
             
-            return hotel
+            return result
             
         except Exception as e:
             log.warning(f"⚠️  Error parsing place: {e}")
             return None
     
-    def _parse_place_details(
-        self,
-        place: Dict[str, Any],
-        log: logging.Logger = None
-    ) -> Dict[str, Any]:
+    def _parse_place_details(self, place: Dict[str, Any], log: logging.Logger = None) -> Dict[str, Any]:
         """Parse detailed place information"""
         log = log or logger
         
         location = place.get('location', {})
         
-        # Extract photos
         photos = []
         if place.get('photos'):
             for photo in place['photos'][:10]:
                 photo_url = self.get_photo_url(photo['name'], max_width=800)
                 photos.append({"url": photo_url})
         
-        # Extract reviews
         reviews = []
         if place.get('reviews'):
             for review in place['reviews']:
+                review_text_obj = review.get('text', {})
+                review_text = review_text_obj.get('text', '') if isinstance(review_text_obj, dict) else str(review_text_obj)
+                author_attr = review.get('authorAttribution', {})
+                author_name = author_attr.get('displayName', 'Anonymous') if isinstance(author_attr, dict) else 'Anonymous'
+                
                 reviews.append({
-                    'author_name': review.get('authorAttribution', {}).get('displayName'),
+                    'author_name': author_name,
                     'rating': review.get('rating'),
-                    'text': review.get('text', {}).get('text'),
+                    'text': review_text,
                     'time': review.get('publishTime'),
                     'relative_time_description': review.get('relativePublishTimeDescription')
                 })
         
-        # Extract opening hours
         opening_hours = None
         if place.get('currentOpeningHours'):
             hours_data = place['currentOpeningHours']
@@ -930,11 +639,8 @@ class GooglePlacesService:
                 'weekday_text': hours_data.get('weekdayDescriptions', [])
             }
         
-        # Parse name
         display_name = place.get('displayName', {})
         name = display_name.get('text', 'Unknown') if isinstance(display_name, dict) else str(display_name)
-        
-        # Parse price level
         price_level_str = place.get('priceLevel', 'PRICE_LEVEL_MODERATE')
         price_level = self._parse_price_level(price_level_str)
         
@@ -977,11 +683,9 @@ _google_places_service_instance = None
 def get_google_places_service() -> GooglePlacesService:
     """Get singleton instance"""
     global _google_places_service_instance
-    
     if _google_places_service_instance is None:
         logger.info("\n🔧 Initializing GooglePlacesService...")
         _google_places_service_instance = GooglePlacesService(
             api_key=settings.google_places_api_key
         )
-    
     return _google_places_service_instance

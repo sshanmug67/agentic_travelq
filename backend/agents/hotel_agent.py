@@ -2,12 +2,11 @@
 Hotel Agent - Complete Implementation
 Google Places + Xotelo + Booking Links + Amadeus Fallback
 
-Strategy:
-1. Google Places → Hotel discovery (reviews, ratings, photos)
-2. Xotelo → Real pricing (free API)
-3. Estimation → Fallback when Xotelo unavailable
-4. Amadeus → Backup option if Google fails
-5. Booking Links → Direct users to OTAs
+Changes (v5):
+  - _create_hotel_from_google: now stores reviews, website, phone_number,
+    google_url, price_level, property_type, all booking_links, cheapest_provider,
+    is_estimated_price — data that Google Places returns but was previously discarded
+  - _enrich_hotels_with_pricing: passes pricing metadata + all booking links through
 
 Changes (v4):
   - Fixed: ALL user preferences now flow into hotel search
@@ -148,7 +147,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         log_agent_raw(f"     Value: ${search_params['budget_per_night']}/night" if search_params['budget_per_night'] else "     Value: No limit", agent_name="HotelAgent")
         log_agent_raw(f"   min_rating          → Google API min_rating filter", agent_name="HotelAgent")
         log_agent_raw(f"     Value: {search_params['min_rating']} stars", agent_name="HotelAgent")
-        log_agent_raw(f"   amenities           → LLM recommendation weighting (not filterable via API)", agent_name="HotelAgent")
+        log_agent_raw(f"   amenities           → LLM recommendation weighting", agent_name="HotelAgent")
         log_agent_raw(f"     Value: {search_params['amenities'] or 'None'}", agent_name="HotelAgent")
         log_agent_raw(f"   room_type           → LLM recommendation weighting", agent_name="HotelAgent")
         log_agent_raw(f"     Value: {search_params['room_type'] or 'Any'}", agent_name="HotelAgent")
@@ -158,7 +157,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         try:
             start_time = time.time()
             
-            # Search hotels — now passes ALL preference data
+            # Search hotels
             hotels = self._search_hotels_complete(
                 destination=search_params["destination"],
                 check_in_date=search_params["check_in_date"],
@@ -211,10 +210,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             
             log_agent_raw(f"💾 Stored {len(hotels)} hotels in storage", agent_name="HotelAgent")
             
-            # LLM picks the best hotel and explains why
+            # LLM picks the best hotel
             recommendation = self._generate_recommendation(hotels, preferences)
             
-            # Log outgoing
             self.log_conversation_message(
                 message_type="OUTGOING",
                 content=recommendation,
@@ -247,19 +245,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         preferred_chains: List[str] = None,
         preferred_location: str = None,
     ) -> List[Hotel]:
-        """
-        Complete hotel search workflow with preference-aware discovery.
-        
-        1. Google Places → Hotel discovery
-           a. Targeted text searches for preferred_chains
-           b. General nearby search to fill remaining slots
-           c. preferred_location influences search radius
-        2. Xotelo → Real pricing
-        3. Estimation → Fallback pricing
-        4. Budget filter → Remove hotels over budget (soft 1.2x tolerance)
-        5. Amadeus → Backup if Google fails
-        6. Booking Links → All hotels
-        """
+        """Complete hotel search workflow with preference-aware discovery."""
         log_agent_raw("=" * 80, agent_name="HotelAgent")
         log_agent_raw("🔍 COMPLETE HOTEL SEARCH WORKFLOW (preference-aware)", agent_name="HotelAgent")
         log_agent_raw("=" * 80, agent_name="HotelAgent")
@@ -274,34 +260,18 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         # Adjust search radius based on preferred_location
         search_radius = self._get_search_radius(preferred_location)
         
-        log_agent_raw(f"📋 Search Parameters:", agent_name="HotelAgent")
-        log_agent_raw(f"   Destination: {destination}", agent_name="HotelAgent")
-        log_agent_raw(f"   Check-in: {check_in_date}", agent_name="HotelAgent")
-        log_agent_raw(f"   Check-out: {check_out_date}", agent_name="HotelAgent")
-        log_agent_raw(f"   Nights: {num_nights}", agent_name="HotelAgent")
-        log_agent_raw(f"   Adults: {adults}", agent_name="HotelAgent")
-        log_agent_raw(f"   Min Rating: {min_rating}", agent_name="HotelAgent")
-        log_agent_raw(f"   Max Results: {max_results}", agent_name="HotelAgent")
-        log_agent_raw(f"   Budget/Night: ${budget_per_night}" if budget_per_night else "   Budget/Night: No limit", 
-                     agent_name="HotelAgent")
-        log_agent_raw(f"   Preferred Chains: {preferred_chains or 'None'}", agent_name="HotelAgent")
-        log_agent_raw(f"   Preferred Location: {preferred_location or 'Any'}", agent_name="HotelAgent")
-        log_agent_raw(f"   Search Radius: {search_radius}m", agent_name="HotelAgent")
+        log_agent_raw(f"📋 Search: {destination}, {check_in_date}→{check_out_date}, "
+                     f"{num_nights}n, radius={search_radius}m", agent_name="HotelAgent")
         
-        # STRATEGY 1: Try Google Places (preferred)
-        log_agent_raw("", agent_name="HotelAgent")
-        log_agent_raw("📍 STRATEGY 1: Google Places Search", agent_name="HotelAgent")
-        log_agent_raw("-" * 80, agent_name="HotelAgent")
-        
+        # STRATEGY 1: Google Places
         if self.google_places and self.google_places.client:
             all_google_hotels = []
             seen_place_ids = set()
             
-            # ── Step 1a: Targeted searches for preferred chains ──────────
+            # Step 1a: Targeted searches for preferred chains
             if preferred_chains:
-                log_agent_raw(f"🏷️  Searching for preferred chains: {preferred_chains}", 
+                log_agent_raw(f"🏷️  Searching preferred chains: {preferred_chains}", 
                             agent_name="HotelAgent")
-                
                 for chain_name in preferred_chains:
                     chain_hotels = self.google_places.search_hotels_by_text(
                         query=f"{chain_name} hotel in {destination}",
@@ -310,9 +280,8 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                         min_rating=min_rating,
                         agent_logger=self.logger
                     )
-                    
                     if chain_hotels:
-                        log_agent_raw(f"   ✓ {chain_name}: Found {len(chain_hotels)} hotels", 
+                        log_agent_raw(f"   ✓ {chain_name}: {len(chain_hotels)} hotels", 
                                     agent_name="HotelAgent")
                         for hotel in chain_hotels:
                             pid = hotel.get('place_id')
@@ -320,26 +289,17 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                                 seen_place_ids.add(pid)
                                 hotel['_matched_chain'] = chain_name
                                 all_google_hotels.append(hotel)
-                    else:
-                        log_agent_raw(f"   ⚠️ {chain_name}: No results", agent_name="HotelAgent")
             
-            # ── Step 1b: General nearby search to fill remaining slots ───
+            # Step 1b: General nearby search to fill remaining slots
             remaining_slots = max_results - len(all_google_hotels)
-            
             if remaining_slots > 0:
-                log_agent_raw(f"🔍 General search (need {remaining_slots} more hotels)", 
-                            agent_name="HotelAgent")
-                
                 general_hotels = self.google_places.search_hotels(
                     location=destination,
                     radius=search_radius,
                     min_rating=min_rating,
                     agent_logger=self.logger
                 )
-                
                 if general_hotels:
-                    log_agent_raw(f"   ✓ General: Found {len(general_hotels)} hotels", 
-                                agent_name="HotelAgent")
                     for hotel in general_hotels:
                         pid = hotel.get('place_id')
                         if pid and pid not in seen_place_ids:
@@ -350,8 +310,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             
             chain_matched = sum(1 for h in all_google_hotels if h.get('_matched_chain'))
             log_agent_raw(f"📊 Combined: {len(all_google_hotels)} unique hotels "
-                        f"(chain-matched: {chain_matched})", 
-                        agent_name="HotelAgent")
+                        f"(chain-matched: {chain_matched})", agent_name="HotelAgent")
             
             if all_google_hotels:
                 all_google_hotels = all_google_hotels[:max_results]
@@ -366,32 +325,19 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 )
                 
                 if enriched_hotels:
-                    # ── Step 1c: Budget filter (soft) ────────────────────
-                    enriched_hotels = self._filter_by_budget(
-                        enriched_hotels, budget_per_night
-                    )
-                    
+                    enriched_hotels = self._filter_by_budget(enriched_hotels, budget_per_night)
                     if enriched_hotels:
                         return enriched_hotels
         else:
             log_agent_raw("⚠️ Google Places not available", agent_name="HotelAgent")
         
-        # STRATEGY 2: Try Amadeus (fallback)
-        log_agent_raw("", agent_name="HotelAgent")
-        log_agent_raw("📍 STRATEGY 2: Amadeus Search (Fallback)", agent_name="HotelAgent")
-        log_agent_raw("-" * 80, agent_name="HotelAgent")
-        
+        # STRATEGY 2: Amadeus fallback
         if self.amadeus_service and self.amadeus_service.client:
             city_code = self._resolve_city_code(destination)
-            
             if city_code:
-                log_agent_raw(f"✓ Resolved: {destination} → {city_code}", 
-                            agent_name="HotelAgent")
-                
                 try:
                     min_rating_int = int(min_rating)
                     ratings = [str(r) for r in range(min_rating_int, 6)]
-                    
                     hotels_data = self.amadeus_service.search_hotels(
                         city_code=city_code,
                         check_in_date=check_in_date,
@@ -403,17 +349,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                         max_results=max_results,
                         agent_logger=self.logger
                     )
-                    
                     if hotels_data:
-                        log_agent_raw(f"✅ Amadeus returned {len(hotels_data)} hotels", 
-                                    agent_name="HotelAgent")
-                        
-                        hotels = []
-                        for hotel_dict in hotels_data:
-                            hotel = self._parse_hotel_data(hotel_dict)
-                            if hotel:
-                                hotels.append(hotel)
-                        
+                        hotels = [self._parse_hotel_data(h) for h in hotels_data]
+                        hotels = [h for h in hotels if h]
                         if hotels:
                             hotels = self._filter_by_budget(hotels, budget_per_night)
                             if hotels:
@@ -421,9 +359,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 except Exception as e:
                     log_agent_raw(f"❌ Amadeus failed: {str(e)}", agent_name="HotelAgent")
         
-        # STRATEGY 3: Mock data (last resort)
-        log_agent_raw("", agent_name="HotelAgent")
-        log_agent_raw("📍 STRATEGY 3: Mock Data (Last Resort)", agent_name="HotelAgent")
+        # STRATEGY 3: Mock data
         log_agent_raw("⚠️ All APIs failed, using mock data", agent_name="HotelAgent")
         return self._generate_mock_hotels(destination, check_in_date, check_out_date)
     
@@ -432,76 +368,32 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
     # ─────────────────────────────────────────────────────────────────────
 
     def _get_search_radius(self, preferred_location: Optional[str]) -> int:
-        """
-        Map preferred_location to a search radius in meters.
-        
-        city_center → tight radius (3km) to stay central
-        near_airport → wider radius (15km)
-        quiet_area / suburbs → wider radius (10km)
-        default → moderate (5km)
-        """
+        """Map preferred_location to search radius in meters."""
         if not preferred_location:
             return 5000
-        
         location_lower = preferred_location.lower().replace('_', ' ')
-        
         radius_map = {
-            "city center": 3000,
-            "city_center": 3000,
-            "downtown": 3000,
-            "central": 3000,
-            "near airport": 15000,
-            "near_airport": 15000,
-            "airport": 15000,
-            "quiet area": 10000,
-            "quiet_area": 10000,
-            "suburbs": 10000,
-            "suburban": 10000,
-            "beach": 8000,
-            "beachfront": 8000,
+            "city center": 3000, "city_center": 3000, "downtown": 3000, "central": 3000,
+            "near airport": 15000, "near_airport": 15000, "airport": 15000,
+            "quiet area": 10000, "quiet_area": 10000, "suburbs": 10000, "suburban": 10000,
+            "beach": 8000, "beachfront": 8000,
         }
-        
         for key, radius in radius_map.items():
             if key in location_lower:
                 return radius
-        
         return 5000
 
-    def _filter_by_budget(
-        self,
-        hotels: List[Hotel],
-        budget_per_night: float
-    ) -> List[Hotel]:
-        """
-        Soft budget filter: keep hotels within BUDGET_TOLERANCE (1.2x) of stated budget.
-        If budget is 0 or None, skip filtering.
-        If ALL hotels exceed budget, return them anyway (let LLM explain).
-        """
+    def _filter_by_budget(self, hotels: List[Hotel], budget_per_night: float) -> List[Hotel]:
+        """Soft budget filter with BUDGET_TOLERANCE (1.2x)."""
         if not budget_per_night or budget_per_night <= 0:
-            log_agent_raw("   ℹ️  No budget constraint — skipping filter", agent_name="HotelAgent")
             return hotels
-        
         max_price = budget_per_night * BUDGET_TOLERANCE
-        
         within_budget = [h for h in hotels if h.price_per_night <= max_price]
-        
         log_agent_raw(
-            f"💰 Budget filter: ${budget_per_night}/night "
-            f"(tolerance ${max_price:.0f}) → "
-            f"{len(within_budget)}/{len(hotels)} hotels pass",
-            agent_name="HotelAgent"
+            f"💰 Budget: ${budget_per_night}/night (max ${max_price:.0f}) → "
+            f"{len(within_budget)}/{len(hotels)} pass", agent_name="HotelAgent"
         )
-        
-        if within_budget:
-            return within_budget
-        
-        # All over budget — return everything so user still gets results
-        log_agent_raw(
-            f"   ⚠️ All hotels exceed budget — returning all {len(hotels)} "
-            f"(LLM will note this in recommendation)",
-            agent_name="HotelAgent"
-        )
-        return hotels
+        return within_budget if within_budget else hotels
 
     # ─────────────────────────────────────────────────────────────────────
     # PRICING ENRICHMENT
@@ -516,11 +408,13 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         num_nights: int,
         adults: int
     ) -> List[Hotel]:
-        """Enrich Google Places hotels with pricing and booking links"""
+        """
+        Enrich Google Places hotels with pricing, booking links, and metadata.
         
-        log_agent_raw("", agent_name="HotelAgent")
+        v5: Now passes all pricing metadata (cheapest_provider, is_estimated)
+        and all booking links (not just booking_com) through to Hotel model.
+        """
         log_agent_raw("💰 Enriching with Xotelo Pricing & Booking Links", agent_name="HotelAgent")
-        log_agent_raw("-" * 80, agent_name="HotelAgent")
         
         enriched_hotels = []
         xotelo_success_count = 0
@@ -530,7 +424,6 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             matched_chain = google_hotel.get('_matched_chain', '')
             chain_tag = f" [chain: {matched_chain}]" if matched_chain else ""
             
-            log_agent_raw(f"", agent_name="HotelAgent")
             log_agent_raw(f"🏨 Hotel {idx}/{len(google_hotels)}: {hotel_name}{chain_tag}", 
                         agent_name="HotelAgent")
             
@@ -545,15 +438,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                         check_out_date=check_out_date,
                         agent_logger=self.logger
                     )
-                    
                     if pricing:
                         xotelo_success_count += 1
-                        log_agent_raw(f"   ✓ Xotelo: ${pricing['total_price']:.2f} total "
+                        log_agent_raw(f"   ✓ Xotelo: ${pricing['total_price']:.2f} "
                                     f"(${pricing['price_per_night']:.2f}/night) "
                                     f"via {pricing.get('cheapest_provider', 'N/A')}", 
                                     agent_name="HotelAgent")
-                    else:
-                        log_agent_raw(f"   ⚠️ Xotelo: No pricing found", agent_name="HotelAgent")
                 except Exception as e:
                     log_agent_raw(f"   ⚠️ Xotelo error: {str(e)}", agent_name="HotelAgent")
             
@@ -564,12 +454,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                     google_hotel.get('google_rating', 3.5),
                     num_nights
                 )
-                log_agent_raw(f"   ✓ Estimated: ${pricing['total_price']:.2f} total "
+                log_agent_raw(f"   ✓ Estimated: ${pricing['total_price']:.2f} "
                             f"(${pricing['price_per_night']:.2f}/night)", 
                             agent_name="HotelAgent")
             
-            # Generate booking links
-            booking_links = self.booking_links.generate_all_links(
+            # Generate ALL booking links
+            booking_links_raw = self.booking_links.generate_all_links(
                 hotel_name=hotel_name,
                 city=destination,
                 check_in=check_in_date,
@@ -579,14 +469,25 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 longitude=google_hotel.get('longitude')
             )
             
-            log_agent_raw(f"   ✓ Generated {len(booking_links)} booking links", 
+            log_agent_raw(f"   ✓ Generated {len(booking_links_raw)} booking links", 
                         agent_name="HotelAgent")
             
-            # Create hotel object
+            # v5: Flatten booking links to {provider_name: url} for frontend
+            booking_links_flat = {}
+            primary_booking_url = None
+            for key, link_data in booking_links_raw.items():
+                if isinstance(link_data, dict) and link_data.get('url'):
+                    provider_name = link_data.get('name', key)
+                    booking_links_flat[provider_name] = link_data['url']
+                    if not primary_booking_url:
+                        primary_booking_url = link_data['url']
+            
+            # Create hotel object with full enrichment
             hotel = self._create_hotel_from_google(
                 google_data=google_hotel,
                 pricing=pricing,
-                booking_links=booking_links,
+                booking_links=booking_links_flat,
+                primary_booking_url=primary_booking_url,
                 check_in_date=check_in_date,
                 check_out_date=check_out_date,
                 num_nights=num_nights
@@ -594,19 +495,10 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             
             enriched_hotels.append(hotel)
         
-        # Summary
-        log_agent_raw("", agent_name="HotelAgent")
-        log_agent_raw("=" * 80, agent_name="HotelAgent")
-        log_agent_raw("📊 ENRICHMENT SUMMARY", agent_name="HotelAgent")
-        log_agent_raw("=" * 80, agent_name="HotelAgent")
-        log_agent_raw(f"   Total hotels: {len(enriched_hotels)}", agent_name="HotelAgent")
-        log_agent_raw(f"   Xotelo pricing: {xotelo_success_count} hotels", agent_name="HotelAgent")
-        log_agent_raw(f"   Estimated pricing: {len(enriched_hotels) - xotelo_success_count} hotels", 
+        log_agent_raw(f"📊 Enrichment: {len(enriched_hotels)} hotels, "
+                    f"Xotelo: {xotelo_success_count}, "
+                    f"Estimated: {len(enriched_hotels) - xotelo_success_count}",
                     agent_name="HotelAgent")
-        if enriched_hotels:
-            log_agent_raw(f"   Success rate: {(xotelo_success_count/len(enriched_hotels)*100):.1f}%", 
-                        agent_name="HotelAgent")
-        log_agent_raw("=" * 80, agent_name="HotelAgent")
         
         return enriched_hotels
     
@@ -630,19 +522,48 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             'currency': 'USD',
             'num_nights': num_nights,
             'is_estimated': True,
-            'price_source': 'estimated_from_google_price_level'
+            'price_source': 'estimated_from_google_price_level',
+            'cheapest_provider': None,
         }
     
-    def _create_hotel_from_google(self, google_data: Dict, pricing: Dict, booking_links: Dict,
-                                   check_in_date: str, check_out_date: str, num_nights: int) -> Hotel:
-        """Create Hotel object from Google Places + pricing + links"""
+    def _create_hotel_from_google(
+        self,
+        google_data: Dict,
+        pricing: Dict,
+        booking_links: Dict[str, str],
+        primary_booking_url: Optional[str],
+        check_in_date: str,
+        check_out_date: str,
+        num_nights: int
+    ) -> Hotel:
+        """
+        Create Hotel object from Google Places + pricing + booking links.
+        
+        v5: Now passes through ALL Google Places data that _parse_place_result
+        extracts: reviews, website, phone_number, google_url, price_level,
+        property_type. Also stores all OTA booking links and price metadata.
+        """
+        # Parse reviews into HotelReview objects
         reviews = []
         if google_data.get('reviews'):
             for review_dict in google_data['reviews'][:MAX_REVIEWS_PER_HOTEL]:
                 try:
                     reviews.append(HotelReview(**review_dict))
-                except:
+                except Exception:
                     continue
+        
+        # Map primary_type to human-readable property_type
+        primary_type = google_data.get('primary_type', '')
+        property_type_map = {
+            'hotel': 'Hotel',
+            'resort_hotel': 'Resort',
+            'motel': 'Motel',
+            'lodging': 'Lodging',
+            'bed_and_breakfast': 'B&B',
+            'guest_house': 'Guest House',
+            'hostel': 'Hostel',
+        }
+        property_type = property_type_map.get(primary_type, primary_type.replace('_', ' ').title() if primary_type else None)
         
         return Hotel(
             id=google_data.get('place_id', str(time.time())),
@@ -651,23 +572,37 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             latitude=google_data.get('latitude', 0.0),
             longitude=google_data.get('longitude', 0.0),
             address=google_data.get('address', ''),
+            # Google Places ratings
             place_id=google_data.get('place_id'),
             google_rating=google_data.get('google_rating'),
             user_ratings_total=google_data.get('user_ratings_total'),
             reviews=reviews,
+            # Pricing (from Xotelo or estimated)
             price_per_night=pricing['price_per_night'],
             total_price=pricing['total_price'],
             currency=pricing['currency'],
+            # Stay details
             check_in_date=check_in_date,
             check_out_date=check_out_date,
             num_nights=num_nights,
+            # Photos
             photos=google_data.get('photos', []),
+            # Primary booking link (for backward compat)
+            booking_url=primary_booking_url,
+            # ── v5: Google Places data previously discarded ──────────────
             website=google_data.get('website'),
             phone_number=google_data.get('phone_number'),
             google_url=google_data.get('google_url'),
             business_status=google_data.get('business_status'),
-            booking_url=booking_links.get('booking_com', {}).get('url'),
-            description=f"Price source: {pricing['price_source']}"
+            property_type=property_type,
+            price_level=google_data.get('price_level'),
+            # ── v5: Pricing metadata ─────────────────────────────────────
+            is_estimated_price=pricing.get('is_estimated', True),
+            cheapest_provider=pricing.get('cheapest_provider'),
+            # ── v5: All OTA booking links ────────────────────────────────
+            booking_links=booking_links if booking_links else None,
+            # Description — store price source for debugging
+            description=f"Price source: {pricing.get('price_source', 'unknown')}",
         )
     
     def _parse_hotel_data(self, data: Dict) -> Optional[Hotel]:
@@ -763,15 +698,12 @@ User preferences:
 Pick the single best hotel for this user. Consider their budget per night, minimum rating
 requirements, preferred amenities, preferred location (e.g. city center vs quiet area),
 room type preference, price range expectation, trip purpose, and number of travelers.
-Weigh the tradeoffs — a slightly more expensive hotel with excellent reviews and a central
-location may be better than the cheapest option with poor ratings, especially for a leisure
-trip. A business traveler may value wifi and location over pool access.
 
 You MUST respond with ONLY a JSON object in this exact format, nothing else:
 {{
   "recommended_id": "<the hotel ID from the list above>",
-  "reason": "<1-2 sentences explaining why this is the best match for this user's preferences>",
-  "summary": "<3-4 sentence friendly recommendation mentioning how many options you reviewed, why you picked this one, and any notable alternatives>"
+  "reason": "<1-2 sentences explaining why this is the best match>",
+  "summary": "<3-4 sentence friendly recommendation>"
 }}
 
 CRITICAL RULES:
@@ -779,7 +711,7 @@ CRITICAL RULES:
 - Do NOT invent a hotel ID. Pick from the list above.
 - Respond with valid JSON only. No markdown, no backticks, no extra text.
 """
-        log_agent_raw("🤖 Asking LLM to pick best hotel based on preferences...", agent_name="HotelAgent")
+        log_agent_raw("🤖 Asking LLM to pick best hotel...", agent_name="HotelAgent")
 
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
@@ -793,11 +725,10 @@ CRITICAL RULES:
                 max_tokens=400
             )
             raw_response = response.choices[0].message.content.strip()
-            log_agent_raw(f"📥 LLM raw response: {raw_response}", agent_name="HotelAgent")
+            log_agent_raw(f"📥 LLM raw: {raw_response}", agent_name="HotelAgent")
 
             result = self._parse_llm_json(raw_response)
             if not result:
-                log_agent_raw("⚠️ Failed to parse LLM JSON, using fallback", agent_name="HotelAgent")
                 return self._fallback_recommendation(hotels, preferences)
 
             recommended_id = str(result.get("recommended_id", ""))
@@ -805,7 +736,6 @@ CRITICAL RULES:
             summary = result.get("summary", "")
 
             if recommended_id not in valid_ids:
-                log_agent_raw(f"⚠️ LLM returned invalid ID '{recommended_id}', using fallback.", agent_name="HotelAgent")
                 return self._fallback_recommendation(hotels, preferences)
 
             recommended_hotel = next(h for h in hotels if str(h.id) == recommended_id)
@@ -825,7 +755,8 @@ CRITICAL RULES:
                 }
             )
 
-            log_agent_raw(f"⭐ LLM picked hotel {recommended_id} ({recommended_hotel.name} ${recommended_hotel.total_price:.2f}): {reason}", agent_name="HotelAgent")
+            log_agent_raw(f"⭐ LLM picked {recommended_id} ({recommended_hotel.name}): {reason}",
+                         agent_name="HotelAgent")
 
             return summary if summary else (
                 f"I recommend {recommended_hotel.name} at "
@@ -849,7 +780,7 @@ CRITICAL RULES:
         self.trip_storage.store_recommendation(
             trip_id=self.trip_id, category="hotel",
             recommended_id=str(best.id),
-            reason="Fallback: highest rated within budget (LLM recommendation unavailable)",
+            reason="Fallback: highest rated within budget",
             metadata={
                 "name": best.name, "hotel_name": best.name,
                 "total_price": best.total_price,
@@ -861,16 +792,13 @@ CRITICAL RULES:
             }
         )
 
-        log_agent_raw(f"⭐ Fallback pick: hotel {best.id} ({best.name} ${best.total_price:.2f}, {best.google_rating or best.rating or 'N/A'}★)", agent_name="HotelAgent")
-
         rating_str = f"{best.google_rating or best.rating or 'unrated'}★"
         reviews_count = best.user_ratings_total or best.review_count or 0
         return (
             f"I reviewed {len(hotels)} hotels for your trip. "
             f"My top recommendation is {best.name} at "
             f"${best.total_price:.2f} for {best.num_nights} nights "
-            f"({rating_str} with {reviews_count} reviews). "
-            f"You can check current prices on Booking.com, Expedia, and other sites."
+            f"({rating_str} with {reviews_count} reviews)."
         )
 
     # ─────────────────────────────────────────────────────────────────────
@@ -899,7 +827,6 @@ CRITICAL RULES:
         check_in_dt = datetime.fromisoformat(check_in)
         check_out_dt = datetime.fromisoformat(check_out)
         num_nights = (check_out_dt - check_in_dt).days
-        log_agent_raw("📝 Generating mock hotel data", agent_name="HotelAgent")
         return [
             Hotel(id="MOCK001", name="Grand Plaza Hotel", hotel_code="MOCK001",
                   latitude=51.5074, longitude=-0.1278, address="123 Main Street",
@@ -909,7 +836,7 @@ CRITICAL RULES:
                   room_type="Deluxe Room",
                   amenities=HotelAmenities(wifi=True, parking=True, pool=True, gym=True,
                       restaurant=True, room_service=True, air_conditioning=True, bar=True, breakfast=True),
-                  description="Mock data - Luxury hotel", property_type="HOTEL"),
+                  description="Mock data", property_type="Hotel"),
             Hotel(id="MOCK002", name="City View Inn", hotel_code="MOCK002",
                   latitude=51.5074, longitude=-0.1278, address="456 Park Avenue",
                   city=destination, distance_from_center=1.2, rating=4.0,
@@ -918,15 +845,7 @@ CRITICAL RULES:
                   room_type="Standard Room",
                   amenities=HotelAmenities(wifi=True, gym=True, restaurant=True,
                       air_conditioning=True, breakfast=True),
-                  description="Mock data - Modern hotel", property_type="HOTEL"),
-            Hotel(id="MOCK003", name="Budget Stay Suites", hotel_code="MOCK003",
-                  latitude=51.5074, longitude=-0.1278, address="789 Budget Street",
-                  city=destination, distance_from_center=5.0, rating=3.5,
-                  price_per_night=80.0, total_price=80.0 * num_nights, currency="USD",
-                  check_in_date=check_in, check_out_date=check_out, num_nights=num_nights,
-                  room_type="Economy Room",
-                  amenities=HotelAmenities(wifi=True, parking=True, air_conditioning=True),
-                  description="Mock data - Affordable accommodation", property_type="HOTEL"),
+                  description="Mock data", property_type="Hotel"),
         ]
 
 

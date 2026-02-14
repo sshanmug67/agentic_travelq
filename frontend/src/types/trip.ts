@@ -1,19 +1,21 @@
 // frontend/src/types/trip.ts
 //
-// Changes (v3):
-//   - FlightPreferences: removed `preferredCarriers` (lives in airlines chip list)
-//   - ActivityPreferences: removed `interests` (lives in activities chip list)
-//   - Added comments showing where each piece of data lives
+// Changes (v5):
+//   - Hotel: added reviews, website, phone_number, google_url, booking_url,
+//     booking_links, cheapest_provider, is_estimated_price, price_level,
+//     property_type, currency — all sourced from Google Places + Xotelo
 //
-// Data ownership rule:
-//   Chip lists (airlines, hotelChains, cuisines, activities) → names + priority
-//   Detailed prefs (flightPrefs, hotelPrefs, etc.)           → settings only
+// Changes (v4):
+//   - Added SegmentDetail, FlightAmenity for enriched flight data
+//   - FlightLeg: segments[], layover_durations[]
+//   - Flight: branded_fare, amenities, last_ticketing_date, seats_remaining,
+//     price_base, price_taxes, validating_carrier
 
 // ============================================================================
 // RESULT TYPES (from backend API responses)
 // ============================================================================
 
-// ── NEW: Individual hop within a leg ────────────────────────────────────
+// ── Individual hop within a leg ─────────────────────────────────────────
 
 export interface SegmentDetail {
   segment_id?: string;
@@ -21,26 +23,26 @@ export interface SegmentDetail {
   arrival_airport: string;
   departure_time: string;
   arrival_time: string;
-  departure_terminal?: string;        // "7"
-  arrival_terminal?: string;          // "1"
-  duration: string;                   // "1h 30m"
-  marketing_carrier: string;          // "AC"
-  marketing_flight_number: string;    // "AC8899"
-  operating_carrier?: string;         // "AC" or "LX"
-  operating_carrier_name?: string;    // "AIR CANADA EXPRESS - JAZZ"
-  aircraft_code?: string;             // "E75"
-  aircraft_name?: string;             // "Embraer E175"
-  cabin_class?: string;               // "ECONOMY"
-  branded_fare?: string;              // "BASIC"
-  fare_class?: string;                // "L"
+  departure_terminal?: string;
+  arrival_terminal?: string;
+  duration: string;
+  marketing_carrier: string;
+  marketing_flight_number: string;
+  operating_carrier?: string;
+  operating_carrier_name?: string;
+  aircraft_code?: string;
+  aircraft_name?: string;
+  cabin_class?: string;
+  branded_fare?: string;
+  fare_class?: string;
 }
 
-// ── NEW: Amenity line item ──────────────────────────────────────────────
+// ── Amenity line item ───────────────────────────────────────────────────
 
 export interface FlightAmenity {
-  description: string;                // "COMPLIMENTARY MEAL"
-  is_chargeable: boolean;             // false = included free
-  amenity_type: string;               // "BAGGAGE", "MEAL", "BRANDED_FARES", etc.
+  description: string;
+  is_chargeable: boolean;
+  amenity_type: string;
 }
 
 
@@ -67,13 +69,13 @@ export interface Flight {
   };
 
   // v4 additions
-  branded_fare?: string;              // "BASIC", "FLEX", "STANDARD"
-  amenities?: FlightAmenity[];        // merged unique amenities
-  last_ticketing_date?: string;       // "2026-02-16"
-  seats_remaining?: number;           // 9
-  price_base?: number;                // base fare before taxes
-  price_taxes?: number;               // total - base
-  validating_carrier?: string;        // ticketing airline
+  branded_fare?: string;
+  amenities?: FlightAmenity[];
+  last_ticketing_date?: string;
+  seats_remaining?: number;
+  price_base?: number;
+  price_taxes?: number;
+  validating_carrier?: string;
 
   // Frontend-only
   ai_recommended?: boolean;
@@ -96,9 +98,19 @@ export interface FlightLeg {
   layovers?: string[];
 
   // v4 additions
-  segments?: SegmentDetail[];         // per-hop breakdown
-  layover_durations?: string[];       // ["8h 0m"] between hops
+  segments?: SegmentDetail[];
+  layover_durations?: string[];
 }
+
+// ── Hotel Review from Google Places ─────────────────────────────────────
+
+export interface HotelReview {
+  author_name: string;
+  rating: number;
+  text: string;
+  relative_time_description?: string;
+}
+
 
 export interface Hotel {
   id: string;
@@ -111,8 +123,25 @@ export interface Hotel {
   num_nights: number;
   total_price: number;
   price_per_night: number;
+  currency?: string;
   photos?: Array<{ url: string }>;
   highlights?: string[];
+
+  // v5 additions — Google Places data
+  reviews?: HotelReview[];              // Top guest reviews
+  website?: string;                      // Hotel's own website
+  phone_number?: string;                 // Contact number
+  google_url?: string;                   // Google Maps link
+  booking_url?: string;                  // Primary OTA link
+  property_type?: string;                // "Hotel", "Resort", "B&B"
+  price_level?: number;                  // Google price level 0-4
+
+  // v5 additions — Pricing metadata
+  booking_links?: Record<string, string>; // All OTA URLs: {"Booking.com": url, "Expedia": url}
+  cheapest_provider?: string;             // "Booking.com", "Expedia", etc.
+  is_estimated_price?: boolean;           // true = estimated, false = real Xotelo price
+
+  // Frontend-only
   ai_recommended?: boolean;
   selectedBy?: 'ai' | 'user';
   priceDifference?: number;
@@ -213,32 +242,13 @@ export interface TripPlanResponse {
 // ============================================================================
 // USER PREFERENCES — camelCase (Dashboard flow, Zustand store)
 // ============================================================================
-//
-// Data ownership:
-//   ┌───────────────────────────────────────────────────────────────────┐
-//   │ Chip Lists (PreferencesPanel)     │ What they own               │
-//   │ airlines[]                        │ airline names + ⭐/☆ flag    │
-//   │ hotelChains[]                     │ chain names + ⭐/☆ flag      │
-//   │ cuisines[]                        │ cuisine names + ⭐/☆ flag    │
-//   │ activities[]                      │ activity names + ⭐/☆ flag   │
-//   ├───────────────────────────────────┼─────────────────────────────┤
-//   │ Detailed Prefs                    │ What they own (settings)    │
-//   │ flightPrefs                       │ maxStops, cabin, time, seat │
-//   │ hotelPrefs                        │ rating, location, amenities │
-//   │ activityPrefs                     │ pace, times, hours/day      │
-//   │ restaurantPrefs                   │ meals, priceLevel           │
-//   │ transportPrefs                    │ modes, walk distance, comfort│
-//   └───────────────────────────────────┴─────────────────────────────┘
-//
-// NO field in detailed prefs duplicates data from the chip lists.
 
 export interface NamedPreference {
   name: string;
-  preferred?: boolean;  // true = ⭐ priority, false = ☆ interested
+  preferred?: boolean;
 }
 
 export interface FlightPreferences {
-  // ❌ NO preferredCarriers here — lives in airlines chip list
   maxStops: number;
   cabinClass: string;
   timePreference: string;
@@ -254,7 +264,6 @@ export interface HotelPreferences {
 }
 
 export interface ActivityPreferences {
-  // ❌ NO interests here — lives in activities chip list
   pace: string;
   preferredTimes: string[];
   accessibilityNeeds?: string;
@@ -262,9 +271,8 @@ export interface ActivityPreferences {
 }
 
 export interface RestaurantPreferences {
-  // ❌ NO cuisine names here — lives in cuisines chip list
-  meals: string[];         // e.g. ['lunch', 'dinner'] — which meal slots to fill
-  priceLevel: string[];    // e.g. ['moderate', 'upscale'] — maps to Google price_level
+  meals: string[];
+  priceLevel: string[];
 }
 
 export interface TransportPreferences {
@@ -289,14 +297,12 @@ export interface BudgetTiers {
 }
 
 export interface UserPreferences {
-  // ── Chip Lists (PreferencesPanel) — owns NAMES + PRIORITY ─────────────
   airlines: NamedPreference[];
   hotelChains: NamedPreference[];
   cuisines: NamedPreference[];
   activities: NamedPreference[];
   budget: BudgetTiers;
 
-  // ── Detailed Preferences — owns SETTINGS ONLY, no name lists ──────────
   flightPrefs: FlightPreferences;
   hotelPrefs: HotelPreferences;
   activityPrefs: ActivityPreferences;
@@ -304,7 +310,6 @@ export interface UserPreferences {
   transportPrefs: TransportPreferences;
   budgetConstraints: BudgetConstraints;
 
-  // ── Additional ────────────────────────────────────────────────────────
   tripPurpose: string;
   specialRequirements?: string;
 }

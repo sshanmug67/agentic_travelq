@@ -308,11 +308,29 @@ class Hotel(BaseModel):
     business_status: Optional[str] = None
     
     # Additional info
-    property_type: Optional[str] = None  # hotel, apartment, resort, etc.
+    property_type: Optional[str] = None  # hotel, resort_hotel, lodging, etc.
     
     highlights: Optional[List[str]] = Field(
         default=None,
         description="Key highlights for display (e.g. 'Great location', 'Free breakfast')"
+    )
+
+    # ── v4 additions (Google Places + Xotelo enrichment) ─────────────────
+    booking_links: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="All OTA booking URLs: {'booking_com': url, 'expedia': url, ...}"
+    )
+    cheapest_provider: Optional[str] = Field(
+        default=None,
+        description="OTA with the lowest price from Xotelo, e.g. 'Booking.com'"
+    )
+    is_estimated_price: Optional[bool] = Field(
+        default=None,
+        description="True if price is estimated from Google price_level, False if from Xotelo"
+    )
+    price_level: Optional[int] = Field(
+        default=None,
+        description="Google price level 0-4 (Free to Very Expensive)"
     )
     
     @field_validator('photos', mode='before')
