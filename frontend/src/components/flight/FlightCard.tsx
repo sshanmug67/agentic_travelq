@@ -48,6 +48,13 @@ export const FlightCard: React.FC<FlightCardProps> = ({
     flight.return_flight?.airline_code &&
     flight.return_flight.airline_code !== flight.outbound?.airline_code;
 
+  // v6: Seats-remaining urgency color
+  const seatsColor = (seats: number) =>
+    seats < 3 ? 'text-red-600' : seats <= 5 ? 'text-orange-500' : 'text-gray-600';
+
+  const seatsIcon = (seats: number) =>
+    seats < 3 ? '🔥 ' : seats <= 5 ? '⚠️ ' : '';
+
   const toggleExpand = () => {
     setIsExpanded((prev) => !prev);
   };
@@ -313,7 +320,7 @@ export const FlightCard: React.FC<FlightCardProps> = ({
           </div>
         )}
 
-        {/* Footer: baggage + urgency + expand indicator */}
+        {/* Footer: baggage + seats remaining + expand indicator */}
         <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
           <div className="flex items-center gap-2">
             {flight.cabin_bags && <span>💼 {flight.cabin_bags.quantity} cabin</span>}
@@ -326,8 +333,11 @@ export const FlightCard: React.FC<FlightCardProps> = ({
             {!flight.cabin_bags && !flight.checked_bags && (
               <span>{stopsLabel(flight.outbound?.stops ?? 0)}</span>
             )}
-            {flight.seats_remaining != null && flight.seats_remaining <= 5 && (
-              <span className="text-red-500 font-semibold">🔥 {flight.seats_remaining} left</span>
+            {/* v6: Always show seats remaining, color by urgency */}
+            {flight.seats_remaining != null && (
+              <span className={`font-semibold ${seatsColor(flight.seats_remaining)}`}>
+                {seatsIcon(flight.seats_remaining)}{flight.seats_remaining} seat{flight.seats_remaining !== 1 ? 's' : ''} left
+              </span>
             )}
           </div>
           <span className="text-purple-500 text-[11px] flex items-center gap-1">
@@ -426,11 +436,13 @@ export const FlightCard: React.FC<FlightCardProps> = ({
                         </span>
                       </div>
                     )}
+
+                    {/* v6: Seats remaining with urgency colors in expanded view */}
                     {flight.seats_remaining != null && (
                       <div className="flex justify-between col-span-2">
                         <span className="text-gray-500">Seats left</span>
-                        <span className={`font-semibold ${flight.seats_remaining <= 5 ? 'text-red-500' : 'text-gray-700'}`}>
-                          {flight.seats_remaining}
+                        <span className={`font-semibold ${seatsColor(flight.seats_remaining)}`}>
+                          {seatsIcon(flight.seats_remaining)}{flight.seats_remaining}
                         </span>
                       </div>
                     )}

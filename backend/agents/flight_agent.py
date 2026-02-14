@@ -2,6 +2,21 @@
 Flight Agent - Real API with Centralized Storage
 Location: backend/agents/flight_agent.py
 
+Changes (v6):
+  - Wide search + LLM curation: single API call for 50 results, dedup
+    codeshares by route fingerprint, LLM curates top N diverse options
+  - _curate_and_recommend(): LLM selects top N flights with carrier
+    diversity + picks #1 recommendation in a single call
+  - _fallback_curate_and_recommend(): deterministic round-robin fallback
+  - _search_flights_api() accepts max_override for wide search
+  - _parse_llm_json() handles nested JSON (arrays in objects)
+
+Changes (v5):
+  - Flights tagged as [PREFERRED], [INTERESTED], or [ALTERNATIVE] for LLM
+  - _build_preferences_summary() now includes interested_carriers
+  - Amadeus nonStop filter when max_stops == 0
+  - Deduplication by offer ID + route fingerprint (codeshare aware)
+
 Changes (v4):
   - _parse_amadeus_offer now extracts rich metadata: amenities, branded fare,
     last ticketing date, seats remaining, price breakdown, validating carrier
@@ -159,6 +174,47 @@ AIRLINE_NAMES: Dict[str, str] = {
     "MU": "China Eastern Airlines",
 }
 
+# ─────────────────────────────────────────────────────────────────────────
+# REVERSE LOOKUP: Airline display name → IATA code
+# Used to convert frontend names ("United Airlines") to Amadeus codes ("UA")
+# ─────────────────────────────────────────────────────────────────────────
+
+AIRLINE_CODES: Dict[str, str] = {name.lower(): code for code, name in AIRLINE_NAMES.items()}
+
+
+def _resolve_carrier_codes(carrier_names: List[str]) -> List[str]:
+    """
+    Convert airline display names to IATA carrier codes for Amadeus API.
+
+    Accepts both display names ("United Airlines") and raw codes ("UA").
+    Unrecognized names are silently skipped with a log warning.
+
+    Returns:
+        List of unique IATA codes, e.g. ["UA", "BA", "DL"]
+    """
+    codes: List[str] = []
+    for name in carrier_names:
+        # Already a 2-letter code?
+        if len(name) <= 3 and name.upper() in AIRLINE_NAMES:
+            codes.append(name.upper())
+        else:
+            code = AIRLINE_CODES.get(name.lower())
+            if code:
+                codes.append(code)
+            else:
+                log_agent_raw(
+                    f"⚠️ Could not resolve carrier name '{name}' to IATA code — skipping",
+                    agent_name="FlightAgent"
+                )
+    # Deduplicate while preserving order
+    seen = set()
+    unique = []
+    for c in codes:
+        if c not in seen:
+            seen.add(c)
+            unique.append(c)
+    return unique
+
 
 class FlightAgent(TravelQBaseAgent):
     """
@@ -170,9 +226,16 @@ class FlightAgent(TravelQBaseAgent):
 
 You will be given:
 1. A list of available flights with IDs, prices, airlines, stops, and times
-2. The user's preferences (budget, preferred airlines, time preferences, cabin class, etc.)
+2. Each flight is tagged as [PREFERRED], [INTERESTED], or [ALTERNATIVE] based on the user's carrier preferences
+3. The user's preferences (budget, preferred airlines, interested airlines, time preferences, cabin class, etc.)
 
 Your job is to pick the BEST flight for this specific user and explain why.
+
+Ranking guidelines:
+- [PREFERRED] airline flights should be ranked highest IF they meet budget and stop constraints
+- [INTERESTED] airline flights are good second choices
+- [ALTERNATIVE] flights are important for showing low-cost or better-route options the user might not have considered
+- Always weigh price, stops, duration, and departure times alongside carrier preference
 
 You MUST respond with valid JSON only — no markdown, no backticks, no extra text.
 """
@@ -203,7 +266,14 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         config: Any = None
     ) -> str:
         """
-        Generate reply: Call API, store options, return recommendation
+        Generate reply: Call API, store options, return recommendation.
+
+        v6: Wide search + LLM curation:
+          1. Single API call for 50 results (no carrier filter)
+          2. Deduplicate codeshares by route fingerprint
+          3. Tag all flights as [PREFERRED], [INTERESTED], [ALTERNATIVE]
+          4. LLM curates top N diverse options + picks #1 recommendation
+          5. Only curated flights stored for frontend display
         """
         log_agent_raw("🔍 FlightAgent processing request...", agent_name="FlightAgent")
         
@@ -257,26 +327,136 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             log_agent_raw(f"✓ Resolved: {search_params['origin']} → {origin_code}, {search_params['destination']} → {destination_code}", 
                          agent_name="FlightAgent")
             
-            # Step 2: Call Amadeus API
+            # ── v5: Resolve carrier preferences to IATA codes ────────────
+            preferred_carriers = preferences.flight_prefs.preferred_carriers or []
+            interested_carriers = preferences.flight_prefs.interested_carriers or []
+            all_carrier_names = preferred_carriers + interested_carriers
+
+            preferred_codes = _resolve_carrier_codes(preferred_carriers)
+            interested_codes = _resolve_carrier_codes(interested_carriers)
+            all_carrier_codes = list(dict.fromkeys(preferred_codes + interested_codes))  # dedup, order preserved
+
+            log_agent_json({
+                "preferred_carriers": preferred_carriers,
+                "preferred_codes": preferred_codes,
+                "interested_carriers": interested_carriers,
+                "interested_codes": interested_codes,
+                "all_carrier_codes": all_carrier_codes,
+            }, label="Carrier Preference Resolution", agent_name="FlightAgent")
+
+            # ── v5: nonStop flag ─────────────────────────────────────────
+            non_stop = True if search_params["max_stops"] == 0 else None
+
+            # ── v6: Wide search + LLM curation ────────────────────────────
+            # Strategy: Cast a wide net (50 results), deduplicate codeshares
+            # using route fingerprints, tag by carrier preference, then let
+            # the LLM curate the best N options for the user.
+            # One API call instead of N+1. Simpler and more effective.
+            # ──────────────────────────────────────────────────────────────
+
+            display_max = settings.flight_agent_max_results  # e.g. 10 — from yaml agents.flight.max_results
+            WIDE_SEARCH_MAX = display_max * 5              # 5x pool for dedup + LLM curation
+
             start_time = time.time()
-            
-            flights = self._search_flights_api(
+
+            log_agent_raw(
+                f"🔍 Fetching up to {WIDE_SEARCH_MAX} flights for deduplication pool",
+                agent_name="FlightAgent"
+            )
+            raw_flights = self._search_flights_api(
                 origin=origin_code,
                 destination=destination_code,
                 departure_date=search_params["departure_date"],
                 return_date=search_params["return_date"],
                 adults=search_params["num_travelers"],
-                cabin_class=search_params["cabin_class"]
+                cabin_class=search_params["cabin_class"],
+                included_airlines=None,   # no filter — widest net
+                non_stop=non_stop,
+                max_override=WIDE_SEARCH_MAX,
             )
-            
-            api_duration = time.time() - start_time
-            
-            log_agent_raw(f"✅ API returned {len(flights)} flight options in {api_duration:.2f}s", 
-                         agent_name="FlightAgent")
 
-            # Step 3: Store ALL options in centralized storage
-            flights_dict = [self._flight_to_dict(f) for f in flights]
-            
+            # ── Deduplicate codeshares by route fingerprint ──────────────
+            all_flights: List[Flight] = []
+            seen_ids: set = set()
+            seen_routes: Dict[str, int] = {}  # fingerprint → index
+            codeshare_dupes = 0
+
+            for f in raw_flights:
+                if f.id in seen_ids:
+                    continue
+                fp = self._flight_fingerprint(f)
+                if fp in seen_routes:
+                    # Same physical route — keep the preferred-carrier version
+                    existing_idx = seen_routes[fp]
+                    existing = all_flights[existing_idx]
+                    existing_tag = self._tag_flight(existing, preferred_codes, interested_codes)
+                    new_tag = self._tag_flight(f, preferred_codes, interested_codes)
+
+                    # Prefer: PREFERRED > INTERESTED > ALTERNATIVE
+                    # Within same tier, prefer cheaper
+                    tag_priority = {"[PREFERRED]": 0, "[INTERESTED]": 1, "[ALTERNATIVE]": 2}
+                    existing_pri = tag_priority[existing_tag]
+                    new_pri = tag_priority[new_tag]
+
+                    if new_pri < existing_pri:
+                        # New flight is from a higher-preference carrier
+                        log_agent_raw(
+                            f"   🔄 Codeshare upgrade: {existing.airline} {existing_tag} → "
+                            f"{f.airline} {new_tag} (same route)",
+                            agent_name="FlightAgent"
+                        )
+                        seen_ids.add(f.id)
+                        all_flights[existing_idx] = f
+                    elif new_pri == existing_pri and f.price < existing.price:
+                        # Same tier, but cheaper
+                        log_agent_raw(
+                            f"   🔄 Codeshare swap (cheaper): {existing.airline} ${existing.price:.2f} → "
+                            f"{f.airline} ${f.price:.2f}",
+                            agent_name="FlightAgent"
+                        )
+                        seen_ids.add(f.id)
+                        all_flights[existing_idx] = f
+                    else:
+                        log_agent_raw(
+                            f"   🔗 Codeshare skip: {f.airline} ({f.airline_code}) "
+                            f"= same route as {existing.airline} ({existing.airline_code})",
+                            agent_name="FlightAgent"
+                        )
+                    codeshare_dupes += 1
+                else:
+                    seen_ids.add(f.id)
+                    seen_routes[fp] = len(all_flights)
+                    all_flights.append(f)
+
+            api_duration = time.time() - start_time
+
+            # ── Summary ──────────────────────────────────────────────────
+            carrier_breakdown = {}
+            for f in all_flights:
+                tag = self._tag_flight(f, preferred_codes, interested_codes)
+                key = f"{f.airline} ({f.airline_code}) {tag}"
+                carrier_breakdown[key] = carrier_breakdown.get(key, 0) + 1
+
+            log_agent_json(
+                carrier_breakdown,
+                label="Deduped Flight Pool by Carrier",
+                agent_name="FlightAgent"
+            )
+            log_agent_raw(
+                f"✅ {len(raw_flights)} raw → {len(all_flights)} unique "
+                f"({codeshare_dupes} codeshare dupes removed) in {api_duration:.2f}s",
+                agent_name="FlightAgent"
+            )
+
+            # Step 3: LLM curates top N from the full deduped pool
+            #         Then we store only the curated flights for the frontend.
+            curated_flights, recommendation = self._curate_and_recommend(
+                all_flights, preferences, preferred_codes, interested_codes, display_max
+            )
+
+            # Step 4: Store the curated flights in centralized storage
+            flights_dict = [self._flight_to_dict(f) for f in curated_flights]
+
             self.trip_storage.add_flights(
                 trip_id=self.trip_id,
                 flights=flights_dict,
@@ -288,8 +468,17 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                     "departure_date": search_params["departure_date"],
                     "return_date": search_params["return_date"],
                     "search_time": datetime.now().isoformat(),
-                    "total_results": len(flights),
-                    "api_duration": api_duration
+                    "total_results_from_api": len(raw_flights),
+                    "after_dedup": len(all_flights),
+                    "curated_for_display": len(curated_flights),
+                    "preferred_carrier_results": len([
+                        f for f in curated_flights if f.airline_code in preferred_codes
+                    ]) if preferred_codes else 0,
+                    "interested_carrier_results": len([
+                        f for f in curated_flights if f.airline_code in interested_codes
+                    ]) if interested_codes else 0,
+                    "api_duration": api_duration,
+                    "search_strategy": "wide_search_llm_curate",
                 }
             )
             
@@ -300,11 +489,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 duration=api_duration
             )
             
-            log_agent_raw(f"💾 Stored {len(flights)} flights in centralized storage", 
+            log_agent_raw(f"💾 Stored {len(curated_flights)} curated flights in centralized storage "
+                         f"(from {len(all_flights)} deduped / {len(raw_flights)} raw)", 
                          agent_name="FlightAgent")
-            
-            # Step 4: LLM picks the best flight and explains why
-            recommendation = self._generate_recommendation(flights, preferences)
             
             # Log outgoing
             self.log_conversation_message(
@@ -328,10 +515,18 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         departure_date: str,
         return_date: Optional[str] = None,
         adults: int = 1,
-        cabin_class: str = "ECONOMY"
+        cabin_class: str = "ECONOMY",
+        included_airlines: Optional[List[str]] = None,
+        non_stop: Optional[bool] = None,
+        max_override: Optional[int] = None,
     ) -> List[Flight]:
         """
-        Call Amadeus API to search flights
+        Call Amadeus API to search flights.
+
+        v5 additions:
+          included_airlines — list of IATA carrier codes to filter by
+          non_stop           — if True, only direct flights (max_stops == 0)
+          max_override       — override settings.flight_agent_max_results for this call
         """
         if not self.amadeus_service or not self.amadeus_service.client:
             log_agent_raw("⚠️ Amadeus not configured, using mock data", agent_name="FlightAgent")
@@ -339,8 +534,8 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         
         cabin_class_upper = cabin_class.upper()
 
-        # ✅ Read max results from centralized settings
-        max_results = settings.flight_agent_max_results
+        # ✅ Read max results — use override if provided, else centralized settings
+        max_results = max_override if max_override is not None else settings.flight_agent_max_results
         
         api_params = {
             "originLocationCode": origin,
@@ -349,23 +544,40 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             "returnDate": return_date,
             "adults": adults,
             "travelClass": cabin_class_upper,
-            "max": max_results
+            "max": max_results,
         }
-        
+
+        # v5: Optional carrier filter
+        if included_airlines:
+            api_params["includedAirlineCodes"] = ",".join(included_airlines)
+
+        # v5: Optional nonStop filter
+        if non_stop is True:
+            api_params["nonStop"] = "true"
+
         log_agent_raw("=" * 80, agent_name="FlightAgent")
         log_agent_raw("📡 Calling Amadeus API with parameters:", agent_name="FlightAgent")
         log_agent_json(api_params, label="Amadeus API Request", agent_name="FlightAgent")
         log_agent_raw("=" * 80, agent_name="FlightAgent")
 
         try:
+            # Build kwargs dynamically so we only send params that are set
+            search_kwargs = {
+                "originLocationCode": origin,
+                "destinationLocationCode": destination,
+                "departureDate": departure_date,
+                "returnDate": return_date,
+                "adults": adults,
+                "travelClass": cabin_class_upper,
+                "max": max_results,
+            }
+            if included_airlines:
+                search_kwargs["includedAirlineCodes"] = ",".join(included_airlines)
+            if non_stop is True:
+                search_kwargs["nonStop"] = "true"
+
             response = self.amadeus_service.client.shopping.flight_offers_search.get(
-                originLocationCode=origin,
-                destinationLocationCode=destination,
-                departureDate=departure_date,
-                returnDate=return_date,
-                adults=adults,
-                travelClass=cabin_class_upper,
-                max=max_results
+                **search_kwargs
             )
             
             log_agent_raw(f"✅ Amadeus API SUCCESS - Received {len(response.data)} offers", 
@@ -389,6 +601,15 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 log_agent_raw(f"Response Status: {getattr(e.response, 'status_code', 'N/A')}", 
                             agent_name="FlightAgent")
             
+            # If the carrier-filtered search failed, return empty (Phase 2 will catch it)
+            if included_airlines:
+                log_agent_raw(
+                    f"⚠️ Carrier-filtered search failed for {included_airlines} — "
+                    f"returning empty (open search will cover this)",
+                    agent_name="FlightAgent"
+                )
+                return []
+
             log_agent_raw("⚠️ Falling back to mock data", agent_name="FlightAgent")
             return self._generate_mock_flights(origin, destination, departure_date)
     
@@ -684,19 +905,346 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
 
 
     # ─────────────────────────────────────────────────────────────────────
-    # LLM-DRIVEN RECOMMENDATION
+    # v5: CARRIER TAGGING
     # ─────────────────────────────────────────────────────────────────────
 
-    def _build_flights_table(self, flights: List[Flight]) -> str:
+    def _tag_flight(
+        self,
+        flight: Flight,
+        preferred_codes: List[str],
+        interested_codes: List[str]
+    ) -> str:
+        """
+        Tag a flight based on how its carrier matches user preferences.
+
+        Returns one of:
+          "[PREFERRED]"   — carrier is in user's priority list
+          "[INTERESTED]"  — carrier is in user's interested list
+          "[ALTERNATIVE]" — carrier was not specified by the user
+        """
+        code = flight.airline_code
+        if code in preferred_codes:
+            return "[PREFERRED]"
+        elif code in interested_codes:
+            return "[INTERESTED]"
+        else:
+            return "[ALTERNATIVE]"
+
+
+    # ─────────────────────────────────────────────────────────────────────
+    # LLM-DRIVEN CURATION + RECOMMENDATION (v6)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _curate_and_recommend(
+        self,
+        all_flights: List[Flight],
+        preferences: Any,
+        preferred_codes: List[str],
+        interested_codes: List[str],
+        display_max: int,
+    ) -> tuple:
+        """
+        v6: LLM curates the best N flights from a wide deduped pool AND
+        picks the #1 recommendation in a single call.
+
+        Returns:
+            (curated_flights: List[Flight], recommendation_text: str)
+        """
+        if not all_flights:
+            return ([], "I couldn't find any flights for your route. Please check your dates and try again.")
+
+        # If the pool is already small enough, skip curation — just recommend
+        if len(all_flights) <= display_max:
+            log_agent_raw(
+                f"ℹ️ Pool ({len(all_flights)}) ≤ display_max ({display_max}), "
+                f"skipping curation — using _generate_recommendation directly",
+                agent_name="FlightAgent"
+            )
+            recommendation = self._generate_recommendation(
+                all_flights, preferences, preferred_codes, interested_codes
+            )
+            return (all_flights, recommendation)
+
+        flights_table = self._build_flights_table(all_flights, preferred_codes, interested_codes)
+        prefs_summary = self._build_preferences_summary(preferences)
+        valid_ids = [str(f.id) for f in all_flights]
+
+        preferred_count = sum(1 for f in all_flights if f.airline_code in preferred_codes)
+        interested_count = sum(1 for f in all_flights if f.airline_code in interested_codes)
+        alternative_count = len(all_flights) - preferred_count - interested_count
+
+        prompt = f"""You are reviewing {len(all_flights)} flight options to curate the best {display_max} for the user.
+
+ALL AVAILABLE FLIGHTS:
+{flights_table}
+
+Flight breakdown: {preferred_count} from preferred airlines, {interested_count} from interested airlines, {alternative_count} alternatives
+
+USER PREFERENCES:
+{prefs_summary}
+
+YOUR TASK:
+Select the top {display_max} flights that give the user the best set of OPTIONS to choose from,
+then pick your #1 recommendation from those {display_max}.
+
+SELECTION CRITERIA (in priority order):
+1. CARRIER DIVERSITY: Include flights from each [PREFERRED] carrier if available.
+   Then include [INTERESTED] carriers. Fill remaining slots with [ALTERNATIVE] carriers
+   that offer meaningfully better price/timing/routing.
+2. AVOID NEAR-DUPLICATES: Don't select multiple flights from the same carrier with
+   similar price and timing. Pick the best variant from each carrier.
+3. PRICE RANGE: Include a mix — some premium options from preferred carriers AND
+   budget-friendly alternatives so the user can compare value.
+4. SCHEDULE VARIETY: Include different departure times when possible (morning vs evening).
+5. ROUTING VARIETY: Prefer different connection points over same layover city.
+
+RECOMMENDATION CRITERIA for picking #1:
+- [PREFERRED] airlines get priority if budget/stops are acceptable
+- [INTERESTED] airlines are good second choices
+- [ALTERNATIVE] flights are worth recommending if significantly cheaper or better-timed
+
+Respond with ONLY valid JSON:
+{{
+  "selected_ids": [<exactly {display_max} flight IDs from the list above, as strings>],
+  "recommended_id": "<your #1 pick from the selected IDs>",
+  "reason": "<1-2 sentences: why this is the best match>",
+  "summary": "<3-4 sentence friendly recommendation mentioning how many options you reviewed, why you picked this one, and any notable alternatives>"
+}}
+
+CRITICAL RULES:
+- selected_ids MUST contain exactly {display_max} IDs (or fewer if less are available)
+- ALL IDs must be from this list: {valid_ids}
+- recommended_id MUST be one of the selected_ids
+- Respond with valid JSON only. No markdown, no backticks, no extra text.
+"""
+
+        log_agent_raw(
+            f"🤖 Asking LLM to curate top {display_max} from {len(all_flights)} flights...",
+            agent_name="FlightAgent"
+        )
+
+        try:
+            client = openai.OpenAI(api_key=settings.openai_api_key)
+
+            response = client.chat.completions.create(
+                model=settings.llm_model,
+                messages=[
+                    {"role": "system", "content": self.system_message},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=600
+            )
+
+            raw_response = response.choices[0].message.content.strip()
+            log_agent_raw(f"📥 LLM curation response: {raw_response}", agent_name="FlightAgent")
+
+            result = self._parse_llm_json(raw_response)
+
+            if not result or "selected_ids" not in result:
+                log_agent_raw("⚠️ Failed to parse curation JSON, using fallback", agent_name="FlightAgent")
+                return self._fallback_curate_and_recommend(
+                    all_flights, preferences, preferred_codes, interested_codes, display_max
+                )
+
+            # ── Validate and collect selected flights ────────────────
+            selected_ids = [str(sid) for sid in result["selected_ids"]]
+            recommended_id = str(result.get("recommended_id", ""))
+            reason = result.get("reason", "Best overall match")
+            summary = result.get("summary", "")
+
+            # Filter to valid IDs only
+            valid_selected = [sid for sid in selected_ids if sid in valid_ids]
+            if not valid_selected:
+                log_agent_raw("⚠️ No valid IDs in LLM selection, using fallback", agent_name="FlightAgent")
+                return self._fallback_curate_and_recommend(
+                    all_flights, preferences, preferred_codes, interested_codes, display_max
+                )
+
+            # Build curated flight list preserving LLM's order
+            id_to_flight = {str(f.id): f for f in all_flights}
+            curated = [id_to_flight[sid] for sid in valid_selected if sid in id_to_flight]
+
+            # Validate recommended_id is in the curated set
+            curated_ids = [str(f.id) for f in curated]
+            if recommended_id not in curated_ids:
+                log_agent_raw(
+                    f"⚠️ recommended_id '{recommended_id}' not in curated set, using first",
+                    agent_name="FlightAgent"
+                )
+                recommended_id = curated_ids[0]
+                reason = "Best option from curated selection"
+
+            recommended_flight = id_to_flight[recommended_id]
+
+            # ── Log carrier diversity in curated set ─────────────────
+            curated_carriers = {}
+            for f in curated:
+                tag = self._tag_flight(f, preferred_codes, interested_codes)
+                key = f"{f.airline} ({f.airline_code}) {tag}"
+                curated_carriers[key] = curated_carriers.get(key, 0) + 1
+
+            log_agent_json(
+                curated_carriers,
+                label=f"LLM Curated Top {len(curated)} — Carrier Diversity",
+                agent_name="FlightAgent"
+            )
+
+            # ── Store recommendation ─────────────────────────────────
+            is_direct = self._is_direct_flight(recommended_flight)
+            tag = self._tag_flight(recommended_flight, preferred_codes, interested_codes)
+
+            self.trip_storage.store_recommendation(
+                trip_id=self.trip_id,
+                category="flight",
+                recommended_id=recommended_id,
+                reason=reason,
+                metadata={
+                    "airline": recommended_flight.airline,
+                    "airline_code": recommended_flight.airline_code,
+                    "price": recommended_flight.price,
+                    "is_direct": is_direct,
+                    "carrier_match": tag,
+                    "total_pool_reviewed": len(all_flights),
+                    "curated_count": len(curated),
+                    "preferred_in_curated": sum(1 for f in curated if f.airline_code in preferred_codes),
+                    "interested_in_curated": sum(1 for f in curated if f.airline_code in interested_codes),
+                }
+            )
+
+            log_agent_raw(
+                f"⭐ LLM curated {len(curated)} flights, picked #{recommended_id} {tag} "
+                f"({recommended_flight.airline} ${recommended_flight.price:.2f}): {reason}",
+                agent_name="FlightAgent"
+            )
+
+            recommendation_text = summary if summary else (
+                f"I recommend flight {recommended_id} by {recommended_flight.airline}. {reason}"
+            )
+            return (curated, recommendation_text)
+
+        except Exception as e:
+            log_agent_raw(f"⚠️ LLM curation failed: {str(e)}", agent_name="FlightAgent")
+            return self._fallback_curate_and_recommend(
+                all_flights, preferences, preferred_codes, interested_codes, display_max
+            )
+
+    def _fallback_curate_and_recommend(
+        self,
+        all_flights: List[Flight],
+        preferences: Any,
+        preferred_codes: List[str],
+        interested_codes: List[str],
+        display_max: int,
+    ) -> tuple:
+        """
+        Fallback curation when LLM fails: deterministic carrier-diverse selection.
+        Picks flights round-robin by preference tier, cheapest within each carrier.
+        """
+        log_agent_raw("🔧 Using fallback curation (deterministic)", agent_name="FlightAgent")
+
+        # Group by carrier code, sorted by price within each
+        from collections import defaultdict
+        by_carrier: Dict[str, List[Flight]] = defaultdict(list)
+        for f in sorted(all_flights, key=lambda x: x.price):
+            by_carrier[f.airline_code].append(f)
+
+        # Priority order: preferred carriers first, then interested, then others
+        preferred_carrier_list = [c for c in preferred_codes if c in by_carrier]
+        interested_carrier_list = [c for c in interested_codes if c in by_carrier]
+        other_carrier_list = [c for c in by_carrier if c not in preferred_codes and c not in interested_codes]
+
+        curated = []
+        seen_carrier_count: Dict[str, int] = defaultdict(int)
+
+        # Round-robin: preferred → interested → alternatives
+        for carrier_group in [preferred_carrier_list, interested_carrier_list, other_carrier_list]:
+            for code in carrier_group:
+                for f in by_carrier[code]:
+                    if len(curated) >= display_max:
+                        break
+                    if seen_carrier_count[code] < 2:  # max 2 per carrier
+                        curated.append(f)
+                        seen_carrier_count[code] += 1
+                if len(curated) >= display_max:
+                    break
+            if len(curated) >= display_max:
+                break
+
+        # If still under display_max, fill with cheapest remaining
+        curated_ids = {str(f.id) for f in curated}
+        for f in sorted(all_flights, key=lambda x: x.price):
+            if len(curated) >= display_max:
+                break
+            if str(f.id) not in curated_ids:
+                curated.append(f)
+                curated_ids.add(str(f.id))
+
+        # Pick recommendation: cheapest preferred > cheapest interested > cheapest overall
+        preferred_curated = [f for f in curated if f.airline_code in preferred_codes]
+        interested_curated = [f for f in curated if f.airline_code in interested_codes]
+
+        if preferred_curated:
+            pick = sorted(preferred_curated, key=lambda f: f.price)[0]
+        elif interested_curated:
+            pick = sorted(interested_curated, key=lambda f: f.price)[0]
+        else:
+            pick = sorted(curated, key=lambda f: f.price)[0]
+
+        tag = self._tag_flight(pick, preferred_codes, interested_codes)
+
+        self.trip_storage.store_recommendation(
+            trip_id=self.trip_id,
+            category="flight",
+            recommended_id=str(pick.id),
+            reason=f"Fallback: best price from {tag} carriers",
+            metadata={
+                "airline": pick.airline,
+                "airline_code": pick.airline_code,
+                "price": pick.price,
+                "is_direct": self._is_direct_flight(pick),
+                "carrier_match": tag,
+                "total_pool_reviewed": len(all_flights),
+                "curated_count": len(curated),
+                "is_fallback": True
+            }
+        )
+
+        log_agent_raw(
+            f"⭐ Fallback curated {len(curated)} flights, picked #{pick.id} {tag} "
+            f"({pick.airline} ${pick.price:.2f})",
+            agent_name="FlightAgent"
+        )
+
+        summary = (
+            f"I reviewed {len(all_flights)} flights and selected the top {len(curated)} options. "
+            f"My top pick is {pick.airline} at ${pick.price:.2f} — "
+            f"the most affordable option from your {'preferred' if tag == '[PREFERRED]' else 'available'} airlines."
+        )
+        return (curated, summary)
+
+
+    # ─────────────────────────────────────────────────────────────────────
+    # LEGACY: Single-flight recommendation (used when pool ≤ display_max)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _build_flights_table(
+        self,
+        flights: List[Flight],
+        preferred_codes: List[str],
+        interested_codes: List[str]
+    ) -> str:
         """
         Build a compact text table of all flights for the LLM prompt.
-        Each row has the flight ID so the LLM can reference it.
+        v5: Each row is tagged with [PREFERRED], [INTERESTED], or [ALTERNATIVE].
         """
         rows = []
         for f in flights:
+            tag = self._tag_flight(f, preferred_codes, interested_codes)
+
             if f.is_round_trip and f.outbound and f.return_flight:
                 rows.append(
-                    f"ID: {f.id} | {f.airline} | ${f.price:.2f} | "
+                    f"{tag} ID: {f.id} | {f.airline} ({f.airline_code}) | ${f.price:.2f} | "
                     f"Out: {f.outbound.departure_airport}→{f.outbound.arrival_airport} "
                     f"{f.outbound.departure_time} ({f.outbound.duration}, {f.outbound.stops} stops"
                     f"{', via ' + ','.join(f.outbound.layovers) if f.outbound.layovers else ''}) | "
@@ -706,7 +1254,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 )
             else:
                 rows.append(
-                    f"ID: {f.id} | {f.airline} {f.flight_number} | ${f.price:.2f} | "
+                    f"{tag} ID: {f.id} | {f.airline} ({f.airline_code}) {f.flight_number} | ${f.price:.2f} | "
                     f"{f.origin}→{f.destination} {f.departure_time} "
                     f"({f.duration}, {f.stops} stops)"
                 )
@@ -715,6 +1263,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
     def _build_preferences_summary(self, preferences: Any) -> str:
         """
         Build a readable summary of user preferences for the LLM.
+        v5: Now includes interested_carriers for complete picture.
         """
         lines = []
         lines.append(f"Flight budget: ${preferences.budget.flight_budget}")
@@ -724,9 +1273,16 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         if hasattr(preferences.flight_prefs, 'time_preference'):
             lines.append(f"Time preference: {preferences.flight_prefs.time_preference}")
         
+        # v5: Show both preferred and interested carriers
         if hasattr(preferences.flight_prefs, 'preferred_carriers') and preferences.flight_prefs.preferred_carriers:
-            lines.append(f"Preferred airlines: {', '.join(preferences.flight_prefs.preferred_carriers)}")
+            lines.append(f"⭐ Preferred airlines (priority): {', '.join(preferences.flight_prefs.preferred_carriers)}")
         
+        if hasattr(preferences.flight_prefs, 'interested_carriers') and preferences.flight_prefs.interested_carriers:
+            lines.append(f"☆ Interested airlines (good alternatives): {', '.join(preferences.flight_prefs.interested_carriers)}")
+        
+        if not (preferences.flight_prefs.preferred_carriers or preferences.flight_prefs.interested_carriers):
+            lines.append("Airlines: No preference (open to all)")
+
         if hasattr(preferences.flight_prefs, 'seat_preference'):
             lines.append(f"Seat preference: {preferences.flight_prefs.seat_preference}")
         
@@ -739,6 +1295,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         """
         Safely parse JSON from LLM response.
         Strips markdown fences and handles common LLM formatting issues.
+        Handles nested objects and arrays (e.g. selected_ids: [...]).
         """
         # Strip markdown code fences
         cleaned = re.sub(r'^```(?:json)?\s*', '', text.strip())
@@ -747,11 +1304,13 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         try:
             return json.loads(cleaned)
         except json.JSONDecodeError:
-            # Try to find JSON object in the text
-            match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-            if match:
+            # Try to find a JSON object (including nested braces/brackets)
+            # Match from first { to last }
+            start = cleaned.find('{')
+            end = cleaned.rfind('}')
+            if start != -1 and end != -1 and end > start:
                 try:
-                    return json.loads(match.group())
+                    return json.loads(cleaned[start:end + 1])
                 except json.JSONDecodeError:
                     pass
         
@@ -760,39 +1319,53 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
     def _generate_recommendation(
         self,
         flights: List[Flight],
-        preferences: Any
+        preferences: Any,
+        preferred_codes: List[str],
+        interested_codes: List[str],
     ) -> str:
         """
         LLM picks the best flight based on user preferences.
         
+        v5: Flights are tagged and LLM sees full carrier preference context.
         Returns the conversational summary. The recommended_id is stored
         in centralized storage for the frontend to consume.
         """
         if not flights:
             return "I couldn't find any flights for your route. Please check your dates and try again."
         
-        # Build the prompt
-        flights_table = self._build_flights_table(flights)
+        # Build the prompt with tagged flights
+        flights_table = self._build_flights_table(flights, preferred_codes, interested_codes)
         prefs_summary = self._build_preferences_summary(preferences)
         valid_ids = [str(f.id) for f in flights]
+
+        # Count by tag for context
+        preferred_count = sum(1 for f in flights if f.airline_code in preferred_codes)
+        interested_count = sum(1 for f in flights if f.airline_code in interested_codes)
+        alternative_count = len(flights) - preferred_count - interested_count
         
         prompt = f"""Here are the available flights:
 
 {flights_table}
 
+Flight breakdown: {preferred_count} from preferred airlines, {interested_count} from interested airlines, {alternative_count} alternatives
+
 User preferences:
 {prefs_summary}
 
-Pick the single best flight for this user. Consider their budget, preferred airlines, 
-time preferences, number of stops, and trip purpose. Weigh the tradeoffs — a slightly 
-more expensive direct flight may be better than a cheap one with 2 layovers for a 
-business traveler, for example.
+Pick the single best flight for this user. Consider their budget, airline preferences, 
+time preferences, number of stops, and trip purpose.
+
+Ranking guidance:
+- Flights from [PREFERRED] airlines should be ranked highest if they meet budget and stop constraints
+- Flights from [INTERESTED] airlines are good second choices
+- [ALTERNATIVE] flights are valuable if they offer significantly better price, fewer stops, or better timing
+- A much cheaper alternative is worth mentioning even if the user preferred a specific airline
 
 You MUST respond with ONLY a JSON object in this exact format, nothing else:
 {{
   "recommended_id": "<the flight ID from the list above>",
   "reason": "<1-2 sentences explaining why this is the best match for this user's preferences>",
-  "summary": "<3-4 sentence friendly recommendation mentioning how many options you reviewed, why you picked this one, and any notable alternatives>"
+  "summary": "<3-4 sentence friendly recommendation mentioning how many options you reviewed, why you picked this one (noting carrier preference alignment), and any notable alternatives — especially if a cheaper option exists from another airline>"
 }}
 
 CRITICAL RULES:
@@ -801,8 +1374,11 @@ CRITICAL RULES:
 - Respond with valid JSON only. No markdown, no backticks, no extra text.
 """
         
-        log_agent_raw("🤖 Asking LLM to pick best flight based on preferences...", 
-                     agent_name="FlightAgent")
+        log_agent_raw("🤖 \n\nFlight LLM System Prompt:", agent_name="FlightAgent")
+        log_agent_raw("{self.system_message}", agent_name="FlightAgent")
+
+        log_agent_raw("🤖 \n\nFlight LLM Prompt:", agent_name="FlightAgent")
+        log_agent_raw("{prompt}\n", agent_name="FlightAgent")
         
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
@@ -826,7 +1402,7 @@ CRITICAL RULES:
             
             if not result:
                 log_agent_raw("⚠️ Failed to parse LLM JSON, using fallback", agent_name="FlightAgent")
-                return self._fallback_recommendation(flights, preferences)
+                return self._fallback_recommendation(flights, preferences, preferred_codes, interested_codes)
             
             recommended_id = str(result.get("recommended_id", ""))
             reason = result.get("reason", "Best overall match")
@@ -839,13 +1415,14 @@ CRITICAL RULES:
                     f"valid IDs are {valid_ids}. Using fallback.",
                     agent_name="FlightAgent"
                 )
-                return self._fallback_recommendation(flights, preferences)
+                return self._fallback_recommendation(flights, preferences, preferred_codes, interested_codes)
             
             # Find the matching flight for metadata
             recommended_flight = next(f for f in flights if str(f.id) == recommended_id)
             
             # ✅ Store the recommendation
             is_direct = self._is_direct_flight(recommended_flight)
+            tag = self._tag_flight(recommended_flight, preferred_codes, interested_codes)
             
             self.trip_storage.store_recommendation(
                 trip_id=self.trip_id,
@@ -854,14 +1431,19 @@ CRITICAL RULES:
                 reason=reason,
                 metadata={
                     "airline": recommended_flight.airline,
+                    "airline_code": recommended_flight.airline_code,
                     "price": recommended_flight.price,
                     "is_direct": is_direct,
-                    "total_options_reviewed": len(flights)
+                    "carrier_match": tag,  # v5: track preference alignment
+                    "total_options_reviewed": len(flights),
+                    "preferred_options": preferred_count,
+                    "interested_options": interested_count,
+                    "alternative_options": alternative_count,
                 }
             )
             
             log_agent_raw(
-                f"⭐ LLM picked flight {recommended_id} "
+                f"⭐ LLM picked flight {recommended_id} {tag} "
                 f"({recommended_flight.airline} ${recommended_flight.price:.2f}): {reason}",
                 agent_name="FlightAgent"
             )
@@ -870,38 +1452,60 @@ CRITICAL RULES:
             
         except Exception as e:
             log_agent_raw(f"⚠️ LLM recommendation failed: {str(e)}", agent_name="FlightAgent")
-            return self._fallback_recommendation(flights, preferences)
+            return self._fallback_recommendation(flights, preferences, preferred_codes, interested_codes)
 
-    def _fallback_recommendation(self, flights: List[Flight], preferences: Any) -> str:
+    def _fallback_recommendation(
+        self,
+        flights: List[Flight],
+        preferences: Any,
+        preferred_codes: List[str],
+        interested_codes: List[str],
+    ) -> str:
         """
-        Fallback when LLM fails: pick cheapest flight, store it, return template.
-        This is the safety net — not the primary path.
+        Fallback when LLM fails: pick best preferred carrier flight,
+        or cheapest if no preferred carriers match.
+
+        v5: Prefers preferred > interested > cheapest alternative.
         """
-        cheapest = sorted(flights, key=lambda f: f.price)[0]
-        
+        # Try preferred carriers first
+        preferred_flights = [f for f in flights if f.airline_code in preferred_codes]
+        interested_flights = [f for f in flights if f.airline_code in interested_codes]
+
+        if preferred_flights:
+            pick = sorted(preferred_flights, key=lambda f: f.price)[0]
+            tag = "[PREFERRED]"
+        elif interested_flights:
+            pick = sorted(interested_flights, key=lambda f: f.price)[0]
+            tag = "[INTERESTED]"
+        else:
+            pick = sorted(flights, key=lambda f: f.price)[0]
+            tag = "[ALTERNATIVE]"
+
         self.trip_storage.store_recommendation(
             trip_id=self.trip_id,
             category="flight",
-            recommended_id=str(cheapest.id),
-            reason="Fallback: lowest price (LLM recommendation unavailable)",
+            recommended_id=str(pick.id),
+            reason=f"Fallback: best price from {tag} carriers (LLM recommendation unavailable)",
             metadata={
-                "airline": cheapest.airline,
-                "price": cheapest.price,
-                "is_direct": self._is_direct_flight(cheapest),
+                "airline": pick.airline,
+                "airline_code": pick.airline_code,
+                "price": pick.price,
+                "is_direct": self._is_direct_flight(pick),
+                "carrier_match": tag,
                 "total_options_reviewed": len(flights),
                 "is_fallback": True
             }
         )
         
         log_agent_raw(
-            f"⭐ Fallback pick: flight {cheapest.id} ({cheapest.airline} ${cheapest.price:.2f})",
+            f"⭐ Fallback pick: flight {pick.id} {tag} ({pick.airline} ${pick.price:.2f})",
             agent_name="FlightAgent"
         )
         
         return (
             f"I found {len(flights)} flights for your route. "
-            f"My top pick is {cheapest.airline} at ${cheapest.price:.2f} — "
-            f"the most affordable option available."
+            f"My top pick is {pick.airline} at ${pick.price:.2f} — "
+            f"the most affordable option from your {'preferred' if tag == '[PREFERRED]' else 'available'} airlines."
         )
 
     def _is_direct_flight(self, flight: Flight) -> bool:
@@ -911,6 +1515,40 @@ CRITICAL RULES:
         elif not flight.is_round_trip:
             return (flight.stops or 0) == 0
         return False
+
+    def _flight_fingerprint(self, flight: Flight) -> str:
+        """
+        Generate a route-level fingerprint for codeshare deduplication.
+
+        Two flights with the same fingerprint are the same physical journey
+        (same aircraft, same times) just marketed under different carrier codes.
+
+        Fingerprint format:
+          Round-trip:  "JFK|2026-02-20T16:50|LHR|2026-02-21T11:50||LHR|2026-02-25T13:25|JFK|2026-02-25T20:58"
+          One-way:     "JFK|2026-02-20T16:50|LHR|2026-02-21T11:50"
+
+        Uses final departure/arrival airports + times (not layover cities),
+        so JFK→YYZ→LHR and JFK→YUL→LHR at different times are distinct.
+        But JFK→(via YYZ)→LHR departing at 16:50 arriving 11:50 is the same
+        route regardless of whether it's sold as UA9717 or AC8555.
+        """
+        if flight.is_round_trip and flight.outbound and flight.return_flight:
+            out = flight.outbound
+            ret = flight.return_flight
+            # Normalize times to minute precision (strip seconds if present)
+            out_dep = str(out.departure_time)[:16]
+            out_arr = str(out.arrival_time)[:16]
+            ret_dep = str(ret.departure_time)[:16]
+            ret_arr = str(ret.arrival_time)[:16]
+            return (
+                f"{out.departure_airport}|{out_dep}|{out.arrival_airport}|{out_arr}"
+                f"||"
+                f"{ret.departure_airport}|{ret_dep}|{ret.arrival_airport}|{ret_arr}"
+            )
+        else:
+            dep = str(flight.departure_time)[:16]
+            arr = str(flight.arrival_time)[:16]
+            return f"{flight.origin}|{dep}|{flight.destination}|{arr}"
 
 
     # ─────────────────────────────────────────────────────────────────────

@@ -54,7 +54,7 @@ class TripPlanningService:
             # ── Convert directly to TravelPreferences (no TripRequest middleman) ─
             travel_preferences = convert_trip_request_to_preferences(request_dict)
 
-            log_json_raw(travel_preferences, label="travel_preferences", include_borders=True)
+            log_json_raw(travel_preferences.model_dump(), label="travel_preferences", include_borders=True)
 
             # ── Create user proxy ──────────────────────────────────────
             user_proxy = TravelQUserProxy(
