@@ -106,16 +106,18 @@ export const HotelCard: React.FC<HotelCardProps> = ({
       layout
       transition={{ duration: 0.2 }}
       className={`rounded-lg overflow-hidden cursor-pointer transition-all duration-200 ${
-        isSelected
-          ? 'ring-2 ring-purple-500 shadow-lg bg-gradient-to-br from-purple-50 to-pink-50'
-          : 'hover:shadow-md bg-white border border-gray-200'
+        isAiRecommended
+          ? 'ring-2 ring-amber-400 shadow-lg ' + (isSelected ? 'bg-gradient-to-br from-amber-50 to-yellow-50' : 'bg-white')
+          : isSelected
+            ? 'ring-2 ring-purple-500 shadow-lg bg-gradient-to-br from-purple-50 to-pink-50'
+            : 'hover:shadow-md bg-white border border-gray-200'
       }`}
       onClick={toggleExpand}
     >
-      {/* AI Badge */}
-      {isAiRecommended && !isSelected && (
-        <div className="bg-gradient-to-r from-yellow-400 to-yellow-500 px-3 py-0.5 flex items-center justify-center">
-          <span className="text-[12px] font-bold text-yellow-900">🤖 AI Recommended</span>
+      {/* AI Recommended Banner — always visible when AI pick */}
+      {isAiRecommended && (
+        <div className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-400 px-3 py-1 flex items-center justify-center gap-1.5">
+          <span className="text-[12px] font-bold text-amber-900 tracking-wide">✨ AI Recommended</span>
         </div>
       )}
 
@@ -128,7 +130,7 @@ export const HotelCard: React.FC<HotelCardProps> = ({
             <span className="font-bold text-[14px] text-gray-800 truncate">
               {hotel.name}
             </span>
-            {isAiRecommended && <span className="text-[13px] flex-shrink-0" title="AI Recommended">🌟</span>}
+            {isAiRecommended && <span className="text-[11px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full font-semibold flex-shrink-0">AI Pick</span>}
             {hotel.property_type && hotel.property_type !== 'Hotel' && (
               <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0">
                 {hotel.property_type}

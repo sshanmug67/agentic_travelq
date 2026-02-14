@@ -43,6 +43,8 @@ export const Dashboard: React.FC = () => {
   const [activeResultsTab, setActiveResultsTab] = useState<ResultsTab>('flights');
   const [aiRecommendedFlightId, setAiRecommendedFlightId] = useState<string | null>(null);
   const [aiRecommendedHotelId, setAiRecommendedHotelId] = useState<string | null>(null);
+  const [aiRecommendedRestaurantIds, setAiRecommendedRestaurantIds] = useState<string[]>([]);
+  const [aiRecommendedActivityIds, setAiRecommendedActivityIds] = useState<string[]>([]);
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
 
   // v3: Include all four data types in hasResults check
@@ -135,14 +137,16 @@ export const Dashboard: React.FC = () => {
         selectHotel(hotelToSelect, 'ai');
       }
 
-      // ── v3 NEW: Auto-select AI-recommended restaurants ─────────────
+      // ── Auto-select AI-recommended restaurants ─────────────────────
       if (restaurantResults.length > 0) {
         const recRestaurant = response.recommendations?.restaurant;
         const recIds: string[] =
           recRestaurant?.metadata?.all_recommended_ids || [];
 
+        // v4: Store recommended IDs for badge display
+        setAiRecommendedRestaurantIds(recIds);
+
         if (recIds.length > 0) {
-          // Toggle each recommended restaurant into the itinerary
           for (const recId of recIds) {
             const match = restaurantResults.find(
               (r: any) => String(r.id) === String(recId)
@@ -154,14 +158,16 @@ export const Dashboard: React.FC = () => {
         }
       }
 
-      // ── v3 NEW: Auto-select AI-recommended activities ──────────────
+      // ── Auto-select AI-recommended activities ──────────────────────
       if (activityResults.length > 0) {
         const recActivity = response.recommendations?.activity;
         const recIds: string[] =
           recActivity?.metadata?.all_recommended_ids || [];
 
+        // v4: Store recommended IDs for badge display
+        setAiRecommendedActivityIds(recIds);
+
         if (recIds.length > 0) {
-          // Toggle each recommended activity into the itinerary
           for (const recId of recIds) {
             const match = activityResults.find(
               (a: any) => String(a.id) === String(recId)
@@ -224,13 +230,18 @@ export const Dashboard: React.FC = () => {
     { id: 'activities', label: 'Activities', icon: '🎭', count: storeActivities.length },
   ];
 
-  // Helper: check if a restaurant is selected in itinerary
   const isRestaurantSelected = (id: string) =>
     selectedRestaurants.some((r) => r.id === id);
 
-  // Helper: check if an activity is selected in itinerary
   const isActivitySelected = (id: string) =>
     selectedActivities.some((a) => a.id === id);
+
+  // v4: AI recommendation helpers
+  const isRestaurantAiRecommended = (id: string) =>
+    aiRecommendedRestaurantIds.includes(id);
+
+  const isActivityAiRecommended = (id: string) =>
+    aiRecommendedActivityIds.includes(id);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50">
@@ -291,7 +302,6 @@ export const Dashboard: React.FC = () => {
           RECOMMENDATIONS: Left = Flight/Hotel picks | Right = Daily Schedule
           ══════════════════════════════════════════════════════════════════ */}
       {recommendations && Object.keys(recommendations).length > 0 && (() => {
-        // ── Left side: Flight + Hotel cards ───────────────────────────
         const categoryConfig: Record<string, { icon: string; accent: string; accentLight: string; label: string }> = {
           flight: { icon: '✈️', accent: 'border-l-amber-400',  accentLight: 'bg-amber-50',  label: 'Flight' },
           hotel:  { icon: '🏨', accent: 'border-l-blue-400',   accentLight: 'bg-blue-50',   label: 'Hotel' },
@@ -303,19 +313,13 @@ export const Dashboard: React.FC = () => {
           rec: recommendations[cat] || null,
         }));
 
-        // ── Right side: Daily plan from PlacesAgent ──────────────────
         const dailyPlanRec = recommendations['daily_plan'];
         const planText: string = dailyPlanRec?.reason || '';
 
-        // Parse markdown plan into day blocks
-        // Handles two LLM output formats:
-        //   Format A: ### Day 1 (date)\n body...
-        //   Format B: **Day 1 (date):** body...  (inline bold)
         const dayBlocks: { title: string; body: string }[] = [];
         if (planText) {
-          // First try splitting on ### headings
           const hashSections = planText.split(/(?=###\s)/);
-          const hasHashHeadings = hashSections.some(s => s.trim().startsWith('###'));
+          const hasHashHeadings = hashSections.some((s: string) => s.trim().startsWith('###'));
 
           if (hasHashHeadings) {
             for (const section of hashSections) {
@@ -331,19 +335,16 @@ export const Dashboard: React.FC = () => {
               }
             }
           } else {
-            // Fallback: split on **Day N** bold patterns
             const boldDaySections = planText.split(/(?=\*\*Day\s+\d)/);
             for (const section of boldDaySections) {
               const trimmed = section.trim();
               if (!trimmed) continue;
-              // Extract the bold title: **Day 1 (Feb 20, 2026):**
               const titleMatch = trimmed.match(/^\*\*(.+?)\*\*:?\s*/);
               if (titleMatch) {
                 const title = titleMatch[1].trim();
                 const body = trimmed.slice(titleMatch[0].length).trim();
                 dayBlocks.push({ title, body });
               } else {
-                // No bold title — treat first sentence as title
                 const colonIdx = trimmed.indexOf(':');
                 if (colonIdx > 0 && colonIdx < 80) {
                   dayBlocks.push({
@@ -358,17 +359,11 @@ export const Dashboard: React.FC = () => {
           }
         }
 
-        // Accent colors for day timeline
         const dayAccents = [
-          'border-l-purple-400',
-          'border-l-pink-400',
-          'border-l-indigo-400',
-          'border-l-teal-400',
-          'border-l-orange-400',
-          'border-l-rose-400',
+          'border-l-purple-400', 'border-l-pink-400', 'border-l-indigo-400',
+          'border-l-teal-400', 'border-l-orange-400', 'border-l-rose-400',
         ];
 
-        // Convert **text** to <strong> for display
         const renderBold = (text: string) => {
           const parts = text.split(/\*\*(.*?)\*\*/g);
           return parts.map((part, i) =>
@@ -381,7 +376,6 @@ export const Dashboard: React.FC = () => {
         return (
           <div className="px-6 lg:px-[10%] pb-8">
             <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
-              {/* Section header */}
               <div className="flex items-center gap-2.5 mb-5">
                 <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center shadow-sm">
                   <span className="text-white text-[16px]">✨</span>
@@ -393,69 +387,45 @@ export const Dashboard: React.FC = () => {
               <hr className="border-gray-200 mb-5" />
 
               <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-
-                {/* ─── LEFT: Flight, Hotel & Weather Picks ────────────── */}
+                {/* LEFT: Flight, Hotel & Weather */}
                 <div className="lg:col-span-2 flex flex-col lg:border-r lg:border-gray-200 lg:pr-6">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-[18px]">🎯</span>
-                    <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
-                      Top Picks
-                    </h4>
+                    <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">Top Picks</h4>
                   </div>
                   <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
                   {pickCards.map(({ category, config, rec }) => (
-                    <div
-                      key={category}
-                      className={`${config.accentLight} rounded-lg border border-gray-200 border-l-4 ${config.accent} p-4 transition-shadow hover:shadow-md`}
-                    >
+                    <div key={category} className={`${config.accentLight} rounded-lg border border-gray-200 border-l-4 ${config.accent} p-4 transition-shadow hover:shadow-md`}>
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
                           <span className="text-[18px]">{config.icon}</span>
-                          <span className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
-                            {config.label}
-                          </span>
+                          <span className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">{config.label}</span>
                         </div>
                         {rec?.metadata?.price != null && (
-                          <span className="text-[17px] font-bold text-green-700">
-                            ${Number(rec.metadata.price).toFixed(2)}
-                          </span>
+                          <span className="text-[17px] font-bold text-green-700">${Number(rec.metadata.price).toFixed(2)}</span>
                         )}
                       </div>
-
                       {rec && rec.recommended_id ? (
                         <div>
                           <p className="text-[16px] font-semibold text-gray-800 mb-1">
-                            {rec.metadata?.airline
-                              || rec.metadata?.hotel_name
-                              || rec.metadata?.name
-                              || `Option #${rec.recommended_id}`}
+                            {rec.metadata?.airline || rec.metadata?.hotel_name || rec.metadata?.name || `Option #${rec.recommended_id}`}
                           </p>
-                          <p className="text-[13px] text-gray-600 leading-relaxed mb-2">
-                            {rec.reason || 'Best match for your preferences'}
-                          </p>
+                          <p className="text-[13px] text-gray-600 leading-relaxed mb-2">{rec.reason || 'Best match for your preferences'}</p>
                           <div className="flex items-center gap-3 text-[12px] text-gray-400">
                             {rec.metadata?.is_direct !== undefined && (
-                              <span className="flex items-center gap-1">
-                                {rec.metadata.is_direct ? '✅ Direct' : '🔄 Connecting'}
-                              </span>
+                              <span className="flex items-center gap-1">{rec.metadata.is_direct ? '✅ Direct' : '🔄 Connecting'}</span>
                             )}
-                            {rec.metadata?.total_options_reviewed && (
-                              <span>{rec.metadata.total_options_reviewed} reviewed</span>
-                            )}
-                            {rec.metadata?.rating && (
-                              <span>⭐ {rec.metadata.rating}</span>
-                            )}
+                            {rec.metadata?.total_options_reviewed && <span>{rec.metadata.total_options_reviewed} reviewed</span>}
+                            {rec.metadata?.rating && <span>⭐ {rec.metadata.rating}</span>}
                           </div>
                         </div>
                       ) : (
-                        <p className="text-[14px] text-gray-400 italic py-4 text-center">
-                          Pending...
-                        </p>
+                        <p className="text-[14px] text-gray-400 italic py-4 text-center">Pending...</p>
                       )}
                     </div>
                   ))}
 
-                  {/* ─── Weather Recommendation ────────────────────────── */}
+                  {/* Weather */}
                   {(() => {
                     const weatherRec = recommendations['weather'];
                     if (!weatherRec) return null;
@@ -466,23 +436,15 @@ export const Dashboard: React.FC = () => {
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2">
                             <span className="text-[18px]">🌤️</span>
-                            <span className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
-                              Weather
-                            </span>
+                            <span className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">Weather</span>
                           </div>
                           {tempMin != null && tempMax != null && (
-                            <span className="text-[13px] font-semibold text-sky-700">
-                              {tempMin}°F – {tempMax}°F
-                            </span>
+                            <span className="text-[13px] font-semibold text-sky-700">{tempMin}°F – {tempMax}°F</span>
                           )}
                         </div>
-                        <p className="text-[13px] text-gray-600 leading-relaxed">
-                          {weatherRec.reason || 'Weather data available'}
-                        </p>
+                        <p className="text-[13px] text-gray-600 leading-relaxed">{weatherRec.reason || 'Weather data available'}</p>
                         <div className="flex items-center gap-3 mt-2 text-[12px] text-gray-400">
-                          {weatherRec.metadata?.num_days && (
-                            <span>{weatherRec.metadata.num_days}-day forecast</span>
-                          )}
+                          {weatherRec.metadata?.num_days && <span>{weatherRec.metadata.num_days}-day forecast</span>}
                           {weatherRec.metadata?.rainy_days > 0 && (
                             <span>🌧️ {weatherRec.metadata.rainy_days} rainy day{weatherRec.metadata.rainy_days !== 1 ? 's' : ''}</span>
                           )}
@@ -490,39 +452,28 @@ export const Dashboard: React.FC = () => {
                       </div>
                     );
                   })()}
-
                   </div>
                 </div>
 
-                {/* ─── RIGHT: Daily Activity Schedule ─────────────────── */}
+                {/* RIGHT: Daily Schedule */}
                 <div className="lg:col-span-3">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-[18px]">📅</span>
-                    <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">
-                      Daily Schedule
-                    </h4>
+                    <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">Daily Schedule</h4>
                     {dailyPlanRec?.metadata?.num_days && (
                       <span className="text-[12px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
                         {dailyPlanRec.metadata.num_days} days
                       </span>
                     )}
                   </div>
-
                   {dayBlocks.length > 0 ? (
                     <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
                       {dayBlocks.map((day, idx) => {
                         const accent = dayAccents[idx % dayAccents.length];
                         return (
-                          <div
-                            key={idx}
-                            className={`bg-gray-50 rounded-lg border border-gray-200 border-l-4 ${accent} px-4 py-3 transition-shadow hover:shadow-sm`}
-                          >
-                            <p className="text-[13px] font-bold text-gray-800 mb-1">
-                              {day.title}
-                            </p>
-                            <p className="text-[12.5px] text-gray-600 leading-relaxed">
-                              {renderBold(day.body)}
-                            </p>
+                          <div key={idx} className={`bg-gray-50 rounded-lg border border-gray-200 border-l-4 ${accent} px-4 py-3 transition-shadow hover:shadow-sm`}>
+                            <p className="text-[13px] font-bold text-gray-800 mb-1">{day.title}</p>
+                            <p className="text-[12.5px] text-gray-600 leading-relaxed">{renderBold(day.body)}</p>
                           </div>
                         );
                       })}
@@ -530,13 +481,10 @@ export const Dashboard: React.FC = () => {
                   ) : (
                     <div className="bg-gray-50 rounded-lg border border-dashed border-gray-300 p-8 text-center">
                       <span className="text-3xl mb-2 block">📅</span>
-                      <p className="text-[14px] text-gray-400 italic">
-                        Daily schedule will appear after planning...
-                      </p>
+                      <p className="text-[14px] text-gray-400 italic">Daily schedule will appear after planning...</p>
                     </div>
                   )}
                 </div>
-
               </div>
             </div>
           </div>
@@ -548,11 +496,9 @@ export const Dashboard: React.FC = () => {
           ══════════════════════════════════════════════════════════════════ */}
       <div className="px-6 lg:px-[10%] pb-6">
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-
           <div className="lg:col-span-3">
             {hasResults ? (
               <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
-
                 <div className="flex border-b bg-gradient-to-r from-purple-50 to-pink-50">
                   {resultsTabs.map((tab) => (
                     <button
@@ -569,12 +515,8 @@ export const Dashboard: React.FC = () => {
                         <span>{tab.label}</span>
                         {tab.count > 0 && (
                           <span className={`text-[13px] px-2 py-0.5 rounded-full ${
-                            activeResultsTab === tab.id
-                              ? 'bg-purple-100 text-purple-700'
-                              : 'bg-gray-200 text-gray-600'
-                          }`}>
-                            {tab.count}
-                          </span>
+                            activeResultsTab === tab.id ? 'bg-purple-100 text-purple-700' : 'bg-gray-200 text-gray-600'
+                          }`}>{tab.count}</span>
                         )}
                       </span>
                       {activeResultsTab === tab.id && (
@@ -585,26 +527,20 @@ export const Dashboard: React.FC = () => {
                 </div>
 
                 <div className="p-6">
-
-                  {/* ────────── FLIGHTS TAB ────────── */}
+                  {/* FLIGHTS TAB */}
                   {activeResultsTab === 'flights' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-[19px] font-bold text-gray-800">
-                          ✈️ Available Flights
-                        </h2>
+                        <h2 className="text-[19px] font-bold text-gray-800">✈️ Available Flights</h2>
                         <div className="flex items-center gap-3">
                           {selectedFlight && (
                             <span className="text-[13px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium">
                               Selected: {selectedFlight.airline_code} {selectedFlight.outbound?.flight_number} — ${selectedFlight.price}
                             </span>
                           )}
-                          <span className="text-[15px] text-gray-500">
-                            {flights.length} option{flights.length !== 1 ? 's' : ''}
-                          </span>
+                          <span className="text-[15px] text-gray-500">{flights.length} option{flights.length !== 1 ? 's' : ''}</span>
                         </div>
                       </div>
-
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {flights.map((flight, index) => (
                           <FlightCard
@@ -619,25 +555,20 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
-                  {/* ────────── HOTELS TAB ────────── */}
+                  {/* HOTELS TAB */}
                   {activeResultsTab === 'hotels' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-[19px] font-bold text-gray-800">
-                          🏨 Available Hotels
-                        </h2>
+                        <h2 className="text-[19px] font-bold text-gray-800">🏨 Available Hotels</h2>
                         <div className="flex items-center gap-3">
                           {selectedHotel && (
                             <span className="text-[13px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium truncate max-w-[280px]">
                               Selected: {selectedHotel.name} — ${selectedHotel.total_price}
                             </span>
                           )}
-                          <span className="text-[15px] text-gray-500">
-                            {hotels.length} option{hotels.length !== 1 ? 's' : ''}
-                          </span>
+                          <span className="text-[15px] text-gray-500">{hotels.length} option{hotels.length !== 1 ? 's' : ''}</span>
                         </div>
                       </div>
-
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {hotels.map((hotel, index) => (
                           <HotelCard
@@ -652,25 +583,20 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
-                  {/* ────────── RESTAURANTS TAB ────────── */}
+                  {/* RESTAURANTS TAB */}
                   {activeResultsTab === 'restaurants' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-[19px] font-bold text-gray-800">
-                          🍽️ Recommended Restaurants
-                        </h2>
+                        <h2 className="text-[19px] font-bold text-gray-800">🍽️ Recommended Restaurants</h2>
                         <div className="flex items-center gap-3">
                           {selectedRestaurants.length > 0 && (
                             <span className="text-[13px] bg-orange-100 text-orange-700 px-3 py-1 rounded-full font-medium">
                               {selectedRestaurants.length} added to itinerary
                             </span>
                           )}
-                          <span className="text-[15px] text-gray-500">
-                            {storeRestaurants.length} option{storeRestaurants.length !== 1 ? 's' : ''}
-                          </span>
+                          <span className="text-[15px] text-gray-500">{storeRestaurants.length} option{storeRestaurants.length !== 1 ? 's' : ''}</span>
                         </div>
                       </div>
-
                       {storeRestaurants.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {storeRestaurants.map((restaurant, index) => (
@@ -678,6 +604,7 @@ export const Dashboard: React.FC = () => {
                               key={`${restaurant.id}-${index}`}
                               restaurant={restaurant}
                               isSelected={isRestaurantSelected(restaurant.id)}
+                              isAiRecommended={isRestaurantAiRecommended(restaurant.id)}
                               onToggle={() => handleToggleRestaurant(restaurant)}
                             />
                           ))}
@@ -686,33 +613,26 @@ export const Dashboard: React.FC = () => {
                         <div className="text-center py-12 text-gray-500">
                           <div className="text-4xl mb-3">🍽️</div>
                           <p className="font-semibold">No restaurant results yet</p>
-                          <p className="text-[15px] mt-1">
-                            Plan your trip to discover great dining options
-                          </p>
+                          <p className="text-[15px] mt-1">Plan your trip to discover great dining options</p>
                         </div>
                       )}
                     </div>
                   )}
 
-                  {/* ────────── ACTIVITIES TAB ────────── */}
+                  {/* ACTIVITIES TAB */}
                   {activeResultsTab === 'activities' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-[19px] font-bold text-gray-800">
-                          🎭 Things To Do
-                        </h2>
+                        <h2 className="text-[19px] font-bold text-gray-800">🎭 Things To Do</h2>
                         <div className="flex items-center gap-3">
                           {selectedActivities.length > 0 && (
                             <span className="text-[13px] bg-blue-100 text-blue-700 px-3 py-1 rounded-full font-medium">
                               {selectedActivities.length} added to itinerary
                             </span>
                           )}
-                          <span className="text-[15px] text-gray-500">
-                            {storeActivities.length} option{storeActivities.length !== 1 ? 's' : ''}
-                          </span>
+                          <span className="text-[15px] text-gray-500">{storeActivities.length} option{storeActivities.length !== 1 ? 's' : ''}</span>
                         </div>
                       </div>
-
                       {storeActivities.length > 0 ? (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                           {storeActivities.map((activity, index) => (
@@ -720,6 +640,7 @@ export const Dashboard: React.FC = () => {
                               key={`${activity.id}-${index}`}
                               activity={activity}
                               isSelected={isActivitySelected(activity.id)}
+                              isAiRecommended={isActivityAiRecommended(activity.id)}
                               onToggle={() => handleToggleActivity(activity)}
                             />
                           ))}
@@ -728,9 +649,7 @@ export const Dashboard: React.FC = () => {
                         <div className="text-center py-12 text-gray-500">
                           <div className="text-4xl mb-3">🎭</div>
                           <p className="font-semibold">No activity results yet</p>
-                          <p className="text-[15px] mt-1">
-                            Plan your trip to discover things to do
-                          </p>
+                          <p className="text-[15px] mt-1">Plan your trip to discover things to do</p>
                         </div>
                       )}
                     </div>
@@ -741,15 +660,9 @@ export const Dashboard: React.FC = () => {
               <div className="bg-white rounded-xl shadow-lg p-8 border border-gray-200">
                 <div className="text-center py-20">
                   <div className="text-6xl mb-4">🚀</div>
-                  <h2 className="text-[25px] font-bold text-gray-800 mb-2">
-                    Ready to Plan Your Trip?
-                  </h2>
-                  <p className="text-gray-600 mb-6">
-                    Fill in your trip details above and click "Plan My Trip" to see options!
-                  </p>
-                  <div className="text-[15px] text-gray-500">
-                    Flight, Hotel, Restaurant, and Activity options will appear here.
-                  </div>
+                  <h2 className="text-[25px] font-bold text-gray-800 mb-2">Ready to Plan Your Trip?</h2>
+                  <p className="text-gray-600 mb-6">Fill in your trip details above and click "Plan My Trip" to see options!</p>
+                  <div className="text-[15px] text-gray-500">Flight, Hotel, Restaurant, and Activity options will appear here.</div>
                 </div>
               </div>
             )}

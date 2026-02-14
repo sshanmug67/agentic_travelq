@@ -16,12 +16,14 @@ import type { Restaurant, HotelReview } from '../../types/trip';
 interface RestaurantCardProps {
   restaurant: Restaurant;
   isSelected: boolean;
+  isAiRecommended?: boolean;
   onToggle: () => void;
 }
 
 export const RestaurantCard: React.FC<RestaurantCardProps> = ({
   restaurant,
   isSelected,
+  isAiRecommended = false,
   onToggle,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
@@ -84,12 +86,20 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
       layout
       transition={{ duration: 0.2 }}
       className={`rounded-lg overflow-hidden cursor-pointer transition-all duration-200 ${
-        isSelected
-          ? 'ring-2 ring-orange-500 shadow-lg bg-gradient-to-br from-orange-50 to-red-50'
-          : 'hover:shadow-md bg-white border border-gray-200'
+        isAiRecommended
+          ? 'ring-2 ring-amber-400 shadow-lg ' + (isSelected ? 'bg-gradient-to-br from-amber-50 to-yellow-50' : 'bg-white')
+          : isSelected
+            ? 'ring-2 ring-orange-500 shadow-lg bg-gradient-to-br from-orange-50 to-red-50'
+            : 'hover:shadow-md bg-white border border-gray-200'
       }`}
       onClick={toggleExpand}
     >
+      {/* AI Recommended Banner — always visible when AI pick */}
+      {isAiRecommended && (
+        <div className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-400 px-3 py-1 flex items-center justify-center gap-1.5">
+          <span className="text-[12px] font-bold text-amber-900 tracking-wide">✨ AI Recommended</span>
+        </div>
+      )}
       <div className="flex gap-3 p-4">
         {/* Restaurant Photo */}
         <div className="w-20 h-20 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0">
@@ -104,7 +114,14 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
         <div className="flex-1 min-w-0">
           {/* Row 1: Name ... Price + Add */}
           <div className="flex items-start justify-between gap-2 mb-1.5">
-            <h3 className="font-bold text-[14px] text-gray-800 truncate">{restaurant.name}</h3>
+            <div className="flex items-center gap-1.5 min-w-0">
+              <h3 className="font-bold text-[14px] text-gray-800 truncate">{restaurant.name}</h3>
+              {isAiRecommended && (
+                <span className="flex-shrink-0 bg-amber-100 text-amber-700 text-[11px] font-semibold px-1.5 py-0.5 rounded-full">
+                  AI Pick
+                </span>
+              )}
+            </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <span className="text-[14px] font-bold text-green-700">
                 {getPriceLevelDisplay(restaurant.price_level)}
