@@ -2,6 +2,13 @@
 Places Agent - Preference-Aware, Weather-Aware, Day-Planned
 Location: backend/agents/places_agent.py
 
+Changes (v7 — Granular Status Messages):
+  - Added _update_status() helper that sends real-time progress to Redis
+  - Status messages sent to BOTH "restaurant" and "places" agent rows
+    since this single agent powers both frontend status lines
+  - _update_restaurant_status() / _update_activity_status() for targeted updates
+  - Status calls at every meaningful workflow step
+
 Changes (v6 — enriched Place data):
   - _google_dict_to_place: now passes through reviews, phone_number,
     google_url, user_ratings_total from Google Places v4 data
@@ -24,8 +31,9 @@ import openai
 
 class PlacesAgent(TravelQBaseAgent):
     """
-    Places Agent v6 — Preference-aware, weather-aware, day-planned,
-    with structured recommendation storage and enriched Place data.
+    Places Agent v7 — Preference-aware, weather-aware, day-planned,
+    with structured recommendation storage, enriched Place data,
+    and granular real-time status messages.
     """
 
     CATEGORY_TYPES = {
@@ -75,7 +83,43 @@ Be enthusiastic, knowledgeable, and specific!
         self.trip_storage = trip_storage
         self.google_places = get_google_places_service()
 
-        log_agent_raw("Places Agent v6 initialized", agent_name="PlacesAgent")
+        log_agent_raw("Places Agent v7 initialized (with granular status)", agent_name="PlacesAgent")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # v7: Granular status helpers
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _update_status(self, message: str, agent_name: str = "places"):
+        """Send a granular status message to Redis for the frontend.
+        
+        Args:
+            message: Human-readable progress message
+            agent_name: Which frontend row to update — "restaurant" or "places"
+        """
+        try:
+            self.trip_storage.update_agent_status_message(
+                self.trip_id, agent_name, message
+            )
+        except Exception as e:
+            log_agent_raw(
+                f"Status update failed ({agent_name}): {e}",
+                agent_name="PlacesAgent",
+            )
+
+    def _update_restaurant_status(self, message: str):
+        """Send status to the Restaurant Picks row."""
+        self._update_status(message, agent_name="restaurant")
+
+    def _update_activity_status(self, message: str):
+        """Send status to the Discovering Activities row."""
+        self._update_status(message, agent_name="places")
+
+    def _update_both_status(self, message: str):
+        """Send the same status to both restaurant and places rows."""
+        self._update_status(message, agent_name="restaurant")
+        self._update_status(message, agent_name="places")
+
+    # ─────────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _get_all_interests(preferences) -> List[str]:
@@ -92,33 +136,75 @@ Be enthusiastic, knowledgeable, and specific!
         )
 
     def generate_reply(self, messages=None, sender=None, config=None) -> str:
-        log_agent_raw("PlacesAgent v6 processing request...", agent_name="PlacesAgent")
+        log_agent_raw("PlacesAgent v7 processing request...", agent_name="PlacesAgent")
+
+        # v7: Initialize both status rows
+        self._update_restaurant_status("Initializing restaurant search...")
+        self._update_activity_status("Initializing activity search...")
 
         if messages and len(messages) > 0:
             last_message = messages[-1].get("content", "")
             sender_name = sender.name if sender and hasattr(sender, "name") else "Unknown"
             self.log_conversation_message(message_type="INCOMING", content=last_message, sender=sender_name, truncate=500)
 
+        # v7: Load preferences
+        self._update_both_status("Loading travel preferences...")
         preferences = self.trip_storage.get_preferences(self.trip_id)
         if not preferences:
+            self._update_both_status("Error: preferences not found")
             return self.signal_completion(f"Error: Could not find preferences for trip {self.trip_id}")
 
         try:
             start_time = time.time()
+
+            # v7: Weather loading
+            self._update_both_status("Loading weather forecast for smart scheduling...")
             weather_by_date = self._load_weather_data()
             trip_days = self._compute_trip_days(preferences, weather_by_date)
+            if weather_by_date:
+                rainy = sum(1 for d in trip_days if d["weather_class"] == "indoor")
+                self._update_both_status(
+                    f"Weather loaded — {len(trip_days)} days ({rainy} indoor-recommended)"
+                )
+            else:
+                self._update_both_status(f"No weather data — planning {len(trip_days)} days flexibly")
 
+            # v7: Restaurant search with per-cuisine status
             cuisine_restaurants = self._search_restaurants_by_cuisine(preferences)
+
+            # v7: Activity search with per-interest status
             interest_activities = self._search_activities_by_interest(preferences)
+
             api_duration = time.time() - start_time
 
+            # v7: Segregation and enrichment
+            self._update_restaurant_status(f"Processing {len(cuisine_restaurants)} restaurant results...")
+            self._update_activity_status(f"Processing {len(interest_activities)} activity results...")
             restaurants, activities = self._segregate_and_enrich(cuisine_restaurants, interest_activities, preferences)
 
+            self._update_restaurant_status(f"Found {len(restaurants)} restaurants matching your tastes")
+            self._update_activity_status(f"Found {len(activities)} activities matching your interests")
+
             if not restaurants and not activities:
+                self._update_both_status("No matching places found")
                 return self.signal_completion("I couldn't find any places matching your interests.")
 
+            # v7: Store results
+            self._update_restaurant_status(f"Saving {len(restaurants)} restaurant options...")
+            self._update_activity_status(f"Saving {len(activities)} activity options...")
             self._store_results(restaurants, activities, preferences, api_duration)
+
+            # v7: Daily plan generation
+            self._update_both_status("AI building day-by-day itinerary with weather awareness...")
             recommendation = self._generate_daily_plan(restaurants, activities, trip_days, preferences)
+
+            # v7: Final status
+            self._update_restaurant_status(
+                f"Restaurant search complete — {len(restaurants)} options ready"
+            )
+            self._update_activity_status(
+                f"Activity search complete — {len(activities)} options ready"
+            )
 
             self.log_conversation_message(message_type="OUTGOING", content=recommendation, sender="chat_manager", truncate=1000)
             return self.signal_completion(recommendation)
@@ -127,6 +213,7 @@ Be enthusiastic, knowledgeable, and specific!
             log_agent_raw(f"Places search failed: {str(e)}", agent_name="PlacesAgent")
             import traceback
             log_agent_raw(traceback.format_exc(), agent_name="PlacesAgent")
+            self._update_both_status(f"Error: {str(e)[:80]}")
             return self.signal_completion(f"I encountered an error: {str(e)}. Please try again.")
 
     def _load_weather_data(self) -> Dict[str, Dict]:
@@ -187,6 +274,7 @@ Be enthusiastic, knowledgeable, and specific!
         interested = preferences.restaurant_prefs.interested_cuisines
         all_results = []
         seen_ids = set()
+
         def _add(places, cuisine):
             for place in places:
                 pid = place.get("place_id")
@@ -194,19 +282,73 @@ Be enthusiastic, knowledgeable, and specific!
                     seen_ids.add(pid)
                     place["cuisine_tag"] = cuisine
                     all_results.append(place)
+
         if not self.google_places or not self.google_places.client:
+            self._update_restaurant_status("Google Places not configured — using sample data")
             return []
+
+        # v7: Search preferred cuisines with per-cuisine status
+        if preferred:
+            self._update_restaurant_status(
+                f"Searching preferred cuisines: {', '.join(preferred)}..."
+            )
         for cuisine in preferred:
-            results = self.google_places.search_places_by_text(query=f"{cuisine} restaurant in {destination}", location=destination, included_type="restaurant", min_rating=3.5, max_results=5, agent_logger=self.logger)
+            self._update_restaurant_status(
+                f"Searching {cuisine} restaurants in {destination}..."
+            )
+            results = self.google_places.search_places_by_text(
+                query=f"{cuisine} restaurant in {destination}",
+                location=destination, included_type="restaurant",
+                min_rating=3.5, max_results=5, agent_logger=self.logger,
+            )
             _add(results, cuisine)
+
+        if preferred:
+            self._update_restaurant_status(
+                f"Found {len(all_results)} preferred cuisine restaurants"
+            )
+
+        # v7: Search interested cuisines
+        if interested:
+            self._update_restaurant_status(
+                f"Searching interested cuisines: {', '.join(interested)}..."
+            )
+        pre_interested_count = len(all_results)
         for cuisine in interested:
-            results = self.google_places.search_places_by_text(query=f"{cuisine} restaurant in {destination}", location=destination, included_type="restaurant", min_rating=3.5, max_results=3, agent_logger=self.logger)
+            self._update_restaurant_status(
+                f"Searching {cuisine} restaurants in {destination}..."
+            )
+            results = self.google_places.search_places_by_text(
+                query=f"{cuisine} restaurant in {destination}",
+                location=destination, included_type="restaurant",
+                min_rating=3.5, max_results=3, agent_logger=self.logger,
+            )
             _add(results, cuisine)
+
+        if interested:
+            added = len(all_results) - pre_interested_count
+            self._update_restaurant_status(
+                f"Found {added} interested cuisine restaurants ({len(all_results)} total)"
+            )
+
+        # v7: Fill up if needed
         if len(all_results) < 5:
-            results = self.google_places.search_places_by_text(query=f"best restaurant in {destination}", location=destination, included_type="restaurant", min_rating=4.0, max_results=5, agent_logger=self.logger)
+            self._update_restaurant_status(
+                f"Only {len(all_results)} restaurants — searching top-rated in {destination}..."
+            )
+            results = self.google_places.search_places_by_text(
+                query=f"best restaurant in {destination}",
+                location=destination, included_type="restaurant",
+                min_rating=4.0, max_results=5, agent_logger=self.logger,
+            )
             _add(results, "General")
+
         max_r = getattr(settings, "places_agent_restaurants_max_results", 15)
-        return all_results[:max_r]
+        final = all_results[:max_r]
+        self._update_restaurant_status(
+            f"Restaurant search done — {len(final)} candidates found"
+        )
+        return final
 
     def _search_activities_by_interest(self, preferences) -> List[Dict]:
         destination = preferences.destination
@@ -214,6 +356,7 @@ Be enthusiastic, knowledgeable, and specific!
         interested = preferences.activity_prefs.interested_interests
         all_results = []
         seen_ids = set()
+
         def _add(places, tag):
             for place in places:
                 pid = place.get("place_id")
@@ -221,19 +364,72 @@ Be enthusiastic, knowledgeable, and specific!
                     seen_ids.add(pid)
                     place["interest_tag"] = tag
                     all_results.append(place)
+
         if not self.google_places or not self.google_places.client:
+            self._update_activity_status("Google Places not configured — using sample data")
             return []
+
+        # v7: Search preferred interests with per-interest status
+        if preferred:
+            self._update_activity_status(
+                f"Searching preferred interests: {', '.join(preferred)}..."
+            )
         for interest in preferred:
-            results = self.google_places.search_places_by_text(query=f"{interest} in {destination}", location=destination, min_rating=3.5, max_results=5, agent_logger=self.logger)
+            self._update_activity_status(
+                f"Searching {interest} in {destination}..."
+            )
+            results = self.google_places.search_places_by_text(
+                query=f"{interest} in {destination}",
+                location=destination, min_rating=3.5,
+                max_results=5, agent_logger=self.logger,
+            )
             _add(results, interest)
+
+        if preferred:
+            self._update_activity_status(
+                f"Found {len(all_results)} preferred interest activities"
+            )
+
+        # v7: Search interested interests
+        if interested:
+            self._update_activity_status(
+                f"Searching interested topics: {', '.join(interested)}..."
+            )
+        pre_interested_count = len(all_results)
         for interest in interested:
-            results = self.google_places.search_places_by_text(query=f"{interest} in {destination}", location=destination, min_rating=3.5, max_results=3, agent_logger=self.logger)
+            self._update_activity_status(
+                f"Searching {interest} in {destination}..."
+            )
+            results = self.google_places.search_places_by_text(
+                query=f"{interest} in {destination}",
+                location=destination, min_rating=3.5,
+                max_results=3, agent_logger=self.logger,
+            )
             _add(results, interest)
+
+        if interested:
+            added = len(all_results) - pre_interested_count
+            self._update_activity_status(
+                f"Found {added} interested activities ({len(all_results)} total)"
+            )
+
+        # v7: Category-based nearby search
         categories = self._determine_categories(preferences)
         non_restaurant = [c for c in categories if c != "restaurants"]
         if non_restaurant:
-            place_types = list(set(t for cat in non_restaurant for t in self.CATEGORY_TYPES.get(cat, [])))
-            nearby = self.google_places.search_places(location=destination, radius=5000, place_types=place_types, min_rating=3.5, max_results=8, agent_logger=self.logger)
+            self._update_activity_status(
+                f"Searching nearby {', '.join(non_restaurant)} within 5km..."
+            )
+            place_types = list(set(
+                t for cat in non_restaurant
+                for t in self.CATEGORY_TYPES.get(cat, [])
+            ))
+            nearby = self.google_places.search_places(
+                location=destination, radius=5000,
+                place_types=place_types, min_rating=3.5,
+                max_results=8, agent_logger=self.logger,
+            )
+            nearby_count = 0
             for ptype, places in nearby.items():
                 for pd in places:
                     pid = pd.get("place_id")
@@ -241,8 +437,18 @@ Be enthusiastic, knowledgeable, and specific!
                         seen_ids.add(pid)
                         pd["interest_tag"] = ptype
                         all_results.append(pd)
+                        nearby_count += 1
+            if nearby_count > 0:
+                self._update_activity_status(
+                    f"Found {nearby_count} more nearby activities ({len(all_results)} total)"
+                )
+
         max_a = getattr(settings, "places_agent_activities_max_results", 15)
-        return all_results[:max_a]
+        final = all_results[:max_a]
+        self._update_activity_status(
+            f"Activity search done — {len(final)} candidates found"
+        )
+        return final
 
     def _determine_categories(self, preferences) -> List[str]:
         all_interests = self._get_all_interests(preferences)
@@ -430,6 +636,11 @@ RULES:
 
 Write a concise day-by-day plan (one short paragraph per day)."""
 
+        # v7: Status before LLM call
+        self._update_both_status(
+            f"AI planning {len(trip_days)}-day itinerary with {len(restaurants)} restaurants and {len(activities)} activities..."
+        )
+
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
             response = client.chat.completions.create(
@@ -438,8 +649,10 @@ Write a concise day-by-day plan (one short paragraph per day)."""
                 temperature=0.8, max_tokens=800,
             )
             plan_text = response.choices[0].message.content.strip()
+            self._update_both_status("Daily itinerary generated")
         except Exception as e:
             plan_text = f"I found {len(restaurants) + len(activities)} amazing places in {preferences.destination}!"
+            self._update_both_status("AI planning fallback — using summary instead")
 
         try:
             self._store_place_recommendations(plan_text, restaurants, activities)

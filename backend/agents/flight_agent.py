@@ -2,6 +2,15 @@
 Flight Agent - Real API with Centralized Storage
 Location: backend/agents/flight_agent.py
 
+Changes (v7):
+  - Granular status updates: _update_status() sends real-time progress messages
+    to Redis via trip_storage, enabling the frontend PlanningStatus component
+    to show per-agent color-coded status (e.g. "Fetching 50 flight offers...")
+  - Status messages at every workflow step: airport resolution, API call,
+    deduplication, LLM curation, storage, and completion
+  - Status includes dynamic counts (e.g. "Found 42 flights", "Deduplicating
+    codeshare flights... 35 unique remaining")
+
 Changes (v6):
   - Wide search + LLM curation: single API call for 50 results, dedup
     codeshares by route fingerprint, LLM curates top N diverse options
@@ -229,6 +238,8 @@ def _resolve_carrier_codes(carrier_names: List[str]) -> List[str]:
 class FlightAgent(TravelQBaseAgent):
     """
     Flight Agent with real Amadeus API + centralized storage
+    
+    v7: Granular status updates for frontend PlanningStatus component
     """
     
     def __init__(self, trip_id: str, trip_storage: TripStorageInterface, **kwargs):
@@ -268,6 +279,31 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         self.airport_lookup = get_airport_lookup_service()
         
         log_agent_raw("✈️ FlightAgent initialized (REAL API MODE)", agent_name="FlightAgent")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # v7: GRANULAR STATUS UPDATES
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _update_status(self, message: str) -> None:
+        """
+        Send a granular status message to the frontend via trip_storage.
+        
+        v7: The PlanningStatus component polls these messages and displays
+        them color-coded per agent (e.g. Flight Agent = red).
+        
+        Messages are stored in Redis alongside the agent's status field
+        so the frontend poll picks them up in real time.
+        """
+        try:
+            self.trip_storage.update_agent_status_message(
+                trip_id=self.trip_id,
+                agent_name="flight",
+                message=message
+            )
+            log_agent_raw(f"📡 Status → {message}", agent_name="FlightAgent")
+        except Exception as e:
+            # Status updates are non-critical — don't break the workflow
+            log_agent_raw(f"⚠️ Status update failed: {str(e)}", agent_name="FlightAgent")
     
     def generate_reply(
         self,
@@ -278,6 +314,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         """
         Generate reply: Call API, store options, return recommendation.
 
+        v7: Granular status updates at every workflow step.
         v6: Wide search + LLM curation:
           1. Single API call for 50 results (no carrier filter)
           2. Deduplicate codeshares by route fingerprint
@@ -286,6 +323,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
           5. Only curated flights stored for frontend display
         """
         log_agent_raw("🔍 FlightAgent processing request...", agent_name="FlightAgent")
+        
+        # v7: Initial status
+        self._update_status("Initializing flight search...")
         
         # Log incoming message
         if messages and len(messages) > 0:
@@ -299,11 +339,13 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             )
         
         # ✅ Get preferences from storage
+        self._update_status("Loading travel preferences...")
         preferences = self.trip_storage.get_preferences(self.trip_id)
         
         if not preferences:
             error_msg = f"Could not find preferences for trip {self.trip_id}"
             log_agent_raw(f"❌ {error_msg}", agent_name="FlightAgent")
+            self._update_status("Error: preferences not found")
             return self.signal_completion(f"Error: {error_msg}")
         
         log_agent_raw(f"✅ Retrieved preferences from storage for trip {self.trip_id}", 
@@ -326,16 +368,24 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         
         try:
             # Step 1: Resolve city names to airport codes
+            self._update_status(
+                f"Resolving airports for {search_params['origin']} → {search_params['destination']}..."
+            )
+            
             origin_code = self._resolve_location(search_params["origin"])
             destination_code = self._resolve_location(search_params["destination"])
             
             if not origin_code or not destination_code:
                 error_msg = "Could not resolve origin or destination to airport code"
                 log_agent_raw(f"❌ {error_msg}", agent_name="FlightAgent")
+                self._update_status("Error: could not resolve airports")
                 return f"I'm sorry, I couldn't find the airport for your route. Please use airport codes like JFK, LAX, LHR."
             
             log_agent_raw(f"✓ Resolved: {search_params['origin']} → {origin_code}, {search_params['destination']} → {destination_code}", 
                          agent_name="FlightAgent")
+            
+            # v7: Status with resolved codes
+            self._update_status(f"Airports resolved: {origin_code} → {destination_code}")
             
             # ── v5: Resolve carrier preferences to IATA codes ────────────
             preferred_carriers = preferences.flight_prefs.preferred_carriers or []
@@ -358,16 +408,15 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             non_stop = True if search_params["max_stops"] == 0 else None
 
             # ── v6: Wide search + LLM curation ────────────────────────────
-            # Strategy: Cast a wide net (50 results), deduplicate codeshares
-            # using route fingerprints, tag by carrier preference, then let
-            # the LLM curate the best N options for the user.
-            # One API call instead of N+1. Simpler and more effective.
-            # ──────────────────────────────────────────────────────────────
-
-            display_max = settings.flight_agent_max_results  # e.g. 10 — from yaml agents.flight.max_results
-            WIDE_SEARCH_MAX = display_max * 5              # 5x pool for dedup + LLM curation
+            display_max = settings.flight_agent_max_results
+            WIDE_SEARCH_MAX = display_max * 5
 
             start_time = time.time()
+
+            # v7: Status — searching with count
+            self._update_status(
+                f"Fetching up to {WIDE_SEARCH_MAX} flight offers from {origin_code} to {destination_code}..."
+            )
 
             log_agent_raw(
                 f"🔍 Fetching up to {WIDE_SEARCH_MAX} flights for deduplication pool",
@@ -385,7 +434,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 max_override=WIDE_SEARCH_MAX,
             )
 
+            # v7: Status — raw results received
+            self._update_status(f"Found {len(raw_flights)} flight offers")
+
             # ── Deduplicate codeshares by route fingerprint ──────────────
+            self._update_status(f"Deduplicating {len(raw_flights)} codeshare flights...")
+
             all_flights: List[Flight] = []
             seen_ids: set = set()
             seen_routes: Dict[str, int] = {}  # fingerprint → index
@@ -409,7 +463,6 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                     new_pri = tag_priority[new_tag]
 
                     if new_pri < existing_pri:
-                        # New flight is from a higher-preference carrier
                         log_agent_raw(
                             f"   🔄 Codeshare upgrade: {existing.airline} {existing_tag} → "
                             f"{f.airline} {new_tag} (same route)",
@@ -418,7 +471,6 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                         seen_ids.add(f.id)
                         all_flights[existing_idx] = f
                     elif new_pri == existing_pri and f.price < existing.price:
-                        # Same tier, but cheaper
                         log_agent_raw(
                             f"   🔄 Codeshare swap (cheaper): {existing.airline} ${existing.price:.2f} → "
                             f"{f.airline} ${f.price:.2f}",
@@ -440,6 +492,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
 
             api_duration = time.time() - start_time
 
+            # v7: Status — dedup complete
+            self._update_status(
+                f"{len(all_flights)} unique flights after deduplication "
+                f"({codeshare_dupes} codeshares removed)"
+            )
+
             # ── Summary ──────────────────────────────────────────────────
             carrier_breakdown = {}
             for f in all_flights:
@@ -459,12 +517,23 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             )
 
             # Step 3: LLM curates top N from the full deduped pool
-            #         Then we store only the curated flights for the frontend.
+            # v7: Status — LLM curation starting
+            self._update_status(
+                f"AI selecting best {display_max} options from {len(all_flights)} flights..."
+            )
+
             curated_flights, recommendation = self._curate_and_recommend(
                 all_flights, preferences, preferred_codes, interested_codes, display_max
             )
 
+            # v7: Status — curation complete
+            self._update_status(
+                f"Selected top {len(curated_flights)} flights with recommendation"
+            )
+
             # Step 4: Store the curated flights in centralized storage
+            self._update_status(f"Saving {len(curated_flights)} flight options...")
+
             flights_dict = [self._flight_to_dict(f) for f in curated_flights]
 
             self.trip_storage.add_flights(
@@ -503,6 +572,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                          f"(from {len(all_flights)} deduped / {len(raw_flights)} raw)", 
                          agent_name="FlightAgent")
             
+            # v7: Final status
+            self._update_status(
+                f"Flight search complete — {len(curated_flights)} options ready"
+            )
+            
             # Log outgoing
             self.log_conversation_message(
                 message_type="OUTGOING",
@@ -515,6 +589,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             
         except Exception as e:
             log_agent_raw(f"❌ Flight search failed: {str(e)}", agent_name="FlightAgent")
+            self._update_status(f"Error: {str(e)[:80]}")
             error_msg = f"I encountered an error searching for flights: {str(e)}. Please try again or check your search parameters."
             return self.signal_completion(error_msg)
     
@@ -540,6 +615,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         """
         if not self.amadeus_service or not self.amadeus_service.client:
             log_agent_raw("⚠️ Amadeus not configured, using mock data", agent_name="FlightAgent")
+            self._update_status("Amadeus API not configured — using sample data")
             return self._generate_mock_flights(origin, destination, departure_date)
         
         cabin_class_upper = cabin_class.upper()
@@ -570,6 +646,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         log_agent_json(api_params, label="Amadeus API Request", agent_name="FlightAgent")
         log_agent_raw("=" * 80, agent_name="FlightAgent")
 
+        # v7: Status — API call in progress
+        self._update_status(
+            f"Calling Amadeus API for {origin}→{destination} ({cabin_class_upper})..."
+        )
+
         try:
             # Build kwargs dynamically so we only send params that are set
             search_kwargs = {
@@ -593,6 +674,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             log_agent_raw(f"✅ Amadeus API SUCCESS - Received {len(response.data)} offers", 
                         agent_name="FlightAgent")
 
+            # v7: Status — parsing results
+            self._update_status(f"Parsing {len(response.data)} flight offers...")
+
             flights = []
             for offer in response.data:
                 log_agent_json(offer, label="\n\nFlight Details from Amadeus: ", 
@@ -601,6 +685,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 flight = self._parse_amadeus_offer(offer)
                 if flight:
                     flights.append(flight)
+            
+            # v7: Status — parsing complete
+            self._update_status(f"Parsed {len(flights)} valid flight offers")
             
             return flights
 
@@ -618,9 +705,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                     f"returning empty (open search will cover this)",
                     agent_name="FlightAgent"
                 )
+                self._update_status(f"Carrier search failed for {','.join(included_airlines)}")
                 return []
 
             log_agent_raw("⚠️ Falling back to mock data", agent_name="FlightAgent")
+            self._update_status("API unavailable — using sample flight data")
             return self._generate_mock_flights(origin, destination, departure_date)
     
 
@@ -957,10 +1046,13 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         v6: LLM curates the best N flights from a wide deduped pool AND
         picks the #1 recommendation in a single call.
 
+        v7: Granular status updates during curation.
+
         Returns:
             (curated_flights: List[Flight], recommendation_text: str)
         """
         if not all_flights:
+            self._update_status("No flights found for this route")
             return ([], "I couldn't find any flights for your route. Please check your dates and try again.")
 
         # If the pool is already small enough, skip curation — just recommend
@@ -969,6 +1061,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 f"ℹ️ Pool ({len(all_flights)}) ≤ display_max ({display_max}), "
                 f"skipping curation — using _generate_recommendation directly",
                 agent_name="FlightAgent"
+            )
+            self._update_status(
+                f"Analyzing {len(all_flights)} flights for best recommendation..."
             )
             recommendation = self._generate_recommendation(
                 all_flights, preferences, preferred_codes, interested_codes
@@ -982,6 +1077,13 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         preferred_count = sum(1 for f in all_flights if f.airline_code in preferred_codes)
         interested_count = sum(1 for f in all_flights if f.airline_code in interested_codes)
         alternative_count = len(all_flights) - preferred_count - interested_count
+
+        # v7: Status — LLM curation with breakdown
+        self._update_status(
+            f"AI reviewing {len(all_flights)} flights "
+            f"({preferred_count} preferred, {interested_count} interested, "
+            f"{alternative_count} alternatives)..."
+        )
 
         prompt = f"""You are reviewing {len(all_flights)} flight options to curate the best {display_max} for the user.
 
@@ -1053,6 +1155,7 @@ CRITICAL RULES:
 
             if not result or "selected_ids" not in result:
                 log_agent_raw("⚠️ Failed to parse curation JSON, using fallback", agent_name="FlightAgent")
+                self._update_status("AI curation parse failed — using smart fallback...")
                 return self._fallback_curate_and_recommend(
                     all_flights, preferences, preferred_codes, interested_codes, display_max
                 )
@@ -1067,6 +1170,7 @@ CRITICAL RULES:
             valid_selected = [sid for sid in selected_ids if sid in valid_ids]
             if not valid_selected:
                 log_agent_raw("⚠️ No valid IDs in LLM selection, using fallback", agent_name="FlightAgent")
+                self._update_status("AI returned invalid selections — using smart fallback...")
                 return self._fallback_curate_and_recommend(
                     all_flights, preferences, preferred_codes, interested_codes, display_max
                 )
@@ -1086,6 +1190,12 @@ CRITICAL RULES:
                 reason = "Best option from curated selection"
 
             recommended_flight = id_to_flight[recommended_id]
+
+            # v7: Status — curation success
+            self._update_status(
+                f"AI selected {len(curated)} flights — "
+                f"top pick: {recommended_flight.airline} at ${recommended_flight.price:.0f}"
+            )
 
             # ── Log carrier diversity in curated set ─────────────────
             curated_carriers = {}
@@ -1136,6 +1246,7 @@ CRITICAL RULES:
 
         except Exception as e:
             log_agent_raw(f"⚠️ LLM curation failed: {str(e)}", agent_name="FlightAgent")
+            self._update_status("AI curation error — using smart fallback...")
             return self._fallback_curate_and_recommend(
                 all_flights, preferences, preferred_codes, interested_codes, display_max
             )
@@ -1153,6 +1264,7 @@ CRITICAL RULES:
         Picks flights round-robin by preference tier, cheapest within each carrier.
         """
         log_agent_raw("🔧 Using fallback curation (deterministic)", agent_name="FlightAgent")
+        self._update_status(f"Selecting top {display_max} flights by carrier diversity...")
 
         # Group by carrier code, sorted by price within each
         from collections import defaultdict
@@ -1225,6 +1337,11 @@ CRITICAL RULES:
             f"⭐ Fallback curated {len(curated)} flights, picked #{pick.id} {tag} "
             f"({pick.airline} ${pick.price:.2f})",
             agent_name="FlightAgent"
+        )
+
+        # v7: Status
+        self._update_status(
+            f"Selected {len(curated)} flights — top pick: {pick.airline} at ${pick.price:.0f}"
         )
 
         summary = (
@@ -1338,6 +1455,7 @@ CRITICAL RULES:
         LLM picks the best flight based on user preferences.
         
         v5: Flights are tagged and LLM sees full carrier preference context.
+        v7: Granular status updates.
         Returns the conversational summary. The recommended_id is stored
         in centralized storage for the frontend to consume.
         """
@@ -1353,6 +1471,11 @@ CRITICAL RULES:
         preferred_count = sum(1 for f in flights if f.airline_code in preferred_codes)
         interested_count = sum(1 for f in flights if f.airline_code in interested_codes)
         alternative_count = len(flights) - preferred_count - interested_count
+
+        # v7: Status
+        self._update_status(
+            f"AI picking best flight from {len(flights)} options..."
+        )
         
         prompt = f"""Here are the available flights:
 
@@ -1410,6 +1533,7 @@ CRITICAL RULES:
             
             if not result:
                 log_agent_raw("⚠️ Failed to parse LLM JSON, using fallback", agent_name="FlightAgent")
+                self._update_status("AI parse failed — using smart fallback...")
                 return self._fallback_recommendation(flights, preferences, preferred_codes, interested_codes)
             
             recommended_id = str(result.get("recommended_id", ""))
@@ -1423,10 +1547,16 @@ CRITICAL RULES:
                     f"valid IDs are {valid_ids}. Using fallback.",
                     agent_name="FlightAgent"
                 )
+                self._update_status("AI returned invalid selection — using smart fallback...")
                 return self._fallback_recommendation(flights, preferences, preferred_codes, interested_codes)
             
             # Find the matching flight for metadata
             recommended_flight = next(f for f in flights if str(f.id) == recommended_id)
+            
+            # v7: Status — recommendation made
+            self._update_status(
+                f"Recommended: {recommended_flight.airline} at ${recommended_flight.price:.0f}"
+            )
             
             # ✅ Store the recommendation
             is_direct = self._is_direct_flight(recommended_flight)
@@ -1442,7 +1572,7 @@ CRITICAL RULES:
                     "airline_code": recommended_flight.airline_code,
                     "price": recommended_flight.price,
                     "is_direct": is_direct,
-                    "carrier_match": tag,  # v5: track preference alignment
+                    "carrier_match": tag,
                     "reason_short": reason,
                     "total_options_reviewed": len(flights),
                     "preferred_options": preferred_count,
@@ -1461,6 +1591,7 @@ CRITICAL RULES:
             
         except Exception as e:
             log_agent_raw(f"⚠️ LLM recommendation failed: {str(e)}", agent_name="FlightAgent")
+            self._update_status("AI recommendation error — using smart fallback...")
             return self._fallback_recommendation(flights, preferences, preferred_codes, interested_codes)
 
     def _fallback_recommendation(
@@ -1510,6 +1641,11 @@ CRITICAL RULES:
             f"⭐ Fallback pick: flight {pick.id} {tag} ({pick.airline} ${pick.price:.2f})",
             agent_name="FlightAgent"
         )
+
+        # v7: Status
+        self._update_status(
+            f"Fallback pick: {pick.airline} at ${pick.price:.0f}"
+        )
         
         return (
             f"I found {len(flights)} flights for your route. "
@@ -1531,20 +1667,10 @@ CRITICAL RULES:
 
         Two flights with the same fingerprint are the same physical journey
         (same aircraft, same times) just marketed under different carrier codes.
-
-        Fingerprint format:
-          Round-trip:  "JFK|2026-02-20T16:50|LHR|2026-02-21T11:50||LHR|2026-02-25T13:25|JFK|2026-02-25T20:58"
-          One-way:     "JFK|2026-02-20T16:50|LHR|2026-02-21T11:50"
-
-        Uses final departure/arrival airports + times (not layover cities),
-        so JFK→YYZ→LHR and JFK→YUL→LHR at different times are distinct.
-        But JFK→(via YYZ)→LHR departing at 16:50 arriving 11:50 is the same
-        route regardless of whether it's sold as UA9717 or AC8555.
         """
         if flight.is_round_trip and flight.outbound and flight.return_flight:
             out = flight.outbound
             ret = flight.return_flight
-            # Normalize times to minute precision (strip seconds if present)
             out_dep = str(out.departure_time)[:16]
             out_arr = str(out.arrival_time)[:16]
             ret_dep = str(ret.departure_time)[:16]

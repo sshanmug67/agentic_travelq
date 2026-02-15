@@ -2,6 +2,11 @@
 Preprocessor Agent — Natural Language Override Layer
 Location: backend/agents/preprocessor_agent.py
 
+Changes (v2 — Granular Status Messages):
+  - Added _update_status() helper for real-time progress to Redis
+  - Status calls at: init, LLM extraction, merge, completion
+  - Messages show what overrides were detected and applied
+
 Parses user-typed text from the "Refine Your Search" text box and merges
 the extracted intent into the existing TravelPreferences.
 
@@ -42,11 +47,8 @@ import openai
 
 class PreprocessorAgent(TravelQBaseAgent):
     """
-    Pre-orchestration agent that parses natural language user requests
-    and merges them into TravelPreferences.
-    
-    Runs BEFORE the group chat — not a participant in multi-agent conversation.
-    Uses LLM to interpret user intent (replace/add/delete) per field.
+    Pre-orchestration agent v2 that parses natural language user requests
+    and merges them into TravelPreferences, with granular status messages.
     """
 
     def __init__(self, trip_id: str, trip_storage: TripStorageInterface, **kwargs):
@@ -78,7 +80,20 @@ You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra te
         self.trip_id = trip_id
         self.trip_storage = trip_storage
 
-        log_agent_raw("🧠 PreprocessorAgent initialized", agent_name="PreprocessorAgent")
+        log_agent_raw("🧠 PreprocessorAgent v2 initialized (with granular status)", agent_name="PreprocessorAgent")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # v2: Granular status helper
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _update_status(self, message: str):
+        """Send a granular status message to Redis for the frontend."""
+        try:
+            self.trip_storage.update_agent_status_message(
+                self.trip_id, "preprocessor", message
+            )
+        except Exception as e:
+            log_agent_raw(f"Status update failed: {e}", agent_name="PreprocessorAgent")
 
     # ─────────────────────────────────────────────────────────────────────
     # PUBLIC API — called by trip_planning_service BEFORE orchestrator
@@ -91,17 +106,9 @@ You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra te
     ) -> Tuple[Any, List[Dict[str, str]]]:
         """
         Parse user's natural language text and merge into TravelPreferences.
-
-        Args:
-            user_text: Raw text from "Refine Your Search" text box
-            base_prefs: Current TravelPreferences (from summary bar + preferences panel)
-
-        Returns:
-            Tuple of:
-                - merged TravelPreferences (updated Pydantic model)
-                - changes_log: list of {"field", "action", "old", "new"}
         """
         if not user_text or not user_text.strip():
+            self._update_status("No refinement text — skipped")
             return base_prefs, []
 
         user_text = user_text.strip()
@@ -110,6 +117,9 @@ You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra te
         log_agent_raw("🧠 PREPROCESSING USER REQUEST", agent_name="PreprocessorAgent")
         log_agent_raw("=" * 80, agent_name="PreprocessorAgent")
         log_agent_raw(f"   User text: \"{user_text}\"", agent_name="PreprocessorAgent")
+
+        # v2: Status updates
+        self._update_status("Analyzing your request...")
 
         self.log_conversation_message(
             message_type="INCOMING",
@@ -120,15 +130,19 @@ You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra te
 
         start_time = time.time()
 
-        # Step 1: Get current preferences as dict for LLM context
+        # Step 1: Get current preferences
         current_prefs_dict = base_prefs.model_dump()
 
-        # Step 2: LLM extracts structured overrides
+        # Step 2: LLM extraction
+        truncated = user_text[:80] + "..." if len(user_text) > 80 else user_text
+        self._update_status(f"AI parsing: \"{truncated}\"")
+
         overrides = self._extract_overrides(user_text, current_prefs_dict)
 
         if not overrides:
             log_agent_raw("   ℹ️  No actionable overrides extracted — using base preferences",
                          agent_name="PreprocessorAgent")
+            self._update_status("No changes detected — using current preferences")
             return base_prefs, []
 
         log_agent_json(
@@ -137,26 +151,42 @@ You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra te
             agent_name="PreprocessorAgent"
         )
 
-        # Step 3: Merge overrides into base preferences
+        # v2: Show what was detected
+        fields_detected = [o["field"].split(".")[-1] for o in overrides]
+        self._update_status(
+            f"Detected {len(overrides)} change{'s' if len(overrides) != 1 else ''}: "
+            f"{', '.join(fields_detected)}"
+        )
+
+        # Step 3: Merge overrides
+        self._update_status("Applying preference overrides...")
         merged_prefs, changes_log = self._merge_overrides(base_prefs, overrides)
 
         duration = time.time() - start_time
 
-        # Step 4: Log results
+        # Step 4: Log and status
         if changes_log:
             log_agent_raw(f"   📝 {len(changes_log)} field(s) changed in {duration:.2f}s:",
                          agent_name="PreprocessorAgent")
+            change_summaries = []
             for change in changes_log:
                 icon = {"replace": "🔄", "add": "➕", "delete": "➖"}.get(change["action"], "❓")
+                field_short = change["field"].split(".")[-1]
+                change_summaries.append(f"{field_short}")
                 log_agent_raw(
                     f"     {icon} {change['field']}: {change.get('old', '?')} → {change.get('new', '?')}",
                     agent_name="PreprocessorAgent"
                 )
+
+            self._update_status(
+                f"Applied {len(changes_log)} override{'s' if len(changes_log) != 1 else ''}: "
+                f"{', '.join(change_summaries)}"
+            )
         else:
             log_agent_raw("   ℹ️  No changes applied after merge",
                          agent_name="PreprocessorAgent")
+            self._update_status("No changes applied after analysis")
 
-        # Log API call for cost tracking
         self.trip_storage.log_api_call(
             trip_id=self.trip_id,
             agent_name="PreprocessorAgent",
@@ -178,7 +208,6 @@ You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra te
 
     # ─────────────────────────────────────────────────────────────────────
     # generate_reply — NOT USED (this agent doesn't join group chat)
-    # Required by TravelQBaseAgent but we never call it.
     # ─────────────────────────────────────────────────────────────────────
 
     def generate_reply(
@@ -187,7 +216,6 @@ You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra te
         sender: Any = None,
         config: Any = None
     ) -> str:
-        """Not used — PreprocessorAgent runs before the group chat."""
         return self.signal_completion(
             "PreprocessorAgent does not participate in group chat."
         )
@@ -290,10 +318,6 @@ Now extract changes for the given user text. Return valid JSON only.
         user_text: str,
         current_prefs_dict: Dict[str, Any]
     ) -> Optional[List[Dict[str, Any]]]:
-        """
-        Call LLM to extract structured overrides from user's natural language.
-        Returns list of {field, action, value} dicts, or None on failure.
-        """
         prefs_json = json.dumps(current_prefs_dict, indent=2, default=str)
 
         prompt = self._EXTRACTION_PROMPT.format(
@@ -332,7 +356,6 @@ Now extract changes for the given user text. Return valid JSON only.
                              agent_name="PreprocessorAgent")
                 return None
 
-            # Validate each change
             validated = []
             for change in changes:
                 if all(k in change for k in ("field", "action", "value")):
@@ -365,10 +388,6 @@ Now extract changes for the given user text. Return valid JSON only.
         base_prefs: Any,
         overrides: List[Dict[str, Any]]
     ) -> Tuple[Any, List[Dict[str, str]]]:
-        """
-        Apply overrides to TravelPreferences using replace/add/delete semantics.
-        Returns (new_prefs, changes_log).
-        """
         prefs_dict = base_prefs.model_dump()
         changes_log = []
 
@@ -409,7 +428,6 @@ Now extract changes for the given user text. Return valid JSON only.
                                 "new": _safe_str(merged_list)
                             })
                     else:
-                        # Non-list field: "add" falls back to "replace"
                         _set_nested(prefs_dict, field_path, value)
                         changes_log.append({
                             "field": field_path,
@@ -453,13 +471,11 @@ Now extract changes for the given user text. Return valid JSON only.
                 )
                 continue
 
-        # Recalculate sub-budgets if total changed
         if any(c["field"] == "budget.total_budget" for c in changes_log):
             self._recalculate_budget(prefs_dict)
             log_agent_raw("   💰 Sub-budgets recalculated from new total",
                          agent_name="PreprocessorAgent")
 
-        # Rebuild TravelPreferences from modified dict
         try:
             from models.user_preferences import TravelPreferences
             merged_prefs = TravelPreferences(**prefs_dict)
@@ -474,10 +490,6 @@ Now extract changes for the given user text. Return valid JSON only.
     # ─────────────────────────────────────────────────────────────────────
 
     def _recalculate_budget(self, prefs_dict: Dict[str, Any]):
-        """
-        Recalculate sub-budgets proportionally when total_budget changes.
-        Same heuristic ratios as to_request_dict().
-        """
         budget = prefs_dict.get("budget", {})
         total = budget.get("total_budget", 0)
         if not total or total <= 0:
@@ -506,7 +518,6 @@ Now extract changes for the given user text. Return valid JSON only.
     # ─────────────────────────────────────────────────────────────────────
 
     def _parse_llm_json(self, text: str) -> Optional[Dict]:
-        """Parse LLM JSON response, handling markdown fences."""
         cleaned = re.sub(r'^```(?:json)?\s*', '', text.strip())
         cleaned = re.sub(r'\s*```$', '', cleaned.strip())
         try:
@@ -529,11 +540,10 @@ Now extract changes for the given user text. Return valid JSON only.
 
 
 # ============================================================================
-# MODULE-LEVEL HELPERS (pure functions — no LLM, no state)
+# MODULE-LEVEL HELPERS
 # ============================================================================
 
 def _get_nested(d: Dict, path: str) -> Any:
-    """Get a value from a nested dict using dot-notation path."""
     keys = path.split(".")
     current = d
     for key in keys:
@@ -545,7 +555,6 @@ def _get_nested(d: Dict, path: str) -> Any:
 
 
 def _set_nested(d: Dict, path: str, value: Any):
-    """Set a value in a nested dict using dot-notation path."""
     keys = path.split(".")
     current = d
     for key in keys[:-1]:
@@ -556,7 +565,6 @@ def _set_nested(d: Dict, path: str, value: Any):
 
 
 def _safe_str(val: Any) -> str:
-    """Safely convert a value to string for logging."""
     if val is None:
         return "None"
     if isinstance(val, list):
@@ -575,5 +583,4 @@ def create_preprocessor_agent(
     trip_storage: TripStorageInterface,
     **kwargs
 ) -> PreprocessorAgent:
-    """Factory function to create PreprocessorAgent."""
     return PreprocessorAgent(trip_id=trip_id, trip_storage=trip_storage, **kwargs)

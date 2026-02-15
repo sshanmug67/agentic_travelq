@@ -2,19 +2,21 @@
  * TripStatusBar — Animated Agent Progress Display
  * Location: frontend/src/components/common/TripStatusBar.tsx
  *
+ * v6 Phase 1: Now displays granular status messages from agent_details.
+ * Each agent row shows real-time messages like "Received 44 flight options"
+ * instead of static descriptions.
+ *
  * Pure display component — receives pollData from useTripSearch hook.
  * No internal polling or fetching.
  *
  * Behavior:
- *   EXPANDED  — During planning. Shows per-agent status with animations.
+ *   EXPANDED  — During planning. Shows per-agent status with live messages.
  *   COLLAPSED — After completion. Single bar showing elapsed time. Click to re-expand.
  *   HIDDEN    — No active trip AND no previous result to show.
- *
- * Uses Tailwind classes consistent with the rest of the Dashboard.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
-import type { TripPollResponse } from '../../services/api';
+import type { TripPollResponse, AgentDetail } from '../../services/api';
 
 interface TripStatusBarProps {
   pollData: TripPollResponse | null;
@@ -22,36 +24,36 @@ interface TripStatusBarProps {
 }
 
 // ── Agent display config ────────────────────────────────────────────
-const AGENT_META: Record<string, { icon: string; label: string; description: string }> = {
+const AGENT_META: Record<string, { icon: string; label: string; fallbackDesc: string }> = {
   preprocessor: {
     icon: '🧠',
     label: 'Understanding Request',
-    description: 'Analyzing your preferences and text input',
+    fallbackDesc: 'Analyzing your preferences and text input',
   },
   flight: {
     icon: '✈️',
     label: 'Searching Flights',
-    description: 'Finding the best flights with your preferred airlines',
+    fallbackDesc: 'Finding the best flights with your preferred airlines',
   },
   hotel: {
     icon: '🏨',
     label: 'Finding Hotels',
-    description: 'Searching hotels matching your chain and location preferences',
+    fallbackDesc: 'Searching hotels matching your chain and location preferences',
   },
   weather: {
     icon: '🌤️',
     label: 'Checking Weather',
-    description: 'Getting forecast for your travel dates',
+    fallbackDesc: 'Getting forecast for your travel dates',
   },
   places: {
     icon: '🎭',
     label: 'Discovering Activities',
-    description: 'Finding attractions, tours, and experiences',
+    fallbackDesc: 'Finding attractions, tours, and experiences',
   },
   restaurant: {
     icon: '🍽️',
     label: 'Restaurant Picks',
-    description: 'Curating restaurants matching your cuisine preferences',
+    fallbackDesc: 'Curating restaurants matching your cuisine preferences',
   },
 };
 
@@ -64,8 +66,11 @@ const TripStatusBar: React.FC<TripStatusBarProps> = ({ pollData, isActive }) => 
   const [isDismissed, setIsDismissed] = useState(false);
   const startTimeRef = useRef<number>(Date.now());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Retain last pollData so we can keep showing the bar after isActive goes false
   const lastPollDataRef = useRef<TripPollResponse | null>(null);
+
+  // Track which agents just got a new message (for flash highlight)
+  const [flashAgents, setFlashAgents] = useState<Set<string>>(new Set());
+  const prevMessagesRef = useRef<Record<string, string | null>>({});
 
   // Keep a snapshot of the most recent pollData
   useEffect(() => {
@@ -74,13 +79,37 @@ const TripStatusBar: React.FC<TripStatusBarProps> = ({ pollData, isActive }) => 
     }
   }, [pollData]);
 
+  // Detect message changes and trigger flash
+  useEffect(() => {
+    if (!pollData?.agent_details) return;
+
+    const newFlashes = new Set<string>();
+    for (const [agentKey, detail] of Object.entries(pollData.agent_details)) {
+      const currentMsg = (detail as AgentDetail)?.status_message || null;
+      const prevMsg = prevMessagesRef.current[agentKey] || null;
+      if (currentMsg && currentMsg !== prevMsg) {
+        newFlashes.add(agentKey);
+      }
+      prevMessagesRef.current[agentKey] = currentMsg;
+    }
+
+    if (newFlashes.size > 0) {
+      setFlashAgents(newFlashes);
+      // Clear flash after animation
+      const timeout = setTimeout(() => setFlashAgents(new Set()), 600);
+      return () => clearTimeout(timeout);
+    }
+  }, [pollData?.agent_details]);
+
   // Reset timer when a new trip starts
   useEffect(() => {
     if (isActive) {
       startTimeRef.current = Date.now();
       setIsExpanded(true);
       setElapsedTime(0);
-      setIsDismissed(false); // un-dismiss when a new trip starts
+      setIsDismissed(false);
+      prevMessagesRef.current = {};
+      setFlashAgents(new Set());
 
       timerRef.current = setInterval(() => {
         setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
@@ -107,6 +136,7 @@ const TripStatusBar: React.FC<TripStatusBarProps> = ({ pollData, isActive }) => 
   if (!displayData || isDismissed) return null;
 
   const agents = displayData.agents || {};
+  const agentDetails: Record<string, AgentDetail> = displayData.agent_details || {};
   const completedCount = Object.values(agents).filter((s) => s === 'completed').length;
   const totalCount = Object.keys(agents).length || AGENT_ORDER.length;
   const progressPercent = totalCount > 0 ? (completedCount / totalCount) * 100 : 5;
@@ -117,6 +147,27 @@ const TripStatusBar: React.FC<TripStatusBarProps> = ({ pollData, isActive }) => 
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  };
+
+  /**
+   * Get the display message for an agent.
+   * Priority: agent_details.status_message → fallback description → null
+   */
+  const getAgentMessage = (agentKey: string, status: string): string | null => {
+    const detail: AgentDetail | undefined = agentDetails[agentKey];
+    const meta = AGENT_META[agentKey];
+
+    // If we have a granular message from the backend, always show it
+    if (detail?.status_message) {
+      return detail.status_message;
+    }
+
+    // Fallback: show static description only while in_progress
+    if (status === 'in_progress' && meta?.fallbackDesc) {
+      return meta.fallbackDesc;
+    }
+
+    return null;
   };
 
   return (
@@ -201,26 +252,54 @@ const TripStatusBar: React.FC<TripStatusBarProps> = ({ pollData, isActive }) => 
       >
         {AGENT_ORDER.map((agentKey) => {
           const status = agents[agentKey] || 'pending';
-          const meta = AGENT_META[agentKey] || { icon: '🔧', label: agentKey, description: '' };
+          const meta = AGENT_META[agentKey] || { icon: '🔧', label: agentKey, fallbackDesc: '' };
+          const detail: AgentDetail | undefined = agentDetails[agentKey];
+          const message = getAgentMessage(agentKey, status);
+          const isFlashing = flashAgents.has(agentKey);
 
           return (
             <div
               key={agentKey}
-              className="flex items-center py-2.5 border-b border-gray-100 gap-3"
+              className={`flex items-center py-2.5 border-b border-gray-100 gap-3 transition-colors duration-300 ${
+                isFlashing ? 'bg-purple-50/60' : ''
+              }`}
             >
               <span className="text-xl w-7 text-center flex-shrink-0">{meta.icon}</span>
 
-              <div className="flex-1 flex flex-col gap-0.5">
-                <span className={`text-[13px] font-semibold transition-colors duration-300 ${
-                  status === 'completed' ? 'text-gray-400' : 'text-gray-700'
-                }`}>
-                  {meta.label}
-                </span>
-                {status === 'in_progress' && (
-                  <span className="text-[11px] text-gray-400 italic">{meta.description}</span>
+              <div className="flex-1 flex flex-col gap-0.5 min-w-0">
+                {/* Agent label — dims when completed */}
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[13px] font-semibold transition-colors duration-300 ${
+                    status === 'completed' ? 'text-gray-400' : 'text-gray-700'
+                  }`}>
+                    {meta.label}
+                  </span>
+                  {/* Result count badge */}
+                  {detail?.result_count != null && status === 'completed' && (
+                    <span className="text-[10px] font-normal text-gray-400 bg-gray-100 px-1.5 py-0.5 rounded-full leading-none">
+                      {detail.result_count}
+                    </span>
+                  )}
+                </div>
+
+                {/* Granular status message — the Phase 1 addition */}
+                {message && (
+                  <span
+                    className={`text-[11px] truncate transition-all duration-300 ${
+                      status === 'completed'
+                        ? 'text-emerald-600/60'
+                        : status === 'failed'
+                          ? 'text-red-400'
+                          : 'text-gray-500 italic'
+                    }`}
+                    title={message}
+                  >
+                    {message}
+                  </span>
                 )}
               </div>
 
+              {/* Status indicator */}
               <span className="w-6 text-center flex-shrink-0">
                 {status === 'pending' && <span className="text-sm opacity-40">⏳</span>}
                 {status === 'in_progress' && (

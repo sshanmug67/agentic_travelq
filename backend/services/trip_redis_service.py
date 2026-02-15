@@ -5,6 +5,7 @@ Location: backend/services/trip_redis_service.py
 Manages all Redis operations for the async trip planning pipeline:
   - Trip preferences storage
   - Agent status tracking (per-agent progress)
+  - Granular agent status messages (Phase 1)
   - Results storage (partial + final)
   - Preference changes from NL preprocessing
 
@@ -14,6 +15,7 @@ Redis Key Schema:
   trip:{trip_id}:user_text           → raw NL text from user (or empty)
   trip:{trip_id}:preference_changes  → changes_log JSON (after preprocessor)
   trip:{trip_id}:agents              → hash {flight: pending, hotel: in_progress, ...}
+  trip:{trip_id}:agent_details       → per-agent granular status messages JSON (Phase 1)
   trip:{trip_id}:results             → full results JSON (when completed)
   trip:{trip_id}:partial:{agent}     → partial results per agent
   trip:{trip_id}:error               → error message (if failed)
@@ -21,6 +23,13 @@ Redis Key Schema:
   trip:{trip_id}:updated_at          → ISO timestamp (last update)
 
 All keys auto-expire after TTL_SECONDS (default: 1 hour).
+
+Changes (Phase 1 — Granular Agent Status):
+  - New Redis key: trip:{trip_id}:agent_details
+  - New methods: update_agent_status_message(), set_agent_started(),
+    set_agent_completed(), set_agent_error()
+  - Updated: create_trip() initializes agent_details
+  - Updated: get_trip_poll_response() includes agent_details
 """
 import json
 import redis
@@ -48,6 +57,18 @@ TRIP_STATUS_FAILED = "failed"
 
 # Default agents that the orchestrator runs
 DEFAULT_AGENTS = ["preprocessor", "flight", "hotel", "weather", "places", "restaurant"]
+
+
+def _empty_agent_detail() -> Dict[str, Any]:
+    """Default shape for a single agent's detail entry."""
+    return {
+        "status_message": None,
+        "result_count": None,
+        "started_at": None,
+        "updated_at": None,
+        "completed_at": None,
+        "error_message": None,
+    }
 
 
 class TripRedisService:
@@ -104,6 +125,7 @@ class TripRedisService:
         """
         Initialize a new trip in Redis. Called by FastAPI before Celery dispatch.
         Sets status to 'queued' and initializes all agent statuses to 'pending'.
+        Also initializes the agent_details structure for granular status messages.
         """
         pipe = self._redis.pipeline()
 
@@ -133,6 +155,20 @@ class TripRedisService:
             ex=TTL_SECONDS,
         )
 
+        # Phase 1: Initialize granular agent details (status messages, timestamps)
+        agent_details = {}
+        for agent in agent_list:
+            agent_details[agent] = _empty_agent_detail()
+        # If no user text, preprocessor is already done
+        if not user_text:
+            agent_details["preprocessor"]["status_message"] = "No refinement text — skipped"
+            agent_details["preprocessor"]["completed_at"] = datetime.now().isoformat()
+        pipe.set(
+            self._key(trip_id, "agent_details"),
+            json.dumps(agent_details),
+            ex=TTL_SECONDS,
+        )
+
         pipe.execute()
         log_info_raw(f"📦 Redis: trip {trip_id} created (agents: {agent_list})")
 
@@ -156,6 +192,93 @@ class TripRedisService:
         """Store error message and set status to failed."""
         self._redis.set(self._key(trip_id, "error"), error_msg, ex=TTL_SECONDS)
         self.set_trip_status(trip_id, TRIP_STATUS_FAILED)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # GRANULAR AGENT STATUS MESSAGES (Phase 1)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def update_agent_status_message(
+        self,
+        trip_id: str,
+        agent_name: str,
+        status_message: str,
+        result_count: Optional[int] = None,
+    ):
+        """
+        Update an agent's granular status message for the frontend feed.
+
+        Called from inside agents at each meaningful step:
+          redis_service.update_agent_status_message(
+              trip_id, "flight", "Scanning 44 routes from JFK, EWR, LGA"
+          )
+
+        This does NOT change the agent's overall status (pending/in_progress/completed).
+        It only updates the human-readable message the frontend displays.
+        """
+        details = self._get_json(self._key(trip_id, "agent_details")) or {}
+        now = datetime.now().isoformat()
+
+        if agent_name not in details:
+            details[agent_name] = _empty_agent_detail()
+
+        details[agent_name]["status_message"] = status_message
+        details[agent_name]["updated_at"] = now
+
+        if result_count is not None:
+            details[agent_name]["result_count"] = result_count
+
+        self._set_json(self._key(trip_id, "agent_details"), details)
+
+    def set_agent_started(self, trip_id: str, agent_name: str, status_message: str = "Starting..."):
+        """Mark agent as started with initial message and timestamp."""
+        details = self._get_json(self._key(trip_id, "agent_details")) or {}
+        now = datetime.now().isoformat()
+
+        if agent_name not in details:
+            details[agent_name] = _empty_agent_detail()
+
+        details[agent_name]["status_message"] = status_message
+        details[agent_name]["started_at"] = now
+        details[agent_name]["updated_at"] = now
+
+        self._set_json(self._key(trip_id, "agent_details"), details)
+
+    def set_agent_completed(
+        self,
+        trip_id: str,
+        agent_name: str,
+        status_message: str,
+        result_count: Optional[int] = None,
+    ):
+        """Mark agent as completed with final message and timestamp."""
+        details = self._get_json(self._key(trip_id, "agent_details")) or {}
+        now = datetime.now().isoformat()
+
+        if agent_name not in details:
+            details[agent_name] = _empty_agent_detail()
+
+        details[agent_name]["status_message"] = status_message
+        details[agent_name]["updated_at"] = now
+        details[agent_name]["completed_at"] = now
+
+        if result_count is not None:
+            details[agent_name]["result_count"] = result_count
+
+        self._set_json(self._key(trip_id, "agent_details"), details)
+
+    def set_agent_error(self, trip_id: str, agent_name: str, error_message: str):
+        """Mark agent as failed with error message."""
+        details = self._get_json(self._key(trip_id, "agent_details")) or {}
+        now = datetime.now().isoformat()
+
+        if agent_name not in details:
+            details[agent_name] = _empty_agent_detail()
+
+        details[agent_name]["status_message"] = f"Error: {error_message}"
+        details[agent_name]["error_message"] = error_message
+        details[agent_name]["updated_at"] = now
+
+        self._set_json(self._key(trip_id, "agent_details"), details)
 
     # ─────────────────────────────────────────────────────────────────────
     # PREFERENCES
@@ -210,6 +333,8 @@ class TripRedisService:
         """
         Build the complete poll response for the frontend.
         Returns None if trip_id doesn't exist.
+
+        Phase 1: Now includes agent_details with granular status messages.
         """
         status = self._redis.get(self._key(trip_id, "status"))
         if not status:
@@ -219,6 +344,7 @@ class TripRedisService:
             "trip_id": trip_id,
             "status": status,
             "agents": self._get_json(self._key(trip_id, "agents")) or {},
+            "agent_details": self._get_json(self._key(trip_id, "agent_details")) or {},
             "created_at": self._redis.get(self._key(trip_id, "created_at")),
             "updated_at": self._redis.get(self._key(trip_id, "updated_at")),
         }

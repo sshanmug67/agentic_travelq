@@ -205,6 +205,19 @@ class _RedisBackedTripStorage:
             "recommendations": len(self._recommendations),
         }
 
+    def update_agent_status_message(
+        self,
+        trip_id: str,
+        agent_name: str,
+        message: str,
+    ):
+        """Pass-through to Redis for granular agent status messages."""
+        self.redis.update_agent_status_message(
+            trip_id=trip_id,
+            agent_name=agent_name,
+            status_message=message,
+        )
+
     def log_api_call(self, trip_id: str, agent_name: str, api_name: str, duration: float = 0):
         _log(f"📊 API call: {agent_name} → {api_name} ({duration:.2f}s)")
 

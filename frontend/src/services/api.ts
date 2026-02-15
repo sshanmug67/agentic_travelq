@@ -1,5 +1,9 @@
 // frontend/src/services/api.ts
 //
+// Changes (v6 — Phase 1: Granular Agent Status):
+//   - TripPollResponse now includes agent_details with per-agent status messages
+//   - New AgentDetail interface for typed granular status
+//
 // Changes (v5 — Async Pipeline):
 //   - planTrip() now returns HTTP 202 with {trip_id, status: "queued"} (instant)
 //   - New pollTripStatus() for GET /api/trips/{trip_id}/status
@@ -119,11 +123,22 @@ export interface TripSubmitResponse {
   poll_url: string;
 }
 
-// v5: GET /{trip_id}/status returns this (polling)
+// v6: Per-agent granular status detail
+export interface AgentDetail {
+  status_message: string | null;
+  result_count: number | null;
+  started_at: string | null;
+  updated_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+}
+
+// v5+v6: GET /{trip_id}/status returns this (polling)
 export interface TripPollResponse {
   trip_id: string;
   status: 'queued' | 'preprocessing' | 'in_progress' | 'completed' | 'failed';
   agents: Record<string, 'pending' | 'in_progress' | 'completed' | 'failed'>;
+  agent_details: Record<string, AgentDetail>;  // v6: granular per-agent status messages
   preference_changes?: Array<{
     field: string;
     action: string;
@@ -136,20 +151,6 @@ export interface TripPollResponse {
   error?: string;
 }
 
-// v4 legacy type — kept for backward compatibility with Dashboard/types
-interface PlanTripResponse {
-  status: string;
-  tripId: string;
-  trip_id?: string;
-  final_recommendation: string;
-  recommendations?: Record<string, any>;
-  message?: string;
-  options?: Record<string, any[]>;
-  results?: Record<string, any[]>;
-  summary?: Record<string, number>;
-  processing_time: number;
-  agents_used: string[];
-}
 
 // ── API methods ─────────────────────────────────────────────────────────────
 
@@ -167,6 +168,7 @@ export const tripApi = {
   /**
    * v5: Poll trip planning progress.
    * Returns agent-by-agent status and final results when complete.
+   * v6: Now includes agent_details with granular status messages per agent.
    */
   pollTripStatus: async (tripId: string): Promise<TripPollResponse> => {
     const response = await api.get(`/trips/${tripId}/status`);

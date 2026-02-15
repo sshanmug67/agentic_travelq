@@ -2,6 +2,10 @@
 Weather Agent - Real API with Centralized Storage
 Location: backend/agents/weather_agent.py
 
+Changes (v3 — Granular Status Messages):
+  - Added _update_status() helper for real-time progress to Redis
+  - Status calls at: init, API call, parsing, storage, LLM recommendation, completion
+
 Changes (v2):
   - Added store_recommendation() call after generating weather recommendation
   - Weather recommendation now appears in response.recommendations.weather
@@ -24,7 +28,8 @@ import nest_asyncio
 
 class WeatherAgent(TravelQBaseAgent):
     """
-    Weather Agent with real Open-Meteo API + centralized storage
+    Weather Agent v3 — real Open-Meteo API + centralized storage
+    + granular real-time status messages
     """
     
     def __init__(self, trip_id: str, trip_storage: TripStorageInterface, **kwargs):
@@ -49,14 +54,26 @@ class WeatherAgent(TravelQBaseAgent):
             **kwargs
         )
         
-        # Storage
         self.trip_id = trip_id
         self.trip_storage = trip_storage
-        
-        # Weather service
         self.weather_service = get_weather_service()
         
-        log_agent_raw("🌤️  WeatherAgent initialized (REAL API MODE)", agent_name="WeatherAgent")
+        log_agent_raw("🌤️  WeatherAgent v3 initialized (with granular status)", agent_name="WeatherAgent")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # v3: Granular status helper
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _update_status(self, message: str):
+        """Send a granular status message to Redis for the frontend."""
+        try:
+            self.trip_storage.update_agent_status_message(
+                self.trip_id, "weather", message
+            )
+        except Exception as e:
+            log_agent_raw(f"Status update failed: {e}", agent_name="WeatherAgent")
+
+    # ─────────────────────────────────────────────────────────────────────
     
     def generate_reply(
         self,
@@ -64,12 +81,11 @@ class WeatherAgent(TravelQBaseAgent):
         sender: Any = None,
         config: Any = None
     ) -> str:
-        """
-        Generate reply: Call API, store forecast, return recommendation
-        """
-        log_agent_raw("🔍 WeatherAgent processing request...", agent_name="WeatherAgent")
+        log_agent_raw("🔍 WeatherAgent v3 processing request...", agent_name="WeatherAgent")
         
-        # Log incoming message
+        # v3: Init status
+        self._update_status("Initializing weather forecast...")
+
         if messages and len(messages) > 0:
             last_message = messages[-1].get("content", "")
             sender_name = sender.name if sender and hasattr(sender, 'name') else "Unknown"
@@ -80,10 +96,12 @@ class WeatherAgent(TravelQBaseAgent):
                 truncate=500
             )
         
-        # Get preferences from storage
+        # v3: Load preferences
+        self._update_status("Loading travel preferences...")
         preferences = self.trip_storage.get_preferences(self.trip_id)
         
         if not preferences:
+            self._update_status("Error: preferences not found")
             error_msg = f"Could not find preferences for trip {self.trip_id}"
             log_agent_raw(f"❌ {error_msg}", agent_name="WeatherAgent")
             return self.signal_completion(f"Error: {error_msg}")
@@ -91,7 +109,6 @@ class WeatherAgent(TravelQBaseAgent):
         log_agent_raw(f"✅ Retrieved preferences from storage for trip {self.trip_id}", 
                      agent_name="WeatherAgent")
         
-        # Build search parameters
         search_params = {
             "destination": preferences.destination,
             "start_date": preferences.departure_date,
@@ -102,7 +119,12 @@ class WeatherAgent(TravelQBaseAgent):
                       agent_name="WeatherAgent")
         
         try:
-            # Call Weather API
+            # v3: API call status
+            self._update_status(
+                f"Fetching forecast for {search_params['destination']} "
+                f"({search_params['start_date']} to {search_params['end_date']})..."
+            )
+
             start_time = time.time()
             
             weather_forecasts = self._fetch_weather_api(
@@ -115,10 +137,22 @@ class WeatherAgent(TravelQBaseAgent):
             
             log_agent_raw(f"✅ API returned {len(weather_forecasts)} day forecast in {api_duration:.2f}s", 
                          agent_name="WeatherAgent")
+
+            if not weather_forecasts:
+                self._update_status("No forecast data received — using general info")
+                return self.signal_completion(
+                    f"I couldn't fetch weather data for {search_params['destination']}. "
+                    "Please check back later for forecast updates."
+                )
+
+            # v3: Parsing status
+            self._update_status(f"Received {len(weather_forecasts)}-day forecast — processing...")
             
-            # Store ALL forecasts in centralized storage
+            # Store forecasts
             weather_dict = [self._weather_to_dict(w) for w in weather_forecasts]
             
+            self._update_status(f"Saving {len(weather_forecasts)}-day forecast...")
+
             self.trip_storage.add_weather(
                 trip_id=self.trip_id,
                 weather=weather_dict,
@@ -141,16 +175,22 @@ class WeatherAgent(TravelQBaseAgent):
             
             log_agent_raw(f"💾 Stored {len(weather_forecasts)} weather forecasts in centralized storage", 
                          agent_name="WeatherAgent")
+
+            # v3: Analyze weather for status display
+            temps = [f.temperature for f in weather_forecasts]
+            min_temp = min(f.temp_min for f in weather_forecasts)
+            max_temp = max(f.temp_max for f in weather_forecasts)
+            rainy_days = sum(1 for f in weather_forecasts if (f.precipitation_probability or 0) > 50)
+
+            self._update_status(
+                f"AI generating travel weather advisory ({min_temp:.0f}°F–{max_temp:.0f}°F, "
+                f"{rainy_days} rainy day{'s' if rainy_days != 1 else ''})..."
+            )
             
-            # Generate conversational recommendation
             recommendation = self._generate_recommendation(weather_forecasts, search_params)
             
-            # ══════════════════════════════════════════════════════════════
-            # v2 NEW: Store weather recommendation so the frontend can
-            #         display it in the AI Recommendations panel
-            # ══════════════════════════════════════════════════════════════
+            # v2: Store recommendation
             try:
-                temps = [f.temperature for f in weather_forecasts]
                 self.trip_storage.store_recommendation(
                     trip_id=self.trip_id,
                     category="weather",
@@ -159,13 +199,10 @@ class WeatherAgent(TravelQBaseAgent):
                     metadata={
                         "destination": search_params["destination"],
                         "num_days": len(weather_forecasts),
-                        "temp_min": round(min(f.temp_min for f in weather_forecasts), 1),
-                        "temp_max": round(max(f.temp_max for f in weather_forecasts), 1),
+                        "temp_min": round(min_temp, 1),
+                        "temp_max": round(max_temp, 1),
                         "avg_temp": round(sum(temps) / len(temps), 1),
-                        "rainy_days": sum(
-                            1 for f in weather_forecasts
-                            if (f.precipitation_probability or 0) > 50
-                        ),
+                        "rainy_days": rainy_days,
                     },
                 )
                 log_agent_raw(
@@ -177,8 +214,13 @@ class WeatherAgent(TravelQBaseAgent):
                     f"⚠️ Failed to store weather recommendation: {e}",
                     agent_name="WeatherAgent",
                 )
+
+            # v3: Completion status
+            self._update_status(
+                f"Weather forecast complete — {len(weather_forecasts)} days, "
+                f"{min_temp:.0f}°F–{max_temp:.0f}°F"
+            )
             
-            # Log outgoing
             self.log_conversation_message(
                 message_type="OUTGOING",
                 content=recommendation,
@@ -190,6 +232,7 @@ class WeatherAgent(TravelQBaseAgent):
             
         except Exception as e:
             log_agent_raw(f"❌ Weather forecast failed: {str(e)}", agent_name="WeatherAgent")
+            self._update_status(f"Error: {str(e)[:80]}")
             error_msg = f"I encountered an error fetching weather: {str(e)}. Using general seasonal information."
             return self.signal_completion(error_msg)
     
@@ -204,29 +247,19 @@ class WeatherAgent(TravelQBaseAgent):
         Handles async service properly
         """
         log_agent_raw("=" * 80, agent_name="WeatherAgent")
-        log_agent_raw("📡 Calling Open-Meteo Weather API1", agent_name="WeatherAgent")
+        log_agent_raw("📡 Calling Open-Meteo Weather API", agent_name="WeatherAgent")
         log_agent_raw("=" * 80, agent_name="WeatherAgent")
         
-        # ✅ Log input parameters
         log_agent_raw(f"📍 Location: {location}", agent_name="WeatherAgent")
         log_agent_raw(f"📅 Start Date: {start_date}", agent_name="WeatherAgent")
         log_agent_raw(f"📅 End Date: {end_date}", agent_name="WeatherAgent")
         log_agent_raw("-" * 80, agent_name="WeatherAgent")
         
         try:
-            # ✅ Check if event loop is already running
             try:
                 loop = asyncio.get_running_loop()
                 log_agent_raw("🔄 Detected existing event loop - applying nest_asyncio", agent_name="WeatherAgent")
-                
-                # Event loop exists - we're in async context already
-                # Use nest_asyncio to allow nested event loops
                 nest_asyncio.apply()
-                
-                log_agent_raw("🌐 Calling weather_service.get_forecast()...", agent_name="WeatherAgent")
-                log_agent_raw(f"   → location: '{location}'", agent_name="WeatherAgent")
-                log_agent_raw(f"   → start_date: '{start_date}'", agent_name="WeatherAgent")
-                log_agent_raw(f"   → end_date: '{end_date}'", agent_name="WeatherAgent")
                 
                 weather_data = asyncio.run(
                     self.weather_service.get_forecast(
@@ -235,36 +268,11 @@ class WeatherAgent(TravelQBaseAgent):
                         end_date=end_date
                     )
                 )
-                
-                log_agent_raw(f"✅ API call completed successfully", agent_name="WeatherAgent")
-                log_agent_raw(f"📊 Received {len(weather_data)} forecast entries", agent_name="WeatherAgent")
-                log_agent_json(weather_data, label="Complete Weather Forecast Array", agent_name="WeatherAgent")
-                log_agent_raw("-" * 80, agent_name="WeatherAgent")
-                
-                # ✅ Log sample of received data
-                if weather_data and len(weather_data) > 0:
-                    log_agent_raw("-" * 80, agent_name="WeatherAgent")
-                    log_agent_raw("📋 Sample weather data (first entry):", agent_name="WeatherAgent")
-                    log_agent_json(weather_data[0], label="First Forecast Entry", agent_name="WeatherAgent")
-                    
-                    if len(weather_data) > 1:
-                        log_agent_raw(f"   ... and {len(weather_data) - 1} more entries", agent_name="WeatherAgent")
-                else:
-                    log_agent_raw("⚠️  Received empty weather data array", agent_name="WeatherAgent")
 
-            except RuntimeError as re:
-                # No event loop running - create a new one
-                log_agent_raw("🆕 No existing event loop detected - creating new one", agent_name="WeatherAgent")
-                log_agent_raw(f"   RuntimeError: {str(re)}", agent_name="WeatherAgent")
-                
+            except RuntimeError:
+                log_agent_raw("🆕 No existing event loop - creating new one", agent_name="WeatherAgent")
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
-                
-                log_agent_raw("🌐 Calling weather_service.get_forecast()...", agent_name="WeatherAgent")
-                log_agent_raw(f"   → location: '{location}'", agent_name="WeatherAgent")
-                log_agent_raw(f"   → start_date: '{start_date}'", agent_name="WeatherAgent")
-                log_agent_raw(f"   → end_date: '{end_date}'", agent_name="WeatherAgent")
-                
                 try:
                     weather_data = loop.run_until_complete(
                         self.weather_service.get_forecast(
@@ -273,76 +281,32 @@ class WeatherAgent(TravelQBaseAgent):
                             end_date=end_date
                         )
                     )
-                    
-                    log_agent_raw(f"✅ API call completed successfully", agent_name="WeatherAgent")
-                    log_agent_raw(f"📊 Received {len(weather_data)} forecast entries", agent_name="WeatherAgent")
-
-                    # ✅ ADD THIS - Log ALL weather data
-                    log_agent_raw("-" * 80, agent_name="WeatherAgent")
-                    log_agent_raw("📋 FULL WEATHER DATA RECEIVED FROM API:", agent_name="WeatherAgent")
-                    log_agent_json(weather_data, label="Complete Weather Forecast Array", agent_name="WeatherAgent")
-                    log_agent_raw("-" * 80, agent_name="WeatherAgent")
-                        
                 finally:
                     loop.close()
-                    log_agent_raw("🔒 Event loop closed", agent_name="WeatherAgent")
             
-            log_agent_raw("=" * 80, agent_name="WeatherAgent")
-            log_agent_raw(f"✅ Open-Meteo Weather API SUCCESS - Received {len(weather_data)} day forecast", 
+            log_agent_raw(f"✅ Open-Meteo returned {len(weather_data)} day forecast", 
                         agent_name="WeatherAgent")
-            log_agent_raw("=" * 80, agent_name="WeatherAgent")
             
             # Parse into Weather objects
-            log_agent_raw(f"📋 Parsing {len(weather_data)} weather forecasts...", agent_name="WeatherAgent")
             forecasts = []
-            
             for idx, forecast_dict in enumerate(weather_data, 1):
-                date_str = forecast_dict.get('date', 'Unknown')
-                temp_str = f"{forecast_dict.get('temp_min', '?')}°F - {forecast_dict.get('temp_max', '?')}°F"
-                
-                log_agent_raw(f"   [{idx}/{len(weather_data)}] Parsing: {date_str} ({temp_str})", 
-                            agent_name="WeatherAgent")
-                
                 forecast = self._parse_weather_data(forecast_dict)
                 if forecast:
                     forecasts.append(forecast)
-                    log_agent_raw(f"      ✓ SUCCESS: {forecast.description}", agent_name="WeatherAgent")
-                else:
-                    log_agent_raw(f"      ✗ FAILED to parse", agent_name="WeatherAgent")
-                    log_agent_json(forecast_dict, label=f"Failed Entry {idx}", agent_name="WeatherAgent")
             
-            log_agent_raw("-" * 80, agent_name="WeatherAgent")
-            log_agent_raw(f"✅ Successfully parsed {len(forecasts)}/{len(weather_data)} forecasts", 
+            log_agent_raw(f"✅ Parsed {len(forecasts)}/{len(weather_data)} forecasts", 
                         agent_name="WeatherAgent")
-            log_agent_raw("=" * 80, agent_name="WeatherAgent")
             
             return forecasts
             
         except Exception as e:
-            log_agent_raw("=" * 80, agent_name="WeatherAgent")
-            log_agent_raw(f"❌ WEATHER API CALL FAILED", agent_name="WeatherAgent")
-            log_agent_raw("=" * 80, agent_name="WeatherAgent")
-            log_agent_raw(f"🔴 Error Type: {type(e).__name__}", agent_name="WeatherAgent")
-            log_agent_raw(f"🔴 Error Message: {str(e)}", agent_name="WeatherAgent")
-            log_agent_raw("-" * 80, agent_name="WeatherAgent")
-            log_agent_raw(f"📍 Failed Request Details:", agent_name="WeatherAgent")
-            log_agent_raw(f"   Location: {location}", agent_name="WeatherAgent")
-            log_agent_raw(f"   Start Date: {start_date}", agent_name="WeatherAgent")
-            log_agent_raw(f"   End Date: {end_date}", agent_name="WeatherAgent")
-            log_agent_raw("-" * 80, agent_name="WeatherAgent")
-            
+            log_agent_raw(f"❌ WEATHER API CALL FAILED: {type(e).__name__}: {str(e)}", 
+                        agent_name="WeatherAgent")
             import traceback
-            log_agent_raw(f"📚 Full Traceback:", agent_name="WeatherAgent")
             log_agent_raw(traceback.format_exc(), agent_name="WeatherAgent")
-            
-            log_agent_raw("=" * 80, agent_name="WeatherAgent")
-            
-            # Return empty list on error
-            log_agent_raw("⚠️  Returning empty forecast list", agent_name="WeatherAgent")
             return []
     
     def _parse_weather_data(self, data: Dict) -> Optional[Weather]:
-        """Parse weather data dict into Weather object"""
         try:
             return Weather(
                 date=data["date"],
@@ -366,28 +330,21 @@ class WeatherAgent(TravelQBaseAgent):
         forecasts: List[Weather],
         preferences: Dict[str, Any]
     ) -> str:
-        """
-        Use LLM to generate conversational weather recommendation
-        """
         if not forecasts:
-            return f"I couldn't fetch weather data for {preferences.get('destination')}. Please check back later for forecast updates."
+            return f"I couldn't fetch weather data for {preferences.get('destination')}. Please check back later."
         
-        # Analyze weather patterns
         temps = [f.temperature for f in forecasts]
         avg_temp = sum(temps) / len(temps)
         min_temp = min(f.temp_min for f in forecasts)
         max_temp = max(f.temp_max for f in forecasts)
-        
         rainy_days = sum(1 for f in forecasts if (f.precipitation_probability or 0) > 50)
         sunny_days = sum(1 for f in forecasts if "clear" in (f.description or "").lower() or "sunny" in (f.description or "").lower())
         
-        # Build forecast summary
         forecast_summary = "\n".join([
             f"Day {i+1} ({f.date}): {f.description}, {f.temp_min:.0f}°F - {f.temp_max:.0f}°F, {(f.precipitation_probability or 0):.0f}% rain"
-            for i, f in enumerate(forecasts[:7])  # Max 7 days for summary
+            for i, f in enumerate(forecasts[:7])
         ])
         
-        # Build prompt
         prompt = f"""
             Based on the weather forecast, provide helpful travel recommendations.
 
@@ -409,14 +366,10 @@ class WeatherAgent(TravelQBaseAgent):
             - Highlight best/worst days if relevant
             - Give specific packing recommendations
             - Mention any weather concerns or optimal conditions
-
-            Example: "The weather in London looks mostly mild with temperatures between 55-68°F throughout your stay. You'll experience some rain on 3 days, so pack an umbrella and light rain jacket. The weekend looks particularly nice with clear skies - perfect for outdoor sightseeing!"
             """
         
-        # Call LLM
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
-            
             response = client.chat.completions.create(
                 model=settings.llm_model,
                 messages=[
@@ -426,19 +379,15 @@ class WeatherAgent(TravelQBaseAgent):
                 temperature=0.7,
                 max_tokens=300
             )
-            
             return response.choices[0].message.content.strip()
             
         except Exception as e:
             log_agent_raw(f"⚠️ LLM recommendation failed: {str(e)}", agent_name="WeatherAgent")
-            # Fallback
             return f"Weather forecast for {preferences.get('destination')}: Temperatures ranging from {min_temp:.0f}°F to {max_temp:.0f}°F over {len(forecasts)} days. {rainy_days} rainy days expected."
     
     def _weather_to_dict(self, weather: Weather) -> Dict:
-        """Convert Weather object to dict for storage"""
         return weather.model_dump(mode='json')
 
 
 def create_weather_agent(trip_id: str, trip_storage: TripStorageInterface, **kwargs) -> WeatherAgent:
-    """Factory function to create WeatherAgent"""
     return WeatherAgent(trip_id=trip_id, trip_storage=trip_storage, **kwargs)

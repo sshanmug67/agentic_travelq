@@ -153,6 +153,17 @@ class TripStorageInterface(ABC):
         pass
 
     @abstractmethod
+    def update_agent_status_message(
+        self,
+        trip_id: str,
+        agent_name: str,
+        message: str,
+    ):
+        """Update granular status message for an agent (displayed in frontend)."""
+        pass
+
+
+    @abstractmethod
     def get_recommendations(self, trip_id: str) -> Dict[str, Any]:
         """
         Get all agent recommendations for a trip.

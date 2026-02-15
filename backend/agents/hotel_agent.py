@@ -2,6 +2,15 @@
 Hotel Agent - Complete Implementation
 Google Places + Xotelo + Booking Links + Amadeus Fallback
 
+Changes (v7):
+  - Granular status updates: _update_status() sends real-time progress messages
+    to Redis via trip_storage, enabling the frontend PlanningStatus component
+    to show per-agent color-coded status (e.g. Hotel Agent = blue)
+  - Status messages at every workflow step: chain search, general search,
+    pricing enrichment (with per-hotel progress), budget filtering,
+    LLM curation, storage, and completion
+  - Status includes dynamic counts and hotel names during enrichment
+
 Changes (v6):
   - Wide search + LLM curation: fetch 3x max_results, LLM curates top N
   - interested_chains now extracted and searched (was completely ignored)
@@ -66,6 +75,7 @@ class HotelAgent(TravelQBaseAgent):
     - Amadeus as fallback
     - Booking links for conversion
     
+    v7: Granular status updates for frontend PlanningStatus component
     v6: Wide search + LLM curation pattern (mirrors FlightAgent v6)
     """
     
@@ -101,13 +111,38 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         self.xotelo = get_xotelo_service()
         self.booking_links = BookingLinkGenerator()
         
-        log_agent_raw("🏨 HotelAgent initialized (v6 — WIDE SEARCH + LLM CURATION)", agent_name="HotelAgent")
+        log_agent_raw("🏨 HotelAgent initialized (v7 — GRANULAR STATUS + WIDE SEARCH + LLM CURATION)", agent_name="HotelAgent")
         log_agent_raw("   ✓ Google Places service", agent_name="HotelAgent")
         log_agent_raw("   ✓ Xotelo pricing service", agent_name="HotelAgent")
         log_agent_raw("   ✓ Amadeus fallback", agent_name="HotelAgent")
         log_agent_raw("   ✓ Booking link generator", agent_name="HotelAgent")
         log_agent_raw(f"   ✓ Display max: {settings.hotel_agent_max_results}", agent_name="HotelAgent")
         log_agent_raw(f"   ✓ Wide search: {settings.hotel_agent_max_results * WIDE_SEARCH_MULTIPLIER} hotels", agent_name="HotelAgent")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # v7: GRANULAR STATUS UPDATES
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _update_status(self, message: str) -> None:
+        """
+        Send a granular status message to the frontend via trip_storage.
+        
+        v7: The PlanningStatus component polls these messages and displays
+        them color-coded per agent (e.g. Hotel Agent = blue).
+        
+        Messages are stored in Redis alongside the agent's status field
+        so the frontend poll picks them up in real time.
+        """
+        try:
+            self.trip_storage.update_agent_status_message(
+                trip_id=self.trip_id,
+                agent_name="hotel",
+                message=message
+            )
+            log_agent_raw(f"📡 Status → {message}", agent_name="HotelAgent")
+        except Exception as e:
+            # Status updates are non-critical — don't break the workflow
+            log_agent_raw(f"⚠️ Status update failed: {str(e)}", agent_name="HotelAgent")
     
     def generate_reply(
         self,
@@ -115,8 +150,14 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         sender: Any = None,
         config: Any = None
     ) -> str:
-        """Generate reply with complete hotel search"""
+        """Generate reply with complete hotel search
+        
+        v7: Granular status updates at every workflow step.
+        """
         log_agent_raw("🔍 HotelAgent processing request...", agent_name="HotelAgent")
+        
+        # v7: Initial status
+        self._update_status("Initializing hotel search...")
         
         # Log incoming message
         if messages and len(messages) > 0:
@@ -130,11 +171,13 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             )
         
         # Get preferences
+        self._update_status("Loading travel preferences...")
         preferences = self.trip_storage.get_preferences(self.trip_id)
         
         if not preferences:
             error_msg = f"Could not find preferences for trip {self.trip_id}"
             log_agent_raw(f"❌ {error_msg}", agent_name="HotelAgent")
+            self._update_status("Error: preferences not found")
             return self.signal_completion(f"Error: {error_msg}")
         
         log_agent_raw(f"✅ Retrieved preferences for trip {self.trip_id}", agent_name="HotelAgent")
@@ -186,6 +229,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             log_agent_raw(f"📊 Wide search: fetch up to {wide_search_max}, curate to {display_max}",
                          agent_name="HotelAgent")
             
+            # v7: Status — starting wide search
+            self._update_status(
+                f"Searching up to {wide_search_max} hotels in {search_params['destination']}..."
+            )
+            
             # Search hotels (wide pool)
             all_hotels = self._search_hotels_complete(
                 destination=search_params["destination"],
@@ -206,10 +254,16 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                          agent_name="HotelAgent")
             
             if not all_hotels:
+                self._update_status("No hotels found matching your criteria")
                 return self.signal_completion(
                     "I couldn't find any hotels matching your criteria. "
                     "Try adjusting your dates or location."
                 )
+            
+            # v7: Status — starting curation
+            self._update_status(
+                f"AI selecting best {display_max} from {len(all_hotels)} hotels..."
+            )
             
             # v6: LLM curates top N from wide pool + picks recommendation
             curated_hotels, recommendation_text = self._curate_and_recommend(
@@ -219,6 +273,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 interested_chains=search_params["interested_chains"],
                 display_max=display_max,
             )
+            
+            # v7: Status — saving results
+            self._update_status(f"Saving {len(curated_hotels)} hotel options...")
             
             # Store only curated hotels
             hotels_dict = [self._hotel_to_dict(h) for h in curated_hotels]
@@ -252,6 +309,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             log_agent_raw(f"💾 Stored {len(curated_hotels)} curated hotels (from {len(all_hotels)} pool)",
                          agent_name="HotelAgent")
             
+            # v7: Final status
+            self._update_status(
+                f"Hotel search complete — {len(curated_hotels)} options ready"
+            )
+            
             self.log_conversation_message(
                 message_type="OUTGOING",
                 content=recommendation_text,
@@ -265,6 +327,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             log_agent_raw(f"❌ Hotel search failed: {str(e)}", agent_name="HotelAgent")
             import traceback
             log_agent_raw(traceback.format_exc(), agent_name="HotelAgent")
+            self._update_status(f"Error: {str(e)[:80]}")
             error_msg = f"I encountered an error: {str(e)}. Please try again."
             return self.signal_completion(error_msg)
     
@@ -288,11 +351,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         """
         Complete hotel search workflow with preference-aware discovery.
         
+        v7: Granular status updates at each search phase.
         v6: Now also searches interested_chains (was previously ignored).
         Fetches wide pool for LLM curation.
         """
         log_agent_raw("=" * 80, agent_name="HotelAgent")
-        log_agent_raw("🔍 WIDE HOTEL SEARCH (v6 — preference-aware, 3x pool)", agent_name="HotelAgent")
+        log_agent_raw("🔍 WIDE HOTEL SEARCH (v7 — granular status + preference-aware)", agent_name="HotelAgent")
         log_agent_raw("=" * 80, agent_name="HotelAgent")
         
         preferred_chains = preferred_chains or []
@@ -310,6 +374,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                      f"{num_nights}n, radius={search_radius}m, target={max_results}",
                      agent_name="HotelAgent")
         
+        # v7: Status — search parameters
+        self._update_status(
+            f"Searching hotels in {destination} "
+            f"({check_in_date} to {check_out_date}, {num_nights} nights)..."
+        )
+        
         # STRATEGY 1: Google Places
         if self.google_places and self.google_places.client:
             all_google_hotels = []
@@ -317,9 +387,17 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             
             # Step 1a: Targeted searches for PREFERRED chains
             if preferred_chains:
+                # v7: Status — searching preferred chains
+                self._update_status(
+                    f"Searching preferred chains: {', '.join(preferred_chains)}..."
+                )
+                
                 log_agent_raw(f"⭐ Searching preferred chains: {preferred_chains}", 
                             agent_name="HotelAgent")
                 for chain_name in preferred_chains:
+                    self._update_status(
+                        f"Searching {chain_name} hotels in {destination}..."
+                    )
                     chain_hotels = self.google_places.search_hotels_by_text(
                         query=f"{chain_name} hotel in {destination}",
                         location=destination,
@@ -337,12 +415,26 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                                 hotel['_matched_chain'] = chain_name
                                 hotel['_chain_tier'] = 'preferred'
                                 all_google_hotels.append(hotel)
+                
+                # v7: Status — preferred chain results
+                preferred_found = sum(1 for h in all_google_hotels if h.get('_chain_tier') == 'preferred')
+                self._update_status(
+                    f"Found {preferred_found} preferred chain hotels"
+                )
             
             # Step 1b: Targeted searches for INTERESTED chains (v6: NEW)
             if interested_chains:
+                # v7: Status — searching interested chains
+                self._update_status(
+                    f"Searching interested chains: {', '.join(interested_chains)}..."
+                )
+                
                 log_agent_raw(f"☆  Searching interested chains: {interested_chains}",
                             agent_name="HotelAgent")
                 for chain_name in interested_chains:
+                    self._update_status(
+                        f"Searching {chain_name} hotels in {destination}..."
+                    )
                     chain_hotels = self.google_places.search_hotels_by_text(
                         query=f"{chain_name} hotel in {destination}",
                         location=destination,
@@ -360,10 +452,20 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                                 hotel['_matched_chain'] = chain_name
                                 hotel['_chain_tier'] = 'interested'
                                 all_google_hotels.append(hotel)
+                
+                interested_found = sum(1 for h in all_google_hotels if h.get('_chain_tier') == 'interested')
+                self._update_status(
+                    f"Found {interested_found} interested chain hotels"
+                )
             
             # Step 1c: General nearby search to fill remaining slots
             remaining_slots = max_results - len(all_google_hotels)
             if remaining_slots > 0:
+                # v7: Status — general search
+                self._update_status(
+                    f"Searching {remaining_slots} more hotels in {destination}..."
+                )
+                
                 general_hotels = self.google_places.search_hotels(
                     location=destination,
                     radius=search_radius,
@@ -390,8 +492,20 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 agent_name="HotelAgent"
             )
             
+            # v7: Status — discovery complete
+            self._update_status(
+                f"Found {len(all_google_hotels)} hotels "
+                f"({chain_preferred} preferred, {chain_interested} interested, "
+                f"{chain_alt} alternatives)"
+            )
+            
             if all_google_hotels:
                 all_google_hotels = all_google_hotels[:max_results]
+                
+                # v7: Status — starting pricing enrichment
+                self._update_status(
+                    f"Retrieving pricing for {len(all_google_hotels)} hotels..."
+                )
                 
                 enriched_hotels = self._enrich_hotels_with_pricing(
                     google_hotels=all_google_hotels,
@@ -403,14 +517,28 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 )
                 
                 if enriched_hotels:
+                    # v7: Status — budget filtering
+                    if budget_per_night and budget_per_night > 0:
+                        self._update_status(
+                            f"Filtering by budget: ${budget_per_night}/night..."
+                        )
+                    
                     enriched_hotels = self._filter_by_budget(enriched_hotels, budget_per_night)
+                    
                     if enriched_hotels:
+                        # v7: Status — enrichment complete
+                        self._update_status(
+                            f"{len(enriched_hotels)} hotels with pricing ready"
+                        )
                         return enriched_hotels
         else:
             log_agent_raw("⚠️ Google Places not available", agent_name="HotelAgent")
+            self._update_status("Google Places unavailable — trying fallback...")
         
         # STRATEGY 2: Amadeus fallback
         if self.amadeus_service and self.amadeus_service.client:
+            self._update_status("Searching via Amadeus API fallback...")
+            
             city_code = self._resolve_city_code(destination)
             if city_code:
                 try:
@@ -428,6 +556,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                         agent_logger=self.logger
                     )
                     if hotels_data:
+                        self._update_status(f"Amadeus found {len(hotels_data)} hotels")
                         hotels = [self._parse_hotel_data(h) for h in hotels_data]
                         hotels = [h for h in hotels if h]
                         if hotels:
@@ -436,9 +565,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                                 return hotels
                 except Exception as e:
                     log_agent_raw(f"❌ Amadeus failed: {str(e)}", agent_name="HotelAgent")
+                    self._update_status("Amadeus API failed")
         
         # STRATEGY 3: Mock data
         log_agent_raw("⚠️ All APIs failed, using mock data", agent_name="HotelAgent")
+        self._update_status("All APIs unavailable — using sample hotel data")
         return self._generate_mock_hotels(destination, check_in_date, check_out_date)
     
     # ─────────────────────────────────────────────────────────────────────
@@ -477,12 +608,17 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         """
         LLM curates top N hotels from wide pool + picks #1 recommendation.
         Returns (curated_hotels, recommendation_text).
+        
+        v7: Granular status updates during curation.
         """
         if len(all_hotels) <= display_max:
             log_agent_raw(
                 f"📋 Pool ({len(all_hotels)}) ≤ display_max ({display_max}), "
                 f"skipping curation — LLM will just recommend",
                 agent_name="HotelAgent"
+            )
+            self._update_status(
+                f"Analyzing {len(all_hotels)} hotels for best recommendation..."
             )
             # Still need recommendation, just no curation needed
             curated = all_hotels
@@ -504,6 +640,13 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         interested_count = sum(1 for h in all_hotels
                              if self._tag_hotel(h, preferred_chains, interested_chains) == "[INTERESTED]")
         alternative_count = len(all_hotels) - preferred_count - interested_count
+        
+        # v7: Status — LLM curation with breakdown
+        self._update_status(
+            f"AI reviewing {len(all_hotels)} hotels "
+            f"({preferred_count} preferred, {interested_count} interested, "
+            f"{alternative_count} alternatives)..."
+        )
         
         prompt = f"""You are reviewing {len(all_hotels)} hotel options to curate the best {display_max} for the user.
 
@@ -585,6 +728,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             result = self._parse_llm_json(raw_response)
             if not result:
                 log_agent_raw("⚠️ Failed to parse LLM JSON, using fallback", agent_name="HotelAgent")
+                self._update_status("AI curation parse failed — using smart fallback...")
                 return self._fallback_curate_and_recommend(
                     all_hotels, preferences, preferred_chains, interested_chains, display_max
                 )
@@ -600,6 +744,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             
             if not selected_ids or recommended_id not in valid_set:
                 log_agent_raw("⚠️ Invalid IDs from LLM, using fallback", agent_name="HotelAgent")
+                self._update_status("AI returned invalid selections — using smart fallback...")
                 return self._fallback_curate_and_recommend(
                     all_hotels, preferences, preferred_chains, interested_chains, display_max
                 )
@@ -621,6 +766,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             if not recommended_hotel:
                 recommended_hotel = curated[0]
                 recommended_id = str(recommended_hotel.id)
+            
+            # v7: Status — curation success
+            self._update_status(
+                f"AI selected {len(curated)} hotels — "
+                f"top pick: {recommended_hotel.name} at ${recommended_hotel.price_per_night:.0f}/night"
+            )
             
             # Log chain diversity in curated set
             curated_chains = {}
@@ -676,6 +827,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         
         except Exception as e:
             log_agent_raw(f"⚠️ LLM curation failed: {str(e)}", agent_name="HotelAgent")
+            self._update_status("AI curation error — using smart fallback...")
             return self._fallback_curate_and_recommend(
                 all_hotels, preferences, preferred_chains, interested_chains, display_max
             )
@@ -693,6 +845,9 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         )
         prefs_summary = self._build_preferences_summary(preferences)
         valid_ids = [str(h.id) for h in hotels]
+        
+        # v7: Status
+        self._update_status(f"AI picking best hotel from {len(hotels)} options...")
         
         prompt = f"""Here are {len(hotels)} available hotels:
 
@@ -735,6 +890,7 @@ CRITICAL RULES:
             
             result = self._parse_llm_json(raw_response)
             if not result:
+                self._update_status("AI parse failed — using smart fallback...")
                 return self._fallback_recommendation_text(hotels, preferences, preferred_chains, interested_chains)
             
             recommended_id = str(result.get("recommended_id", ""))
@@ -742,10 +898,16 @@ CRITICAL RULES:
             summary = result.get("summary", "")
             
             if recommended_id not in [str(h.id) for h in hotels]:
+                self._update_status("AI returned invalid selection — using smart fallback...")
                 return self._fallback_recommendation_text(hotels, preferences, preferred_chains, interested_chains)
             
             recommended_hotel = next(h for h in hotels if str(h.id) == recommended_id)
             tag = self._tag_hotel(recommended_hotel, preferred_chains, interested_chains)
+            
+            # v7: Status — recommendation made
+            self._update_status(
+                f"Recommended: {recommended_hotel.name} at ${recommended_hotel.price_per_night:.0f}/night"
+            )
             
             self.trip_storage.store_recommendation(
                 trip_id=self.trip_id,
@@ -778,6 +940,7 @@ CRITICAL RULES:
         
         except Exception as e:
             log_agent_raw(f"⚠️ LLM recommendation failed: {str(e)}", agent_name="HotelAgent")
+            self._update_status("AI recommendation error — using smart fallback...")
             return self._fallback_recommendation_text(hotels, preferences, preferred_chains, interested_chains)
 
     def _fallback_curate_and_recommend(
@@ -793,6 +956,7 @@ CRITICAL RULES:
         alternatives sorted by rating. Round-robin for chain diversity.
         """
         log_agent_raw("🔄 Using deterministic fallback curation", agent_name="HotelAgent")
+        self._update_status(f"Selecting top {display_max} hotels by chain preference and rating...")
         
         preferred = []
         interested = []
@@ -840,6 +1004,12 @@ CRITICAL RULES:
             recommended = curated[0] if curated else all_hotels[0]
         
         tag = self._tag_hotel(recommended, preferred_chains, interested_chains)
+        
+        # v7: Status
+        self._update_status(
+            f"Selected {len(curated)} hotels — "
+            f"top pick: {recommended.name} at ${recommended.price_per_night:.0f}/night"
+        )
         
         self.trip_storage.store_recommendation(
             trip_id=self.trip_id,
@@ -908,6 +1078,11 @@ CRITICAL RULES:
             best = max(candidates, key=lambda h: (h.google_rating or h.rating or 0))
         
         tag = self._tag_hotel(best, preferred_chains, interested_chains)
+        
+        # v7: Status
+        self._update_status(
+            f"Fallback pick: {best.name} at ${best.price_per_night:.0f}/night"
+        )
         
         self.trip_storage.store_recommendation(
             trip_id=self.trip_id,
@@ -1020,6 +1195,13 @@ CRITICAL RULES:
             f"💰 Budget: ${budget_per_night}/night (max ${max_price:.0f}) → "
             f"{len(within_budget)}/{len(hotels)} pass", agent_name="HotelAgent"
         )
+        
+        # v7: Status — budget filter results
+        self._update_status(
+            f"Budget filter: {len(within_budget)}/{len(hotels)} hotels "
+            f"within ${budget_per_night}/night"
+        )
+        
         return within_budget if within_budget else hotels
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1038,6 +1220,7 @@ CRITICAL RULES:
         """
         Enrich Google Places hotels with pricing, booking links, and metadata.
         
+        v7: Per-hotel status updates during enrichment loop.
         v5: Now passes all pricing metadata (cheapest_provider, is_estimated)
         and all booking links (not just booking_com) through to Hotel model.
         """
@@ -1045,6 +1228,7 @@ CRITICAL RULES:
         
         enriched_hotels = []
         xotelo_success_count = 0
+        total_hotels = len(google_hotels)
         
         for idx, google_hotel in enumerate(google_hotels, 1):
             hotel_name = google_hotel.get('name', 'Unknown')
@@ -1057,8 +1241,14 @@ CRITICAL RULES:
             elif chain_tier == 'interested':
                 tier_tag = " ☆[INTERESTED]"
             
-            log_agent_raw(f"🏨 Hotel {idx}/{len(google_hotels)}: {hotel_name}{tier_tag}", 
+            log_agent_raw(f"🏨 Hotel {idx}/{total_hotels}: {hotel_name}{tier_tag}", 
                         agent_name="HotelAgent")
+            
+            # v7: Per-hotel status update (every hotel for small pools, every 3rd for large)
+            if total_hotels <= 15 or idx % 3 == 1 or idx == total_hotels:
+                self._update_status(
+                    f"Retrieving pricing for {hotel_name} ({idx}/{total_hotels})..."
+                )
             
             # Try Xotelo pricing
             pricing = None
@@ -1132,6 +1322,13 @@ CRITICAL RULES:
                     f"Xotelo: {xotelo_success_count}, "
                     f"Estimated: {len(enriched_hotels) - xotelo_success_count}",
                     agent_name="HotelAgent")
+        
+        # v7: Status — enrichment complete
+        self._update_status(
+            f"Pricing complete: {len(enriched_hotels)} hotels "
+            f"({xotelo_success_count} real prices, "
+            f"{len(enriched_hotels) - xotelo_success_count} estimated)"
+        )
         
         return enriched_hotels
     

@@ -1,25 +1,30 @@
 // frontend/src/pages/Dashboard.tsx
 //
+// Changes (v5 — Three-Column Planning Layout):
+//   - Replaced 2-col NL Input + Preferences grid with 3-col layout
+//   - New right column: AgentFeedColumn (live streaming agent activity)
+//   - Fixed 380px height on desktop with internal scrolling per column
+//   - Auto-collapse to thin summary bar after trip completes (2s delay)
+//   - Click summary bar to re-expand and review agent feed / adjust prefs
+//   - Inline progress bar replaces TripStatusBar component
+//   - "Plan My Trip" button sits below the three columns
+//
 // Changes (v4 — Async Pipeline):
-//   - handlePlanTrip() now returns instantly (HTTP 202) via useTripSearch hook
-//   - Result processing moved to processResults() callback (fires when polling sees "completed")
-//   - TripStatusBar shows animated per-agent progress below "Plan My Trip" button
-//   - isPlanning = isSubmitting || isPolling (covers the full async lifecycle)
-//   - Removed direct tripApi.planTrip() call — replaced by submitTrip() from hook
+//   - handlePlanTrip() returns instantly (HTTP 202) via useTripSearch hook
+//   - Result processing in processResults() callback
+//   - isPlanning = isSubmitting || isPolling
 //
 // Changes (v3):
 //   - RestaurantCard, ActivityCard, toggleRestaurant/toggleActivity
-//   - Fix hasResults to include restaurants + activities
 //   - Auto-select AI-recommended restaurants/activities
-//   - Auto-switch to first populated tab
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ItinerarySidebar } from '../components/itinerary/ItinerarySidebar';
 import { NaturalLanguageInput } from '../components/common/NaturalLanguageInput';
 import { PreferencesPanel } from '../components/common/PreferencesPanel';
 import { PreferencesSummary } from '../components/common/PreferencesSummary';
 import { TripSummaryBar } from '../components/common/TripSummaryBar';
-import TripStatusBar from '../components/common/TripStatusBar';
+import AgentFeedColumn from '../components/common/AgentFeedColumn';
 import { FlightCard } from '../components/flight/FlightCard';
 import { HotelCard } from '../components/hotel/HotelCard';
 import { RestaurantCard } from '../components/restaurant/RestaurantCard';
@@ -51,8 +56,15 @@ export const Dashboard: React.FC = () => {
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
 
   // ════════════════════════════════════════════════════════════════════════
+  // v5: Three-column collapse/expand state + elapsed timer
+  // ════════════════════════════════════════════════════════════════════════
+  const [isPlanningCollapsed, setIsPlanningCollapsed] = useState(false);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const startTimeRef = useRef<number>(Date.now());
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ════════════════════════════════════════════════════════════════════════
   // v4: Process results — fires when Celery task completes (via polling)
-  // Same logic that was previously inside handlePlanTrip after await
   // ════════════════════════════════════════════════════════════════════════
   const processResults = useCallback((response: any) => {
     const resolvedTripId = response.tripId || response.trip_id;
@@ -140,8 +152,8 @@ export const Dashboard: React.FC = () => {
   // v4: Async trip search hook — submit + poll
   // ════════════════════════════════════════════════════════════════════════
   const {
-    submitTrip, activeTripId, pollData,
-    isSubmitting, isPolling, error: tripError, clearTrip
+    submitTrip, pollData,
+    isSubmitting, isPolling, clearTrip
   } = useTripSearch({
     onComplete: processResults,
     onError: (err) => {
@@ -151,13 +163,38 @@ export const Dashboard: React.FC = () => {
     pollInterval: 2500,
   });
 
-  // v4: Combined "is working" state for button disable
   const isPlanning = isSubmitting || isPolling;
 
-  // v3: Include all four data types in hasResults check
   const hasResults = flights.length > 0 || hotels.length > 0
     || storeRestaurants.length > 0 || storeActivities.length > 0;
 
+  // ════════════════════════════════════════════════════════════════════════
+  // v5: Elapsed timer — starts on submit, stops on completion
+  // ════════════════════════════════════════════════════════════════════════
+  useEffect(() => {
+    if (isPlanning) {
+      startTimeRef.current = Date.now();
+      setElapsedTime(0);
+      setIsPlanningCollapsed(false);
+      timerRef.current = setInterval(() => {
+        setElapsedTime(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }, 1000);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isPlanning]);
+
+  // v5: Stop timer + auto-collapse after completion
+  useEffect(() => {
+    if (pollData?.status === 'completed' || pollData?.status === 'failed') {
+      if (timerRef.current) clearInterval(timerRef.current);
+      const timeout = setTimeout(() => setIsPlanningCollapsed(true), 2000);
+      return () => clearTimeout(timeout);
+    }
+  }, [pollData?.status]);
+
+  // ── Startup cleanup ──────────────────────────────────────────────
   useEffect(() => {
     const { flights, hotels, restaurants, activities } = useTripData.getState();
     const hasAnyResults = flights.length > 0 || hotels.length > 0 ||
@@ -169,8 +206,7 @@ export const Dashboard: React.FC = () => {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ════════════════════════════════════════════════════════════════════════
-  // v4: handlePlanTrip — now instant. Just validates + submits.
-  // Result processing happens in processResults callback above.
+  // v4: handlePlanTrip — validates + submits
   // ════════════════════════════════════════════════════════════════════════
   const handlePlanTrip = async (userRequest: string) => {
     if (!tripData.destination) {
@@ -182,7 +218,6 @@ export const Dashboard: React.FC = () => {
       return;
     }
 
-    // Clear previous results
     clearTrip();
 
     await submitTrip({
@@ -206,6 +241,7 @@ export const Dashboard: React.FC = () => {
     });
   };
 
+  // ── Selection handlers ──────────────────────────────────────────
   const handleSelectFlight = (flight: any) => {
     const source = flight.id === aiRecommendedFlightId ? 'ai' : 'user';
     selectFlight(flight, source);
@@ -216,14 +252,10 @@ export const Dashboard: React.FC = () => {
     selectHotel(hotel, source);
   };
 
-  const handleToggleRestaurant = (restaurant: any) => {
-    toggleRestaurant(restaurant);
-  };
+  const handleToggleRestaurant = (restaurant: any) => toggleRestaurant(restaurant);
+  const handleToggleActivity = (activity: any) => toggleActivity(activity);
 
-  const handleToggleActivity = (activity: any) => {
-    toggleActivity(activity);
-  };
-
+  // ── Helpers ─────────────────────────────────────────────────────
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
     { id: 'hotels', label: 'Hotels', icon: '🏨', count: hotels.length },
@@ -231,21 +263,29 @@ export const Dashboard: React.FC = () => {
     { id: 'activities', label: 'Activities', icon: '🎭', count: storeActivities.length },
   ];
 
-  const isRestaurantSelected = (id: string) =>
-    selectedRestaurants.some((r) => r.id === id);
+  const isRestaurantSelected = (id: string) => selectedRestaurants.some((r) => r.id === id);
+  const isActivitySelected = (id: string) => selectedActivities.some((a) => a.id === id);
+  const isRestaurantAiRecommended = (id: string) => aiRecommendedRestaurantIds.includes(id);
+  const isActivityAiRecommended = (id: string) => aiRecommendedActivityIds.includes(id);
 
-  const isActivitySelected = (id: string) =>
-    selectedActivities.some((a) => a.id === id);
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  };
 
-  const isRestaurantAiRecommended = (id: string) =>
-    aiRecommendedRestaurantIds.includes(id);
-
-  const isActivityAiRecommended = (id: string) =>
-    aiRecommendedActivityIds.includes(id);
+  // ── Progress bar derived state ──────────────────────────────────
+  const agents = pollData?.agents || {};
+  const completedCount = Object.values(agents).filter((s) => s === 'completed').length;
+  const totalAgents = Object.keys(agents).length || 6;
+  const progressPercent = totalAgents > 0 ? (completedCount / totalAgents) * 100 : 0;
+  const isComplete = pollData?.status === 'completed';
+  const isFailed = pollData?.status === 'failed';
+  const showProgressBar = isPlanning || isComplete || isFailed;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50">
-      {/* Header */}
+      {/* ══════ Header ══════ */}
       <div className="bg-white shadow-md sticky top-0 z-40">
         <div className="px-6 lg:px-[10%] py-3 flex items-center justify-between">
           <h1 className="text-[25px] font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
@@ -263,47 +303,183 @@ export const Dashboard: React.FC = () => {
       <TripSummaryBar />
       <PreferencesSummary preferences={preferences} />
 
-      {/* Natural Language Input & Preferences */}
-      <div className="px-6 lg:px-[10%] py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          <div className="bg-white rounded-xl shadow-lg p-6 border border-gray-200">
-            <NaturalLanguageInput
-              value={naturalLanguageRequest}
-              onChange={setNaturalLanguageRequest}
-              onSubmit={handlePlanTrip}
-              isProcessing={isPlanning}
-            />
-          </div>
-          <PreferencesPanel
-            preferences={preferences}
-            onUpdate={useTripData.getState().updatePreferences}
-          />
-        </div>
+      {/* ══════════════════════════════════════════════════════════════════
+          v5: THREE-COLUMN PLANNING SECTION (collapsible)
+          ══════════════════════════════════════════════════════════════════ */}
+      <div className="px-6 lg:px-[10%] py-4">
 
-        <div className="max-w-4xl mx-auto">
-          <button
-            onClick={() => handlePlanTrip(naturalLanguageRequest)}
-            disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
-            className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-[21px] py-4 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-105 disabled:hover:scale-100 flex items-center justify-center gap-3"
+        {/* ── Collapsed Summary Bar ──────────────────────────────────── */}
+        {showProgressBar && (
+          <div
+            className="overflow-hidden transition-all duration-500 ease-in-out"
+            style={{
+              maxHeight: isPlanningCollapsed ? '48px' : '0px',
+              opacity: isPlanningCollapsed ? 1 : 0,
+              marginBottom: isPlanningCollapsed ? '16px' : '0px',
+            }}
           >
-            {isPlanning ? (
-              <>
-                <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
-                Planning Your Trip...
-              </>
-            ) : (
-              <>🚀 Plan My Trip</>
-            )}
-          </button>
+            <div
+              onClick={() => setIsPlanningCollapsed(false)}
+              className="relative h-12 overflow-hidden cursor-pointer shadow-lg rounded-xl"
+              style={{
+                background: isComplete ? '#0d1f0d' : isFailed ? '#2e1a1a' : '#1a1a2e',
+              }}
+            >
+              <div
+                className="absolute top-0 left-0 h-full transition-all duration-700"
+                style={{
+                  width: `${progressPercent}%`,
+                  background: isComplete
+                    ? 'linear-gradient(90deg, #10b981, #34d399)'
+                    : isFailed
+                      ? 'linear-gradient(90deg, #ef4444, #f87171)'
+                      : 'linear-gradient(90deg, #6c5ce7, #a855f7, #ec4899)',
+                }}
+              />
+              <div className="relative z-10 flex items-center justify-between h-full px-5">
+                <div className="flex items-center gap-2.5">
+                  {isComplete && <span className="text-emerald-400 font-bold">✓</span>}
+                  {isFailed && <span className="text-red-400 font-bold">✕</span>}
+                  <span className="text-white text-sm font-medium">
+                    {isComplete
+                      ? `Trip planned in ${formatTime(elapsedTime)}`
+                      : isFailed
+                        ? 'Planning failed'
+                        : `Planning... ${completedCount}/${totalAgents}`}
+                  </span>
+                  {/* Mini agent checkmarks */}
+                  {isComplete && (
+                    <div className="flex items-center gap-1 ml-3">
+                      {['✈️', '🏨', '🌤️', '🎭', '🍽️'].map((icon, i) => (
+                        <span key={i} className="text-xs opacity-70">{icon}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-white/40 text-[10px]">Click to expand ▼</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
-          {/* ════════════════════════════════════════════════════════════
-              v4: Animated Status Bar — shows agent progress in real-time
-              Expands during planning, collapses to summary bar when done
-              ════════════════════════════════════════════════════════════ */}
-          <TripStatusBar
-            pollData={pollData}
-            isActive={isPolling || isSubmitting}
-          />
+        {/* ── Expandable Three-Column Section ────────────────────────── */}
+        <div
+          className="transition-all duration-500 ease-in-out overflow-hidden"
+          style={{
+            maxHeight: isPlanningCollapsed ? '0px' : '600px',
+            opacity: isPlanningCollapsed ? 0 : 1,
+          }}
+        >
+          {/* Three Columns */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
+
+            {/* ── Column 1: Natural Language Input ─────────────────── */}
+            <div
+              className="lg:h-[380px] lg:overflow-y-auto rounded-xl"
+              style={{ scrollbarWidth: 'thin', scrollbarColor: '#CBD5E1 transparent' }}
+            >
+              <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-5 h-full">
+                <NaturalLanguageInput
+                  value={naturalLanguageRequest}
+                  onChange={setNaturalLanguageRequest}
+                  onSubmit={handlePlanTrip}
+                  isProcessing={isPlanning}
+                />
+              </div>
+            </div>
+
+            {/* ── Column 2: Preferences Panel ─────────────────────── */}
+            <div
+              className="lg:h-[380px] lg:overflow-y-auto rounded-xl"
+              style={{ scrollbarWidth: 'thin', scrollbarColor: '#CBD5E1 transparent' }}
+            >
+              <PreferencesPanel
+                preferences={preferences}
+                onUpdate={useTripData.getState().updatePreferences}
+              />
+            </div>
+
+            {/* ── Column 3: Live Agent Feed ────────────────────────── */}
+            <div className="lg:h-[380px]">
+              <AgentFeedColumn
+                pollData={pollData}
+                isActive={isPlanning}
+              />
+            </div>
+          </div>
+
+          {/* ── Plan My Trip Button ──────────────────────────────────── */}
+          <div className="max-w-full">
+            <button
+              onClick={() => handlePlanTrip(naturalLanguageRequest)}
+              disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
+              className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-[21px] py-4 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-[1.02] disabled:hover:scale-100 flex items-center justify-center gap-3"
+            >
+              {isPlanning ? (
+                <>
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
+                  Planning Your Trip...
+                </>
+              ) : (
+                <>🚀 Plan My Trip</>
+              )}
+            </button>
+
+            {/* ── Inline Progress Bar (during/after planning) ────── */}
+            {showProgressBar && !isPlanningCollapsed && (
+              <div className="mt-3">
+                <div
+                  className="relative h-10 overflow-hidden shadow-lg rounded-xl cursor-pointer"
+                  style={{
+                    background: isComplete ? '#0d1f0d' : isFailed ? '#2e1a1a' : '#1a1a2e',
+                  }}
+                  onClick={() => {
+                    if (isComplete || isFailed) setIsPlanningCollapsed(true);
+                  }}
+                >
+                  <div
+                    className="absolute top-0 left-0 h-full transition-all duration-700 ease-out"
+                    style={{
+                      width: `${isPlanning ? Math.max(progressPercent, 5) : progressPercent}%`,
+                      background: isComplete
+                        ? 'linear-gradient(90deg, #10b981, #34d399)'
+                        : isFailed
+                          ? 'linear-gradient(90deg, #ef4444, #f87171)'
+                          : 'linear-gradient(90deg, #6c5ce7 0%, #a855f7 50%, #ec4899 100%)',
+                    }}
+                  />
+                  <div className="relative z-10 flex items-center justify-between h-full px-4">
+                    <div className="flex items-center gap-2">
+                      {isPlanning && (
+                        <div className="animate-spin w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full" />
+                      )}
+                      {isComplete && <span className="text-emerald-400 font-bold text-sm">✓</span>}
+                      {isFailed && <span className="text-red-400 font-bold text-sm">✕</span>}
+                      <span className="text-white text-xs font-medium">
+                        {isComplete
+                          ? `Trip planned in ${formatTime(elapsedTime)}`
+                          : isFailed
+                            ? 'Planning failed'
+                            : `${completedCount}/${totalAgents} agents complete`}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {isPlanning && (
+                        <span className="text-white/50 text-[11px] font-mono tabular-nums">
+                          {formatTime(elapsedTime)}
+                        </span>
+                      )}
+                      {(isComplete || isFailed) && (
+                        <span className="text-white/40 text-[10px]">▲ Collapse</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
