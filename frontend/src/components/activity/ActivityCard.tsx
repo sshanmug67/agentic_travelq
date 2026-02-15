@@ -1,15 +1,8 @@
 // frontend/src/components/activity/ActivityCard.tsx
 //
-// v2 — Click-to-expand + Add button + Rich Expanded View
-//
-// Interaction model (same as FlightCard/HotelCard v5):
-//   - Click card → expand/collapse details
-//   - Click "Add to Itinerary" button → select for itinerary
-//
-// Summary (collapsed): photo, name, rating, category, venue type, address
-// Expanded: guest reviews, location & contact, opening hours
+// v3 — focusedItemId prop: when matched, auto-expand + scroll into view
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Activity, HotelReview } from '../../types/trip';
 
@@ -18,6 +11,7 @@ interface ActivityCardProps {
   isSelected: boolean;
   isAiRecommended?: boolean;
   onToggle: () => void;
+  focusedItemId?: string | null;
 }
 
 export const ActivityCard: React.FC<ActivityCardProps> = ({
@@ -25,8 +19,24 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
   isSelected,
   isAiRecommended = false,
   onToggle,
+  focusedItemId,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isFocusHighlight, setIsFocusHighlight] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // ── Focus: auto-expand + scroll when focusedItemId matches ──────
+  useEffect(() => {
+    if (focusedItemId && String(activity.id) === String(focusedItemId)) {
+      setIsExpanded(true);
+      setIsFocusHighlight(true);
+      requestAnimationFrame(() => {
+        cardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      const timer = setTimeout(() => setIsFocusHighlight(false), 1200);
+      return () => clearTimeout(timer);
+    }
+  }, [focusedItemId, activity.id]);
 
   const toggleExpand = () => setIsExpanded((prev) => !prev);
 
@@ -89,25 +99,27 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
 
   return (
     <motion.div
+      ref={cardRef}
       layout
       transition={{ duration: 0.2 }}
       className={`rounded-lg overflow-hidden cursor-pointer transition-all duration-200 ${
-        isAiRecommended
-          ? 'ring-2 ring-amber-400 shadow-lg ' + (isSelected ? 'bg-gradient-to-br from-amber-50 to-yellow-50' : 'bg-white')
-          : isSelected
-            ? 'ring-2 ring-blue-500 shadow-lg bg-gradient-to-br from-blue-50 to-indigo-50'
-            : 'hover:shadow-md bg-white border border-gray-200'
+        isFocusHighlight
+          ? 'ring-2 ring-purple-500 shadow-xl bg-purple-50/40'
+          : isAiRecommended
+            ? 'ring-2 ring-amber-400 shadow-lg ' + (isSelected ? 'bg-gradient-to-br from-amber-50 to-yellow-50' : 'bg-white')
+            : isSelected
+              ? 'ring-2 ring-blue-500 shadow-lg bg-gradient-to-br from-blue-50 to-indigo-50'
+              : 'hover:shadow-md bg-white border border-gray-200'
       }`}
       onClick={toggleExpand}
     >
-      {/* AI Recommended Banner — always visible when AI pick */}
       {isAiRecommended && (
         <div className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-400 px-3 py-1 flex items-center justify-center gap-1.5">
           <span className="text-[12px] font-bold text-amber-900 tracking-wide">✨ AI Recommended</span>
         </div>
       )}
       <div className="flex gap-3 p-4">
-        {/* Activity Photo */}
+        {/* Photo */}
         <div className="w-20 h-20 rounded-lg overflow-hidden bg-gray-200 flex-shrink-0 relative">
           {activity.photos && activity.photos.length > 0 ? (
             <img src={activity.photos[0].url} alt={activity.name} className="w-full h-full object-cover" />
@@ -116,22 +128,18 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
               {getCategoryIcon(activity.category)}
             </div>
           )}
-          {/* Category icon overlay */}
           <div className="absolute top-1 right-1 bg-white/90 backdrop-blur-sm rounded-full px-1.5 py-0.5 text-[10px]">
             {getCategoryIcon(activity.category)}
           </div>
         </div>
 
-        {/* Activity Details */}
+        {/* Details */}
         <div className="flex-1 min-w-0">
-          {/* Row 1: Name ... Price + Add */}
           <div className="flex items-start justify-between gap-2 mb-1.5">
             <div className="flex items-center gap-1.5 min-w-0">
               <h3 className="font-bold text-[14px] text-gray-800 truncate">{activity.name}</h3>
               {isAiRecommended && (
-                <span className="flex-shrink-0 bg-amber-100 text-amber-700 text-[11px] font-semibold px-1.5 py-0.5 rounded-full">
-                  AI Pick
-                </span>
+                <span className="flex-shrink-0 bg-amber-100 text-amber-700 text-[11px] font-semibold px-1.5 py-0.5 rounded-full">AI Pick</span>
               )}
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
@@ -153,7 +161,6 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
             </div>
           </div>
 
-          {/* Row 2: Rating + badges */}
           <div className="flex items-center gap-2 mb-1.5 flex-wrap">
             <div className="flex items-center gap-1">
               <span className="text-yellow-500 text-[12px]">⭐</span>
@@ -183,7 +190,6 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
             )}
           </div>
 
-          {/* Row 3: Address + expand hint */}
           <div className="flex items-center justify-between">
             <div className="text-[11px] text-gray-500 truncate">📍 {activity.address}</div>
             <span className="text-purple-500 text-[10px] flex items-center gap-0.5 flex-shrink-0 ml-2">
@@ -198,9 +204,7 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
         </div>
       </div>
 
-      {/* ═══════════════════════════════════════════════════════════════
-          EXPANDED VIEW
-          ═══════════════════════════════════════════════════════════════ */}
+      {/* EXPANDED */}
       <AnimatePresence initial={false}>
         {isExpanded && (
           <motion.div
@@ -213,12 +217,9 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
             <div className="px-4 pb-4 space-y-3">
               <div className="border-t border-gray-200 pt-3"></div>
 
-              {/* Guest Reviews */}
               {activity.reviews && activity.reviews.length > 0 && (
                 <div className="bg-gray-50 rounded-lg p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                    Visitor Reviews
-                  </p>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Visitor Reviews</p>
                   <div className="space-y-2">
                     {activity.reviews.slice(0, 3).map((review, idx) => (
                       <ReviewSnippet key={idx} review={review} />
@@ -227,12 +228,9 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
                 </div>
               )}
 
-              {/* Location & Contact */}
               {(activity.google_url || activity.website || activity.phone_number || activity.opening_hours) && (
                 <div className="bg-gray-50 rounded-lg p-3">
-                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                    Details & Contact
-                  </p>
+                  <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Details & Contact</p>
                   <div className="space-y-1.5 text-[12px]">
                     {activity.opening_hours && (
                       <div className="flex justify-between">
@@ -243,35 +241,19 @@ export const ActivityCard: React.FC<ActivityCardProps> = ({
                     {activity.phone_number && (
                       <div className="flex justify-between">
                         <span className="text-gray-500">Phone</span>
-                        <a
-                          href={`tel:${activity.phone_number}`}
-                          onClick={(e) => e.stopPropagation()}
-                          className="font-semibold text-purple-600 hover:underline"
-                        >
+                        <a href={`tel:${activity.phone_number}`} onClick={(e) => e.stopPropagation()} className="font-semibold text-purple-600 hover:underline">
                           {activity.phone_number}
                         </a>
                       </div>
                     )}
                     <div className="flex items-center gap-2 mt-1">
                       {activity.google_url && (
-                        <a
-                          href={activity.google_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded hover:bg-blue-100 font-medium"
-                        >
+                        <a href={activity.google_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-[11px] bg-blue-50 text-blue-700 border border-blue-200 px-2 py-1 rounded hover:bg-blue-100 font-medium">
                           📍 Google Maps
                         </a>
                       )}
                       {activity.website && (
-                        <a
-                          href={activity.website}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="text-[11px] bg-gray-100 text-gray-700 border border-gray-200 px-2 py-1 rounded hover:bg-gray-200 font-medium"
-                        >
+                        <a href={activity.website} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-[11px] bg-gray-100 text-gray-700 border border-gray-200 px-2 py-1 rounded hover:bg-gray-200 font-medium">
                           🌐 Website
                         </a>
                       )}

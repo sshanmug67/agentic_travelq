@@ -55,7 +55,8 @@ export const Dashboard: React.FC = () => {
   const [aiRecommendedActivityIds, setAiRecommendedActivityIds] = useState<string[]>([]);
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
   const [feedResetKey, setFeedResetKey] = useState(0);
-  
+  const [focusedItemId, setFocusedItemId] = useState<string | null>(null);
+
   const [isPlanningCollapsed, setIsPlanningCollapsed] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const startTimeRef = useRef<number>(Date.now());
@@ -249,6 +250,16 @@ export const Dashboard: React.FC = () => {
 
   const handleToggleRestaurant = (restaurant: any) => toggleRestaurant(restaurant);
   const handleToggleActivity = (activity: any) => toggleActivity(activity);
+
+  // v6: When user clicks an item on the itinerary sidebar, switch tab + focus that card
+  const handleItineraryItemClick = (tab: 'flights' | 'hotels' | 'restaurants' | 'activities', itemId?: string) => {
+    setActiveResultsTab(tab);
+    setFocusedItemId(itemId || null);
+    // Clear focus after a short delay so re-clicking the same item works
+    if (itemId) {
+      setTimeout(() => setFocusedItemId(null), 1500);
+    }
+  };
 
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
@@ -711,6 +722,7 @@ export const Dashboard: React.FC = () => {
                             isSelected={selectedFlight?.id === flight.id}
                             isAiRecommended={flight.id === aiRecommendedFlightId}
                             onSelect={() => handleSelectFlight(flight)}
+                            focusedItemId={focusedItemId}
                           />
                         ))}
                       </div>
@@ -738,6 +750,7 @@ export const Dashboard: React.FC = () => {
                             isSelected={selectedHotel?.id === hotel.id}
                             isAiRecommended={hotel.id === aiRecommendedHotelId}
                             onSelect={() => handleSelectHotel(hotel)}
+                            focusedItemId={focusedItemId}
                           />
                         ))}
                       </div>
@@ -766,6 +779,7 @@ export const Dashboard: React.FC = () => {
                               isSelected={isRestaurantSelected(restaurant.id)}
                               isAiRecommended={isRestaurantAiRecommended(restaurant.id)}
                               onToggle={() => handleToggleRestaurant(restaurant)}
+                              focusedItemId={focusedItemId}
                             />
                           ))}
                         </div>
@@ -801,6 +815,7 @@ export const Dashboard: React.FC = () => {
                               isSelected={isActivitySelected(activity.id)}
                               isAiRecommended={isActivityAiRecommended(activity.id)}
                               onToggle={() => handleToggleActivity(activity)}
+                              focusedItemId={focusedItemId}
                             />
                           ))}
                         </div>
@@ -828,7 +843,7 @@ export const Dashboard: React.FC = () => {
           </div>
 
           <div className="lg:col-span-2">
-            <ItinerarySidebar onSectionClick={setActiveResultsTab} />
+            <ItinerarySidebar onSectionClick={handleItineraryItemClick} />
           </div>
         </div>
       </div>

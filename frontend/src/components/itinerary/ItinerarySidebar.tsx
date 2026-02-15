@@ -1,16 +1,11 @@
 // frontend/src/components/itinerary/ItinerarySidebar.tsx
 //
-// Changes (v4 — Clickable Sections):
-//   - New optional `onSectionClick` prop: fires with 'flights' | 'hotels' | 'restaurants' | 'activities'
-//   - Clicking a section header or any item card switches the left-side results tab
-//   - Hover cursor + subtle highlight on clickable sections
+// v4 — Clickable items: sends (tab, itemId) so the left panel
+//       switches tab AND expands the specific card.
+//   - Section headers send tab only → switches tab
+//   - Clicking a specific card sends tab + itemId → switches + focuses
 //   - "Add more" buttons also trigger section switch
-//
-// Changes (v3 — Header + Consistent Backgrounds):
-//   - Added "Your Itinerary" header with gradient and compass icon
-//   - All sections share consistent itinerary-paper background treatment
-//   - Compact layout preserved from v2
-//   - Restaurants & Activities: grid-cols-2 layout
+//   - Hover highlights on clickable items
 
 import React from 'react';
 import { ItineraryFlightCard } from './ItineraryFlightCard';
@@ -23,7 +18,7 @@ import '../../styles/itinerary.css';
 type ResultsTab = 'flights' | 'hotels' | 'restaurants' | 'activities';
 
 interface ItinerarySidebarProps {
-  onSectionClick?: (tab: ResultsTab) => void;
+  onSectionClick?: (tab: ResultsTab, itemId?: string) => void;
 }
 
 export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionClick }) => {
@@ -33,10 +28,11 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
     onSectionClick?.(tab);
   };
 
-  // Shared wrapper styles for clickable sections
-  const sectionClass =
-    'mb-3 rounded-lg transition-colors duration-150' +
-    (onSectionClick ? ' cursor-pointer hover:bg-purple-50/40' : '');
+  const handleItemClick = (tab: ResultsTab, itemId: string) => {
+    onSectionClick?.(tab, itemId);
+  };
+
+  const clickable = !!onSectionClick;
 
   return (
     <div className="itinerary-paper h-full overflow-y-auto sticky top-0">
@@ -54,17 +50,25 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
       <div className="pt-2 px-4 pb-4">
 
         {/* ── Flight ─────────────────────────────────── */}
-        <div
-          className={sectionClass}
-          onClick={() => handleSectionClick('flights')}
-        >
-          <h3 className="handwritten-subtitle text-lg mb-1.5 sketch-underline">
+        <div className="mb-3">
+          <h3
+            className={`handwritten-subtitle text-lg mb-1.5 sketch-underline${clickable ? ' cursor-pointer hover:text-purple-700 transition-colors' : ''}`}
+            onClick={() => handleSectionClick('flights')}
+          >
             ✈️ Flight
           </h3>
           {flight ? (
-            <ItineraryFlightCard flight={flight} onDelete={() => removeItem('flight')} />
+            <div
+              className={clickable ? 'cursor-pointer rounded-lg transition-all hover:ring-2 hover:ring-purple-200' : ''}
+              onClick={() => flight.id && handleItemClick('flights', String(flight.id))}
+            >
+              <ItineraryFlightCard flight={flight} onDelete={() => removeItem('flight')} />
+            </div>
           ) : (
-            <div className="empty-doodle !py-3 !text-[13px]">
+            <div
+              className={`empty-doodle !py-3 !text-[13px]${clickable ? ' cursor-pointer hover:border-purple-300' : ''}`}
+              onClick={() => handleSectionClick('flights')}
+            >
               <div className="text-base mb-1">✈️</div>
               <div>No flight selected</div>
             </div>
@@ -72,17 +76,25 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
         </div>
 
         {/* ── Hotel ──────────────────────────────────── */}
-        <div
-          className={sectionClass}
-          onClick={() => handleSectionClick('hotels')}
-        >
-          <h3 className="handwritten-subtitle text-lg mb-1.5 sketch-underline">
+        <div className="mb-3">
+          <h3
+            className={`handwritten-subtitle text-lg mb-1.5 sketch-underline${clickable ? ' cursor-pointer hover:text-purple-700 transition-colors' : ''}`}
+            onClick={() => handleSectionClick('hotels')}
+          >
             🏨 Hotel
           </h3>
           {hotel ? (
-            <ItineraryHotelCard hotel={hotel} onDelete={() => removeItem('hotel')} />
+            <div
+              className={clickable ? 'cursor-pointer rounded-lg transition-all hover:ring-2 hover:ring-purple-200' : ''}
+              onClick={() => hotel.id && handleItemClick('hotels', String(hotel.id))}
+            >
+              <ItineraryHotelCard hotel={hotel} onDelete={() => removeItem('hotel')} />
+            </div>
           ) : (
-            <div className="empty-doodle !py-3 !text-[13px]">
+            <div
+              className={`empty-doodle !py-3 !text-[13px]${clickable ? ' cursor-pointer hover:border-purple-300' : ''}`}
+              onClick={() => handleSectionClick('hotels')}
+            >
               <div className="text-base mb-1">🏨</div>
               <div>No hotel selected</div>
             </div>
@@ -90,11 +102,11 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
         </div>
 
         {/* ── Restaurants — 2-col grid ───────────────── */}
-        <div
-          className={`mb-6 rounded-lg transition-colors duration-150${onSectionClick ? ' cursor-pointer hover:bg-purple-50/40' : ''}`}
-          onClick={() => handleSectionClick('restaurants')}
-        >
-          <h3 className="handwritten-subtitle text-lg mb-1 sketch-underline">
+        <div className="mb-6">
+          <h3
+            className={`handwritten-subtitle text-lg mb-1 sketch-underline${clickable ? ' cursor-pointer hover:text-purple-700 transition-colors' : ''}`}
+            onClick={() => handleSectionClick('restaurants')}
+          >
             🍽️ Restaurants {restaurants.length > 0 && (
               <span className="text-[13px] text-gray-500 ml-1">({restaurants.length})</span>
             )}
@@ -103,27 +115,32 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
             <>
               <div className="grid grid-cols-2 gap-4">
                 {restaurants.map((restaurant) => (
-                  <ItineraryRestaurantCard
+                  <div
                     key={restaurant.id}
-                    restaurant={restaurant}
-                    onDelete={() => removeItem('restaurant', restaurant.id)}
-                  />
+                    className={clickable ? 'cursor-pointer rounded-lg transition-all hover:ring-2 hover:ring-purple-200' : ''}
+                    onClick={() => handleItemClick('restaurants', String(restaurant.id))}
+                  >
+                    <ItineraryRestaurantCard
+                      restaurant={restaurant}
+                      onDelete={() => removeItem('restaurant', restaurant.id)}
+                    />
+                  </div>
                 ))}
               </div>
               {restaurants.length < 10 && (
                 <button
                   className="w-full mt-1.5 text-[12px] text-purple-600 hover:text-purple-700 handwritten"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSectionClick('restaurants');
-                  }}
+                  onClick={() => handleSectionClick('restaurants')}
                 >
                   + Add more
                 </button>
               )}
             </>
           ) : (
-            <div className="empty-doodle !py-3 !text-[13px]">
+            <div
+              className={`empty-doodle !py-3 !text-[13px]${clickable ? ' cursor-pointer hover:border-purple-300' : ''}`}
+              onClick={() => handleSectionClick('restaurants')}
+            >
               <div className="text-base mb-1">🍽️</div>
               <div>Add restaurants to your trip</div>
             </div>
@@ -131,11 +148,11 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
         </div>
 
         {/* ── Activities — 2-col grid ────────────────── */}
-        <div
-          className={`mb-6 rounded-lg transition-colors duration-150${onSectionClick ? ' cursor-pointer hover:bg-purple-50/40' : ''}`}
-          onClick={() => handleSectionClick('activities')}
-        >
-          <h3 className="handwritten-subtitle text-lg mb-1 sketch-underline">
+        <div className="mb-6">
+          <h3
+            className={`handwritten-subtitle text-lg mb-1 sketch-underline${clickable ? ' cursor-pointer hover:text-purple-700 transition-colors' : ''}`}
+            onClick={() => handleSectionClick('activities')}
+          >
             🎭 Activities {activities.length > 0 && (
               <span className="text-[13px] text-gray-500 ml-1">({activities.length})</span>
             )}
@@ -144,27 +161,32 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
             <>
               <div className="grid grid-cols-2 gap-4">
                 {activities.map((activity) => (
-                  <ItineraryActivityCard
+                  <div
                     key={activity.id}
-                    activity={activity}
-                    onDelete={() => removeItem('activity', activity.id)}
-                  />
+                    className={clickable ? 'cursor-pointer rounded-lg transition-all hover:ring-2 hover:ring-purple-200' : ''}
+                    onClick={() => handleItemClick('activities', String(activity.id))}
+                  >
+                    <ItineraryActivityCard
+                      activity={activity}
+                      onDelete={() => removeItem('activity', activity.id)}
+                    />
+                  </div>
                 ))}
               </div>
               {activities.length < 10 && (
                 <button
                   className="w-full mt-1.5 text-[12px] text-purple-600 hover:text-purple-700 handwritten"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleSectionClick('activities');
-                  }}
+                  onClick={() => handleSectionClick('activities')}
                 >
                   + Add more
                 </button>
               )}
             </>
           ) : (
-            <div className="empty-doodle !py-3 !text-[13px]">
+            <div
+              className={`empty-doodle !py-3 !text-[13px]${clickable ? ' cursor-pointer hover:border-purple-300' : ''}`}
+              onClick={() => handleSectionClick('activities')}
+            >
               <div className="text-base mb-1">🎭</div>
               <div>Add activities to your trip</div>
             </div>
@@ -220,7 +242,6 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
             </div>
           </div>
 
-          {/* Progress bar */}
           <div className="mt-2">
             <div className="h-2.5 bg-gray-200 rounded-full overflow-hidden">
               <div
@@ -234,14 +255,12 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
           </div>
         </div>
 
-        {/* Action Buttons — compact */}
         <div className="mt-4 space-y-2">
           <button className="sticky-button w-full !py-2 !text-[13px]">📧 Email Itinerary</button>
           <button className="sticky-button w-full !py-2 !text-[13px]">💾 Save Trip</button>
           <button className="sticky-button w-full !py-2 !text-[13px]">📤 Share with Friends</button>
         </div>
 
-        {/* Footer doodles */}
         <div className="mt-4 text-center opacity-30">
           <div className="handwritten text-xl">✈️ 🌍 🗺️ 📸 ⭐</div>
         </div>
