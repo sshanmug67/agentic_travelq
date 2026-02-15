@@ -1,7 +1,12 @@
 // frontend/src/components/common/PreferencesPanel.tsx
 //
-// v5 — Compact header matching Agent Feed / NL Input style
-// Only the header block changed from v4.
+// v6 — Compact controls matching Agent Feed density
+//   - Tab row: smaller text, tighter padding, reduced icon size
+//   - Chips: smaller padding, smaller font, inline star/remove
+//   - Input row: shorter height, smaller font
+//   - Suggestions: tighter pills
+//   - Activity/Restaurant settings: condensed spacing
+//   - Overall: less vertical padding between sections
 
 import React, { useState } from 'react';
 
@@ -104,16 +109,24 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
     return ((preferences[key] as Preference[]) || []).length;
   };
 
+  // ── Shared compact pill button style ──────────────────────────
+  const pillClass = (isSelected: boolean) =>
+    `text-[10px] px-2 py-1 rounded-full font-medium transition-all border leading-none ${
+      isSelected
+        ? 'bg-purple-100 border-purple-300 text-purple-800'
+        : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-100'
+    }`;
+
   return (
-    <div className="bg-white rounded-xl shadow-lg border-2 border-gray-300 overflow-hidden">
-      {/* v5: Compact header — matching Agent Feed / NL Input style */}
+    <div className="bg-white rounded-xl shadow-lg border-2 border-gray-300 overflow-hidden flex flex-col h-full">
+      {/* ── Header ─────────────────────────────────────────────── */}
       <div className="px-4 py-2.5 border-b-2 border-gray-200 flex items-center gap-2 flex-shrink-0 bg-gradient-to-r from-gray-50 to-white">
         <span className="text-base">⚙️</span>
         <span className="text-[15px] font-bold text-gray-800">Preferences</span>
       </div>
 
-      {/* Tab Headers */}
-      <div className="flex border-b bg-gradient-to-r from-purple-50 to-pink-50">
+      {/* ── Tab Headers (compact) ──────────────────────────────── */}
+      <div className="flex border-b bg-gradient-to-r from-purple-50 to-pink-50 flex-shrink-0">
         {tabs.map((tab) => {
           const count = getTabCount(tab.id);
           return (
@@ -123,18 +136,18 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                 setActiveTab(tab.id);
                 setNewItem('');
               }}
-              className={`flex-1 px-3 py-3 text-sm font-medium transition-all duration-300 relative ${
+              className={`flex-1 px-2 py-2 text-[11px] font-medium transition-all duration-300 relative ${
                 activeTab === tab.id
                   ? 'text-purple-700 bg-white'
                   : 'text-gray-600 hover:text-purple-600 hover:bg-white/50'
               }`}
             >
               <span className="flex items-center justify-center gap-1">
-                <span className="text-lg">{tab.icon}</span>
+                <span className="text-sm">{tab.icon}</span>
                 <span className="hidden sm:inline">{tab.label}</span>
                 {count > 0 && (
                   <span
-                    className={`text-[11px] min-w-[18px] h-[18px] flex items-center justify-center rounded-full font-semibold ${
+                    className={`text-[9px] min-w-[15px] h-[15px] flex items-center justify-center rounded-full font-semibold ${
                       activeTab === tab.id
                         ? 'bg-purple-200 text-purple-800'
                         : 'bg-gray-200 text-gray-600'
@@ -145,16 +158,19 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                 )}
               </span>
               {activeTab === tab.id && (
-                <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-600 to-pink-600" />
+                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-600 to-pink-600" />
               )}
             </button>
           );
         })}
       </div>
 
-      {/* Tab Content */}
-      <div className="p-4">
-        {/* ── Activity Settings (only on Activities tab) ───────────────── */}
+      {/* ── Tab Content (scrollable) ─────────────────────────── */}
+      <div
+        className="flex-1 overflow-y-auto px-3 py-2.5"
+        style={{ scrollbarWidth: 'thin', scrollbarColor: '#CBD5E1 transparent' }}
+      >
+        {/* ── Activity Settings (compact) ──────────────────────── */}
         {activeTab === 'activities' && (() => {
           const ap = preferences.activityPrefs || {
             pace: 'moderate',
@@ -176,10 +192,10 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
           ];
 
           const hoursOptions = [
-            { value: 4, label: '4 hrs' },
-            { value: 6, label: '6 hrs' },
-            { value: 8, label: '8 hrs' },
-            { value: 10, label: '10 hrs' },
+            { value: 4, label: '4h' },
+            { value: 6, label: '6h' },
+            { value: 8, label: '8h' },
+            { value: 10, label: '10h' },
           ];
 
           const updateActivityPrefs = (patch: Partial<ActivityPrefs>) => {
@@ -202,24 +218,20 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
           };
 
           return (
-            <div className="mb-3 border border-gray-200 rounded-xl p-3 space-y-3">
-              <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+            <div className="mb-2 border border-gray-200 rounded-lg p-2 space-y-2">
+              <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider">
                 Activity Settings
               </div>
 
-              <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-[11px] text-gray-500 mb-1.5">Hours / Day</div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="text-[9px] text-gray-500 mb-1">Hours / Day</div>
+                  <div className="flex flex-wrap gap-1">
                     {hoursOptions.map((opt) => (
                       <button
                         key={opt.value}
                         onClick={() => updateActivityPrefs({ entertainmentHoursPerDay: opt.value })}
-                        className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${
-                          ap.entertainmentHoursPerDay === opt.value
-                            ? 'bg-purple-100 border-purple-300 text-purple-800'
-                            : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-100'
-                        }`}
+                        className={pillClass(ap.entertainmentHoursPerDay === opt.value)}
                       >
                         {opt.label}
                       </button>
@@ -227,17 +239,13 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                   </div>
                 </div>
                 <div>
-                  <div className="text-[11px] text-gray-500 mb-1.5">Pace</div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="text-[9px] text-gray-500 mb-1">Pace</div>
+                  <div className="flex flex-wrap gap-1">
                     {paceOptions.map((opt) => (
                       <button
                         key={opt.value}
                         onClick={() => updateActivityPrefs({ pace: opt.value })}
-                        className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${
-                          ap.pace === opt.value
-                            ? 'bg-purple-100 border-purple-300 text-purple-800'
-                            : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-100'
-                        }`}
+                        className={pillClass(ap.pace === opt.value)}
                       >
                         {opt.label}
                       </button>
@@ -247,19 +255,15 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
               </div>
 
               <div>
-                <div className="text-[11px] text-gray-500 mb-1.5">Preferred Time</div>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="text-[9px] text-gray-500 mb-1">Preferred Time</div>
+                <div className="flex flex-wrap gap-1">
                   {timeOptions.map((opt) => {
                     const isSelected = (ap.preferredTimes || []).includes(opt.value);
                     return (
                       <button
                         key={opt.value}
                         onClick={() => toggleTime(opt.value)}
-                        className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${
-                          isSelected
-                            ? 'bg-purple-100 border-purple-300 text-purple-800'
-                            : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-100'
-                        }`}
+                        className={pillClass(isSelected)}
                       >
                         {opt.label}
                       </button>
@@ -271,7 +275,7 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
           );
         })()}
 
-        {/* ── Restaurant Settings (only on Restaurant tab) ─────────────── */}
+        {/* ── Restaurant Settings (compact) ────────────────────── */}
         {activeTab === 'restaurant' && (() => {
           const rp = preferences.restaurantPrefs || {
             meals: ['lunch', 'dinner'],
@@ -287,9 +291,9 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
 
           const priceOptions = [
             { value: 'budget', label: '$ Budget' },
-            { value: 'moderate', label: '$$ Mid-range' },
-            { value: 'upscale', label: '$$$ Upscale' },
-            { value: 'fine_dining', label: '$$$$ Fine Dining' },
+            { value: 'moderate', label: '$$ Mid' },
+            { value: 'upscale', label: '$$$ Up' },
+            { value: 'fine_dining', label: '$$$$ Fine' },
           ];
 
           const updateRestaurantPrefs = (patch: Partial<RestaurantPrefs>) => {
@@ -313,26 +317,22 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
           };
 
           return (
-            <div className="mb-3 border border-gray-200 rounded-xl p-3 space-y-3">
-              <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+            <div className="mb-2 border border-gray-200 rounded-lg p-2 space-y-2">
+              <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider">
                 Dining Settings
               </div>
 
-              <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-[11px] text-gray-500 mb-1.5">Meals</div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="text-[9px] text-gray-500 mb-1">Meals</div>
+                  <div className="flex flex-wrap gap-1">
                     {mealOptions.map((opt) => {
                       const isSelected = (rp.meals || []).includes(opt.value);
                       return (
                         <button
                           key={opt.value}
                           onClick={() => toggleMeal(opt.value)}
-                          className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${
-                            isSelected
-                              ? 'bg-purple-100 border-purple-300 text-purple-800'
-                              : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={pillClass(isSelected)}
                         >
                           {opt.label}
                         </button>
@@ -341,19 +341,15 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                   </div>
                 </div>
                 <div>
-                  <div className="text-[11px] text-gray-500 mb-1.5">Price Level</div>
-                  <div className="flex flex-wrap gap-1.5">
+                  <div className="text-[9px] text-gray-500 mb-1">Price Level</div>
+                  <div className="flex flex-wrap gap-1">
                     {priceOptions.map((opt) => {
                       const isSelected = (rp.priceLevel || []).includes(opt.value);
                       return (
                         <button
                           key={opt.value}
                           onClick={() => togglePrice(opt.value)}
-                          className={`text-xs px-3 py-1.5 rounded-full font-medium transition-all border ${
-                            isSelected
-                              ? 'bg-purple-100 border-purple-300 text-purple-800'
-                              : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-100'
-                          }`}
+                          className={pillClass(isSelected)}
                         >
                           {opt.label}
                         </button>
@@ -366,17 +362,17 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
           );
         })()}
 
-        {/* ── Selected Items (Chip Cloud) ──────────────────────────────── */}
+        {/* ── Selected Items (compact chips) ───────────────────── */}
         {items.length > 0 ? (
-          <div className="mb-3">
-            <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
+          <div className="mb-2">
+            <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
               Selected
             </div>
-            <div className="flex flex-wrap gap-2 border border-gray-200 rounded-xl p-3">
+            <div className="flex flex-wrap gap-1.5 border border-gray-200 rounded-lg p-2">
               {items.map((item) => (
                 <div
                   key={item.name}
-                  className={`group inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all duration-200 border ${
+                  className={`group inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium transition-all duration-200 border leading-none ${
                     item.preferred
                       ? 'bg-purple-100 border-purple-300 text-purple-800'
                       : 'bg-gray-100 border-gray-200 text-gray-700 hover:border-gray-300'
@@ -384,7 +380,7 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                 >
                   <button
                     onClick={() => togglePreferred(item.name)}
-                    className="text-base leading-none transition-transform hover:scale-125"
+                    className="text-xs leading-none transition-transform hover:scale-125"
                     title={item.preferred ? 'Remove priority' : 'Mark as priority'}
                   >
                     {item.preferred ? '⭐' : '☆'}
@@ -393,14 +389,14 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                   <span>{item.name}</span>
 
                   {item.preferred && (
-                    <span className="text-[10px] bg-yellow-200 text-yellow-800 px-1.5 py-0.5 rounded-full font-semibold">
+                    <span className="text-[8px] bg-yellow-200 text-yellow-800 px-1 py-0.5 rounded-full font-semibold leading-none">
                       Priority
                     </span>
                   )}
 
                   <button
                     onClick={() => removeItem(item.name)}
-                    className="text-gray-400 hover:text-red-500 transition-colors ml-0.5 text-base leading-none"
+                    className="text-gray-400 hover:text-red-500 transition-colors text-xs leading-none"
                     title="Remove"
                   >
                     ×
@@ -410,47 +406,47 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
             </div>
           </div>
         ) : (
-          <div className="flex flex-col items-center justify-center py-6 text-gray-400 mb-3">
-            <div className="text-3xl mb-1">
+          <div className="flex flex-col items-center justify-center py-4 text-gray-400 mb-2">
+            <div className="text-2xl mb-1">
               {tabs.find((t) => t.id === activeTab)?.icon}
             </div>
-            <p className="text-sm">
+            <p className="text-[11px]">
               No {activeTab === 'restaurant' ? 'cuisine' : activeTab} preferences yet
             </p>
           </div>
         )}
 
-        {/* ── Add Input ───────────────────────────────────────────────── */}
-        <div className="flex gap-2 items-center">
+        {/* ── Add Input (compact) ──────────────────────────────── */}
+        <div className="flex gap-1.5 items-center">
           <input
             type="text"
             value={newItem}
             onChange={(e) => setNewItem(e.target.value)}
             onKeyPress={handleKeyPress}
             placeholder={`Add ${activeTab === 'restaurant' ? 'cuisine' : activeTab === 'hotels' ? 'hotel chain' : activeTab}...`}
-            className="flex-1 text-sm px-3 py-2 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 outline-none transition-all"
+            className="flex-1 text-[11px] px-2.5 py-1.5 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-1 focus:ring-purple-200 outline-none transition-all"
           />
           <button
             onClick={() => addItem(newItem)}
             disabled={!newItem.trim()}
-            className="bg-gradient-to-r from-purple-600 to-pink-600 disabled:from-gray-300 disabled:to-gray-300 text-white px-4 py-2 rounded-lg hover:from-purple-700 hover:to-pink-700 transition-all duration-300 font-semibold text-sm disabled:cursor-not-allowed"
+            className="bg-gradient-to-r from-purple-600 to-pink-600 disabled:from-gray-300 disabled:to-gray-300 text-white px-3 py-1.5 rounded-lg hover:from-purple-700 hover:to-pink-700 transition-all duration-300 font-semibold text-[11px] disabled:cursor-not-allowed leading-none"
           >
             Add
           </button>
         </div>
 
-        {/* ── Quick-Add Suggestions ───────────────────────────────────── */}
+        {/* ── Quick-Add Suggestions (compact) ──────────────────── */}
         {availableSuggestions.length > 0 && (
-          <div className="mt-3">
-            <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
+          <div className="mt-2">
+            <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
               Suggestions
             </div>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1">
               {availableSuggestions.slice(0, 6).map((suggestion) => (
                 <button
                   key={suggestion}
                   onClick={() => addItem(suggestion)}
-                  className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-full border border-dashed border-purple-300 text-purple-600 hover:bg-purple-50 hover:border-purple-400 transition-all duration-200"
+                  className="inline-flex items-center gap-0.5 text-[10px] px-2 py-0.5 rounded-full border border-dashed border-purple-300 text-purple-600 hover:bg-purple-50 hover:border-purple-400 transition-all duration-200 leading-snug"
                 >
                   <span className="text-purple-400">+</span>
                   {suggestion}

@@ -56,17 +56,11 @@ export const Dashboard: React.FC = () => {
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
   const [feedResetKey, setFeedResetKey] = useState(0);
   
-  // ════════════════════════════════════════════════════════════════════════
-  // v5: Three-column collapse/expand state + elapsed timer
-  // ════════════════════════════════════════════════════════════════════════
   const [isPlanningCollapsed, setIsPlanningCollapsed] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const startTimeRef = useRef<number>(Date.now());
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ════════════════════════════════════════════════════════════════════════
-  // v4: Process results — fires when Celery task completes (via polling)
-  // ════════════════════════════════════════════════════════════════════════
   const processResults = useCallback((response: any) => {
     const resolvedTripId = response.tripId || response.trip_id;
     if (resolvedTripId) {
@@ -87,7 +81,6 @@ export const Dashboard: React.FC = () => {
     setActivities(activityResults);
     setWeather(results.weather || []);
 
-    // ── Auto-select AI-recommended flight ──────────────────────────
     if (flightResults.length > 0) {
       const recFlightId = response.recommendations?.flight?.recommended_id;
       const aiPick = recFlightId
@@ -98,7 +91,6 @@ export const Dashboard: React.FC = () => {
       selectFlight(flightToSelect, 'ai');
     }
 
-    // ── Auto-select AI-recommended hotel ───────────────────────────
     if (hotelResults.length > 0) {
       const recHotelId = response.recommendations?.hotel?.recommended_id;
       const aiHotelPick = recHotelId
@@ -109,7 +101,6 @@ export const Dashboard: React.FC = () => {
       selectHotel(hotelToSelect, 'ai');
     }
 
-    // ── Auto-select AI-recommended restaurants ─────────────────────
     if (restaurantResults.length > 0) {
       const recRestaurant = response.recommendations?.restaurant;
       const recIds: string[] = recRestaurant?.metadata?.all_recommended_ids || [];
@@ -120,7 +111,6 @@ export const Dashboard: React.FC = () => {
           if (match) toggleRestaurant(match);
         }
       } else {
-        // Fallback: auto-select top 3 restaurants when no AI picks provided
         const fallbackCount = Math.min(3, restaurantResults.length);
         const fallbackIds: string[] = [];
         for (let i = 0; i < fallbackCount; i++) {
@@ -131,7 +121,6 @@ export const Dashboard: React.FC = () => {
       }
     }
 
-    // ── Auto-select AI-recommended activities ──────────────────────
     if (activityResults.length > 0) {
       const recActivity = response.recommendations?.activity;
       const recIds: string[] = recActivity?.metadata?.all_recommended_ids || [];
@@ -142,7 +131,6 @@ export const Dashboard: React.FC = () => {
           if (match) toggleActivity(match);
         }
       } else {
-        // Fallback: auto-select top 5 activities when no AI picks provided
         const fallbackCount = Math.min(5, activityResults.length);
         const fallbackIds: string[] = [];
         for (let i = 0; i < fallbackCount; i++) {
@@ -153,7 +141,6 @@ export const Dashboard: React.FC = () => {
       }
     }
 
-    // ── Auto-switch to first tab that has data ─────────────────────
     if (flightResults.length > 0) setActiveResultsTab('flights');
     else if (hotelResults.length > 0) setActiveResultsTab('hotels');
     else if (restaurantResults.length > 0) setActiveResultsTab('restaurants');
@@ -167,9 +154,6 @@ export const Dashboard: React.FC = () => {
   }, [setTripData, setFlights, setHotels, setRestaurants, setActivities, setWeather,
       selectFlight, selectHotel, toggleRestaurant, toggleActivity]);
 
-  // ════════════════════════════════════════════════════════════════════════
-  // v4: Async trip search hook — submit + poll
-  // ════════════════════════════════════════════════════════════════════════
   const {
     submitTrip, pollData,
     isSubmitting, isPolling, clearTrip
@@ -187,9 +171,6 @@ export const Dashboard: React.FC = () => {
   const hasResults = flights.length > 0 || hotels.length > 0
     || storeRestaurants.length > 0 || storeActivities.length > 0;
 
-  // ════════════════════════════════════════════════════════════════════════
-  // v5: Elapsed timer — starts on submit, stops on completion
-  // ════════════════════════════════════════════════════════════════════════
   useEffect(() => {
     if (isPlanning) {
       startTimeRef.current = Date.now();
@@ -204,7 +185,6 @@ export const Dashboard: React.FC = () => {
     };
   }, [isPlanning]);
 
-  // v5: Stop timer + auto-collapse after completion
   useEffect(() => {
     if (pollData?.status === 'completed' || pollData?.status === 'failed') {
       if (timerRef.current) clearInterval(timerRef.current);
@@ -213,7 +193,6 @@ export const Dashboard: React.FC = () => {
     }
   }, [pollData?.status]);
 
-  // ── Startup cleanup ──────────────────────────────────────────────
   useEffect(() => {
     const { flights, hotels, restaurants, activities } = useTripData.getState();
     const hasAnyResults = flights.length > 0 || hotels.length > 0 ||
@@ -224,9 +203,6 @@ export const Dashboard: React.FC = () => {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ════════════════════════════════════════════════════════════════════════
-  // v4: handlePlanTrip — validates + submits
-  // ════════════════════════════════════════════════════════════════════════
   const handlePlanTrip = async (userRequest: string) => {
     if (!tripData.destination) {
       alert('Please enter a destination');
@@ -261,7 +237,6 @@ export const Dashboard: React.FC = () => {
     });
   };
 
-  // ── Selection handlers ──────────────────────────────────────────
   const handleSelectFlight = (flight: any) => {
     const source = flight.id === aiRecommendedFlightId ? 'ai' : 'user';
     selectFlight(flight, source);
@@ -275,7 +250,6 @@ export const Dashboard: React.FC = () => {
   const handleToggleRestaurant = (restaurant: any) => toggleRestaurant(restaurant);
   const handleToggleActivity = (activity: any) => toggleActivity(activity);
 
-  // ── Helpers ─────────────────────────────────────────────────────
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length },
     { id: 'hotels', label: 'Hotels', icon: '🏨', count: hotels.length },
@@ -294,7 +268,6 @@ export const Dashboard: React.FC = () => {
     return m > 0 ? `${m}m ${s}s` : `${s}s`;
   };
 
-  // ── Progress bar derived state ──────────────────────────────────
   const agents = pollData?.agents || {};
   const completedCount = Object.values(agents).filter((s) => s === 'completed').length;
   const totalAgents = Object.keys(agents).length || 6;
@@ -323,9 +296,7 @@ export const Dashboard: React.FC = () => {
       <TripSummaryBar />
       <PreferencesSummary preferences={preferences} />
 
-      {/* ══════════════════════════════════════════════════════════════════
-          v5: THREE-COLUMN PLANNING SECTION (collapsible)
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* ══════ THREE-COLUMN PLANNING SECTION (collapsible) ══════ */}
       <div className="px-6 lg:px-[10%] py-4">
 
         {/* ── Collapsed Summary Bar ──────────────────────────────────── */}
@@ -367,7 +338,6 @@ export const Dashboard: React.FC = () => {
                         ? 'Planning failed'
                         : `Planning... ${completedCount}/${totalAgents}`}
                   </span>
-                  {/* Mini agent checkmarks */}
                   {isComplete && (
                     <div className="flex items-center gap-1 ml-2">
                       {['✈️', '🏨', '🌤️', '🎭', '🍽️'].map((icon, i) => (
@@ -392,15 +362,12 @@ export const Dashboard: React.FC = () => {
             opacity: isPlanningCollapsed ? 0 : 1,
           }}
         >
-          {/* Three Columns */}
+          {/* ════ Three Columns — all fixed 380px with internal scroll ════ */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
 
             {/* ── Column 1: Natural Language Input ─────────────────── */}
-            <div
-              className="lg:h-[380px] lg:overflow-y-auto rounded-xl"
-              style={{ scrollbarWidth: 'thin', scrollbarColor: '#CBD5E1 transparent' }}
-            >
-              <div className="bg-white rounded-xl shadow-lg border-2 border-gray-300 overflow-hidden h-full">
+            <div className="lg:h-[380px]">
+              <div className="bg-white rounded-xl shadow-lg border-2 border-gray-300 overflow-hidden h-full flex flex-col">
                 <NaturalLanguageInput
                   value={naturalLanguageRequest}
                   onChange={setNaturalLanguageRequest}
@@ -411,10 +378,7 @@ export const Dashboard: React.FC = () => {
             </div>
 
             {/* ── Column 2: Preferences Panel ─────────────────────── */}
-            <div
-              className="lg:h-[380px] lg:overflow-y-auto rounded-xl"
-              style={{ scrollbarWidth: 'thin', scrollbarColor: '#CBD5E1 transparent' }}
-            >
+            <div className="lg:h-[380px]">
               <PreferencesPanel
                 preferences={preferences}
                 onUpdate={useTripData.getState().updatePreferences}
@@ -504,9 +468,7 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* ══════════════════════════════════════════════════════════════════
-          RECOMMENDATIONS: Left = Flight/Hotel picks | Right = Daily Schedule
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* ══════ RECOMMENDATIONS ══════ */}
       {recommendations && Object.keys(recommendations).length > 0 && (() => {
         const categoryConfig: Record<string, { icon: string; accent: string; accentLight: string; label: string }> = {
           flight: { icon: '✈️', accent: 'border-l-amber-400',  accentLight: 'bg-amber-50',  label: 'Flight' },
@@ -629,7 +591,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                   ))}
 
-                  {/* Weather */}
                   {(() => {
                     const weatherRec = recommendations['weather'];
                     if (!weatherRec) return null;
@@ -695,9 +656,7 @@ export const Dashboard: React.FC = () => {
         );
       })()}
 
-      {/* ══════════════════════════════════════════════════════════════════
-          MAIN CONTENT: Results (left) + Itinerary (right)
-          ══════════════════════════════════════════════════════════════════ */}
+      {/* ══════ MAIN CONTENT: Results (left) + Itinerary (right) ══════ */}
       <div className="px-6 lg:px-[10%] pb-6">
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <div className="lg:col-span-3">
@@ -731,7 +690,6 @@ export const Dashboard: React.FC = () => {
                 </div>
 
                 <div className="p-6">
-                  {/* FLIGHTS TAB */}
                   {activeResultsTab === 'flights' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
@@ -759,7 +717,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
-                  {/* HOTELS TAB */}
                   {activeResultsTab === 'hotels' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
@@ -787,7 +744,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
-                  {/* RESTAURANTS TAB */}
                   {activeResultsTab === 'restaurants' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">
@@ -823,7 +779,6 @@ export const Dashboard: React.FC = () => {
                     </div>
                   )}
 
-                  {/* ACTIVITIES TAB */}
                   {activeResultsTab === 'activities' && (
                     <div>
                       <div className="flex items-center justify-between mb-4">

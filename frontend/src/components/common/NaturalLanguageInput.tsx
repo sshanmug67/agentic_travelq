@@ -51,7 +51,7 @@ export const NaturalLanguageInput: React.FC<NaturalLanguageInputProps> = ({
                 handleSubmit();
               }
             }}
-            placeholder='e.g., "Find cheaper flights", "Add Italian restaurants", "Direct flights only"'
+            placeholder='e.g., "Add Italian restaurants", "Direct flights only"'
             className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 resize-none transition-all text-[14px]"
             rows={4}
             disabled={isProcessing}
