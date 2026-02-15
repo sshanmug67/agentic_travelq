@@ -331,14 +331,14 @@ export const Dashboard: React.FC = () => {
           <div
             className="overflow-hidden transition-all duration-500 ease-in-out"
             style={{
-              maxHeight: isPlanningCollapsed ? '48px' : '0px',
+              maxHeight: isPlanningCollapsed ? '36px' : '0px',
               opacity: isPlanningCollapsed ? 1 : 0,
-              marginBottom: isPlanningCollapsed ? '16px' : '0px',
+              marginBottom: isPlanningCollapsed ? '12px' : '0px',
             }}
           >
             <div
               onClick={() => setIsPlanningCollapsed(false)}
-              className="relative h-12 overflow-hidden cursor-pointer shadow-lg rounded-xl"
+              className="relative h-8 overflow-hidden cursor-pointer shadow-lg rounded-xl"
               style={{
                 background: isComplete ? '#0d1f0d' : isFailed ? '#2e1a1a' : '#1a1a2e',
               }}
@@ -354,11 +354,11 @@ export const Dashboard: React.FC = () => {
                       : 'linear-gradient(90deg, #6c5ce7, #a855f7, #ec4899)',
                 }}
               />
-              <div className="relative z-10 flex items-center justify-between h-full px-5">
-                <div className="flex items-center gap-2.5">
-                  {isComplete && <span className="text-emerald-400 font-bold">✓</span>}
-                  {isFailed && <span className="text-red-400 font-bold">✕</span>}
-                  <span className="text-white text-sm font-medium">
+              <div className="relative z-10 flex items-center justify-between h-full px-4">
+                <div className="flex items-center gap-2">
+                  {isComplete && <span className="text-emerald-400 font-bold text-xs">✓</span>}
+                  {isFailed && <span className="text-red-400 font-bold text-xs">✕</span>}
+                  <span className="text-white text-xs font-medium">
                     {isComplete
                       ? `Trip planned in ${formatTime(elapsedTime)}`
                       : isFailed
@@ -367,15 +367,15 @@ export const Dashboard: React.FC = () => {
                   </span>
                   {/* Mini agent checkmarks */}
                   {isComplete && (
-                    <div className="flex items-center gap-1 ml-3">
+                    <div className="flex items-center gap-1 ml-2">
                       {['✈️', '🏨', '🌤️', '🎭', '🍽️'].map((icon, i) => (
-                        <span key={i} className="text-xs opacity-70">{icon}</span>
+                        <span key={i} className="text-[10px] opacity-70">{icon}</span>
                       ))}
                     </div>
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-white font-bold text-[13px] tracking-wide drop-shadow-sm">Click to expand ▼</span>
+                  <span className="text-white font-bold text-[11px] tracking-wide drop-shadow-sm">Click to expand ▼</span>
                 </div>
               </div>
             </div>
@@ -433,7 +433,7 @@ export const Dashboard: React.FC = () => {
             <button
               onClick={() => handlePlanTrip(naturalLanguageRequest)}
               disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
-              className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-[21px] py-4 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-[1.02] disabled:hover:scale-100 flex items-center justify-center gap-3"
+              className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-[17px] py-2.5 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-[1.02] disabled:hover:scale-100 flex items-center justify-center gap-3"
             >
               {isPlanning ? (
                 <>
@@ -447,9 +447,9 @@ export const Dashboard: React.FC = () => {
 
             {/* ── Inline Progress Bar (during/after planning) ────── */}
             {showProgressBar && !isPlanningCollapsed && (
-              <div className="mt-3">
+              <div className="mt-2">
                 <div
-                  className="relative h-10 overflow-hidden shadow-lg rounded-xl cursor-pointer"
+                  className="relative h-7 overflow-hidden shadow-lg rounded-xl cursor-pointer"
                   style={{
                     background: isComplete ? '#0d1f0d' : isFailed ? '#2e1a1a' : '#1a1a2e',
                   }}
@@ -490,7 +490,7 @@ export const Dashboard: React.FC = () => {
                         </span>
                       )}
                       {(isComplete || isFailed) && (
-                        <span className="text-white font-bold text-[13px] tracking-wide drop-shadow-sm">▲ Collapse</span>
+                        <span className="text-white font-bold text-[11px] tracking-wide drop-shadow-sm">▲ Collapse</span>
                       )}
                     </div>
                   </div>
@@ -578,23 +578,21 @@ export const Dashboard: React.FC = () => {
 
         return (
           <div className="px-6 lg:px-[10%] pb-8">
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
-              <div className="flex items-center gap-2.5 mb-5">
-                <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center shadow-sm">
-                  <span className="text-white text-[16px]">✨</span>
-                </div>
-                <h3 className="text-[16px] font-bold text-gray-800 tracking-wide">
+            <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-4">
+              <div className="flex items-center gap-2.5 mb-4">
+                <span className="text-[20px]">✨</span>
+                <h3 className="handwritten-subtitle text-[20px] sketch-underline">
                   AI Recommendations
                 </h3>
               </div>
-              <hr className="border-gray-200 mb-5" />
+              <hr className="border-gray-200 mb-4" />
 
               <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
                 {/* LEFT: Flight, Hotel & Weather */}
                 <div className="lg:col-span-2 flex flex-col lg:border-r lg:border-gray-200 lg:pr-6">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-[18px]">🎯</span>
-                    <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">Top Picks</h4>
+                    <h4 className="handwritten text-[14px] font-semibold uppercase tracking-wide text-gray-500">Top Picks</h4>
                   </div>
                   <div className="space-y-4 max-h-[400px] overflow-y-auto pr-1">
                   {pickCards.map(({ category, config, rec }) => (
@@ -662,7 +660,7 @@ export const Dashboard: React.FC = () => {
                 <div className="lg:col-span-3">
                   <div className="flex items-center gap-2 mb-4">
                     <span className="text-[18px]">📅</span>
-                    <h4 className="text-[14px] font-semibold uppercase tracking-wide text-gray-500">Daily Schedule</h4>
+                    <h4 className="handwritten text-[14px] font-semibold uppercase tracking-wide text-gray-500">Daily Schedule</h4>
                     {dailyPlanRec?.metadata?.num_days && (
                       <span className="text-[12px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
                         {dailyPlanRec.metadata.num_days} days
