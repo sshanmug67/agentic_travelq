@@ -2,12 +2,12 @@
 Trip Planning Celery Task
 Location: backend/tasks/celery_trip_task.py
 
+v7: Added before/after TravelPreferences comparison logging in Step 2
+    for testing NL preprocessing. Shows only changed fields side-by-side.
+
 v6: Fixed _RedisBackedTripStorage — added add_restaurants() and add_activities()
-    methods that PlacesAgent calls. Previously only add_places() existed, causing
-    AttributeError → 0 restaurants, 0 activities, no daily_plan.
 
 v5: Passes _RedisBackedTripStorage + trip_id to orchestrator.orchestrate()
-    so agents write directly to Redis → frontend sees real-time progress.
 
 Logging: Writes to logs/agents/celery_task.log
 
@@ -41,12 +41,8 @@ from utils.logging_config import (
 )
 
 # ── Task logger setup ─────────────────────────────────────────────────────
-# Must call setup_agent_logging() so the "agent.celery_task" logger gets
-# a FileHandler pointing to logs/agents/celery_task.log.
-# Without this, log_agent_raw("...", agent_name="celery_task") only goes
-# to the root logger (Celery console) and never creates a file.
 TASK_LOG = "celery_task"
-setup_agent_logging(TASK_LOG, fresh_start=False)
+setup_agent_logging(TASK_LOG, fresh_start=True)
 
 
 def _log(msg: str):
@@ -57,6 +53,19 @@ def _log(msg: str):
 def _log_json(data, label: str = ""):
     """Shortcut: log JSON to celery_task.log."""
     log_agent_json(data, label=label, agent_name=TASK_LOG)
+
+
+# v7: Helper for before/after comparison
+def _get_nested_value(d: dict, dot_path: str):
+    """Navigate a dot-separated path like 'flight_prefs.max_stops' into a dict."""
+    keys = dot_path.split(".")
+    current = d
+    for key in keys:
+        if isinstance(current, dict):
+            current = current.get(key)
+        else:
+            return None
+    return current
 
 
 class _RedisBackedTripStorage:
@@ -117,19 +126,6 @@ class _RedisBackedTripStorage:
         self.redis.set_agent_status(trip_id, "weather", AGENT_STATUS_COMPLETED)
         _log(f"🌤️  Weather: Redis → results stored + status → completed")
 
-    # ══════════════════════════════════════════════════════════════════
-    # v6 FIX: add_restaurants() and add_activities()
-    #
-    # PlacesAgent._store_results() calls:
-    #   self.trip_storage.add_restaurants(trip_id=..., restaurants=..., metadata=...)
-    #   self.trip_storage.add_activities(trip_id=..., activities=..., metadata=...)
-    #
-    # Previously these methods did NOT exist on _RedisBackedTripStorage,
-    # causing AttributeError → PlacesAgent's except block caught it →
-    # signal_completion("error") → orchestrator thought agent was done
-    # but 0 restaurants, 0 activities, no daily_plan.
-    # ══════════════════════════════════════════════════════════════════
-
     def add_restaurants(self, trip_id: str, restaurants, metadata=None):
         """Store restaurant results from PlacesAgent."""
         self._restaurants = restaurants
@@ -155,8 +151,7 @@ class _RedisBackedTripStorage:
         _log(f"🎭 Activities: Redis → results stored + status → completed")
 
     def add_places(self, trip_id: str, category: str, places, metadata=None):
-        """Generic add_places (kept for backward compat, but PlacesAgent
-        doesn't actually call this — it calls add_restaurants/add_activities)."""
+        """Generic add_places (kept for backward compat)."""
         self._places[category] = places
         agent_name = "restaurant" if category == "restaurants" else "places"
         _log(f"📍 add_places({trip_id}, {category}) — {len(places)} places")
@@ -194,7 +189,6 @@ class _RedisBackedTripStorage:
         }
 
     def get_summary(self, trip_id: str):
-        """Return counts summary (same interface as InMemoryTripStorage)."""
         opts = self.get_all_options(trip_id)
         return {
             "flights": len(opts["flights"]),
@@ -205,12 +199,7 @@ class _RedisBackedTripStorage:
             "recommendations": len(self._recommendations),
         }
 
-    def update_agent_status_message(
-        self,
-        trip_id: str,
-        agent_name: str,
-        message: str,
-    ):
+    def update_agent_status_message(self, trip_id: str, agent_name: str, message: str):
         """Pass-through to Redis for granular agent status messages."""
         self.redis.update_agent_status_message(
             trip_id=trip_id,
@@ -260,11 +249,15 @@ def plan_trip_task(self, trip_id: str):
         user_text = redis_service.get_user_text(trip_id)
         travel_preferences = TravelPreferences(**preferences_dict)
 
+        _log("─" * 40)
         _log(f"✅ Loaded preferences for {trip_id}")
         _log(f"   Destination: {preferences_dict.get('destination', '?')}")
         _log(f"   Origin: {preferences_dict.get('origin', '?')}")
         _log(f"   Dates: {preferences_dict.get('departure_date', '?')} → {preferences_dict.get('return_date', '?')}")
         _log(f"   User text: \"{user_text[:200] if user_text else '(none)'}\"")
+        _log_json(preferences_dict, label="📨 Original Travel Preferences:")
+
+        
 
         # ── 2. Preprocessing (if user text exists) ─────────────────────
         _log("─" * 40)
@@ -274,6 +267,11 @@ def plan_trip_task(self, trip_id: str):
         if user_text:
             redis_service.set_trip_status(trip_id, TRIP_STATUS_PREPROCESSING)
             redis_service.set_agent_status(trip_id, "preprocessor", AGENT_STATUS_IN_PROGRESS)
+
+            # ── v7: Capture original preferences BEFORE preprocessing ──
+            original_prefs_dict = travel_preferences.model_dump()
+
+            _log_json(preferences_dict, label="📨 Original Travel Preferences:")
 
             preproc_storage = _RedisBackedTripStorage(trip_id, redis_service)
             preprocessor = PreprocessorAgent(
@@ -294,8 +292,38 @@ def plan_trip_task(self, trip_id: str):
                 redis_service.store_preference_changes(trip_id, changes_log)
                 redis_service.update_preferences(trip_id, travel_preferences.model_dump())
                 _log(f"   ✅ {len(changes_log)} override(s) applied")
+
+                # ══════════════════════════════════════════════════════════
+                # v7 TESTING: Side-by-side comparison of changed fields
+                # ══════════════════════════════════════════════════════════
+                merged_prefs_dict = travel_preferences.model_dump()
+
+                _log("")
+                _log("=" * 80)
+                _log("🔍 PREFERENCE COMPARISON (Original vs NL-Merged)")
+                _log("=" * 80)
+                _log(f"   User text: \"{user_text}\"")
+                _log("-" * 80)
+
                 for change in changes_log:
-                    _log(f"      {change['action'].upper()} {change['field']}: {change.get('old', '?')} → {change.get('new', '?')}")
+                    field_path = change["field"]
+                    action = change["action"]
+
+                    orig_val = _get_nested_value(original_prefs_dict, field_path)
+                    merged_val = _get_nested_value(merged_prefs_dict, field_path)
+
+                    icon = {"replace": "🔄", "add": "➕", "delete": "➖"}.get(action, "❓")
+
+                    _log(f"   {icon} [{action.upper()}] {field_path}")
+                    _log(f"      ORIGINAL : {orig_val}")
+                    _log(f"      MERGED   : {merged_val}")
+                    _log("")
+
+                _log("-" * 80)
+                _log("   Unchanged fields omitted (all other fields identical)")
+                _log("=" * 80)
+                _log("")
+
             else:
                 _log("   ℹ️  No overrides extracted")
 
@@ -310,12 +338,6 @@ def plan_trip_task(self, trip_id: str):
 
         redis_service.set_trip_status(trip_id, TRIP_STATUS_IN_PROGRESS)
 
-        # ═══════════════════════════════════════════════════════════════
-        # v5 FIX: Create Redis-backed storage and INJECT it into the
-        # orchestrator. The orchestrator passes it to all agents.
-        # v6 FIX: _RedisBackedTripStorage now has add_restaurants() and
-        # add_activities() so PlacesAgent can store its results.
-        # ═══════════════════════════════════════════════════════════════
         trip_storage = _RedisBackedTripStorage(trip_id, redis_service)
         trip_storage.store_preferences(trip_id, travel_preferences)
         _log("   ✅ Created _RedisBackedTripStorage (v6: with add_restaurants + add_activities)")
@@ -333,7 +355,6 @@ def plan_trip_task(self, trip_id: str):
 
         orchestrator = TravelOrchestratorAgent()
 
-        # v5: Pass trip_id + trip_storage so orchestrator uses OUR storage
         _log(f"   🎯 orchestrate(user_proxy, trip_id={trip_id}, trip_storage=_RedisBackedTripStorage)")
         orch_start = datetime.now()
 

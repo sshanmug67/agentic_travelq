@@ -144,7 +144,7 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5 flex-wrap">
             {showAgentLabel && (
-              <span className="text-[13px] font-bold flex-shrink-0" style={{ color: agent.color }}>
+              <span className="handwritten text-[16px] font-semibold flex-shrink-0" style={{ color: agent.color }}>
                 {agent.label}
               </span>
             )}
@@ -297,7 +297,7 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
                   <div className="flex items-center justify-between px-3 py-2" style={{ background: agent.bg }}>
                     <div className="flex items-center gap-2">
                       <span className="text-sm">{agent.icon}</span>
-                      <span className="text-[13px] font-bold" style={{ color: agent.color }}>{agent.label}</span>
+                      <span className="handwritten text-[16px] font-semibold" style={{ color: agent.color }}>{agent.label}</span>
                       {isDone && <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full uppercase">Done</span>}
                       {isFailed && <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full uppercase">Error</span>}
                       {isRunning && (
