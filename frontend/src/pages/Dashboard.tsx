@@ -828,7 +828,7 @@ export const Dashboard: React.FC = () => {
           </div>
 
           <div className="lg:col-span-2">
-            <ItinerarySidebar />
+            <ItinerarySidebar onSectionClick={setActiveResultsTab} />
           </div>
         </div>
       </div>

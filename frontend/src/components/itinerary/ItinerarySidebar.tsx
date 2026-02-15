@@ -1,12 +1,16 @@
 // frontend/src/components/itinerary/ItinerarySidebar.tsx
 //
+// Changes (v4 — Clickable Sections):
+//   - New optional `onSectionClick` prop: fires with 'flights' | 'hotels' | 'restaurants' | 'activities'
+//   - Clicking a section header or any item card switches the left-side results tab
+//   - Hover cursor + subtle highlight on clickable sections
+//   - "Add more" buttons also trigger section switch
+//
 // Changes (v3 — Header + Consistent Backgrounds):
 //   - Added "Your Itinerary" header with gradient and compass icon
-//   - All sections (Flight, Hotel, Restaurants, Activities) share
-//     consistent itinerary-paper background treatment
+//   - All sections share consistent itinerary-paper background treatment
 //   - Compact layout preserved from v2
 //   - Restaurants & Activities: grid-cols-2 layout
-//   - Budget receipt: tighter padding
 
 import React from 'react';
 import { ItineraryFlightCard } from './ItineraryFlightCard';
@@ -16,8 +20,23 @@ import { ItineraryActivityCard } from './ItineraryActivityCard';
 import { useItinerary } from '../../hooks/useItinerary';
 import '../../styles/itinerary.css';
 
-export const ItinerarySidebar: React.FC = () => {
+type ResultsTab = 'flights' | 'hotels' | 'restaurants' | 'activities';
+
+interface ItinerarySidebarProps {
+  onSectionClick?: (tab: ResultsTab) => void;
+}
+
+export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionClick }) => {
   const { flight, hotel, restaurants, activities, removeItem, budget } = useItinerary();
+
+  const handleSectionClick = (tab: ResultsTab) => {
+    onSectionClick?.(tab);
+  };
+
+  // Shared wrapper styles for clickable sections
+  const sectionClass =
+    'mb-3 rounded-lg transition-colors duration-150' +
+    (onSectionClick ? ' cursor-pointer hover:bg-purple-50/40' : '');
 
   return (
     <div className="itinerary-paper h-full overflow-y-auto sticky top-0">
@@ -35,7 +54,10 @@ export const ItinerarySidebar: React.FC = () => {
       <div className="pt-2 px-4 pb-4">
 
         {/* ── Flight ─────────────────────────────────── */}
-        <div className="mb-3">
+        <div
+          className={sectionClass}
+          onClick={() => handleSectionClick('flights')}
+        >
           <h3 className="handwritten-subtitle text-lg mb-1.5 sketch-underline">
             ✈️ Flight
           </h3>
@@ -50,7 +72,10 @@ export const ItinerarySidebar: React.FC = () => {
         </div>
 
         {/* ── Hotel ──────────────────────────────────── */}
-        <div className="mb-3">
+        <div
+          className={sectionClass}
+          onClick={() => handleSectionClick('hotels')}
+        >
           <h3 className="handwritten-subtitle text-lg mb-1.5 sketch-underline">
             🏨 Hotel
           </h3>
@@ -65,7 +90,10 @@ export const ItinerarySidebar: React.FC = () => {
         </div>
 
         {/* ── Restaurants — 2-col grid ───────────────── */}
-        <div className="mb-6">
+        <div
+          className={`mb-6 rounded-lg transition-colors duration-150${onSectionClick ? ' cursor-pointer hover:bg-purple-50/40' : ''}`}
+          onClick={() => handleSectionClick('restaurants')}
+        >
           <h3 className="handwritten-subtitle text-lg mb-1 sketch-underline">
             🍽️ Restaurants {restaurants.length > 0 && (
               <span className="text-[13px] text-gray-500 ml-1">({restaurants.length})</span>
@@ -83,7 +111,13 @@ export const ItinerarySidebar: React.FC = () => {
                 ))}
               </div>
               {restaurants.length < 10 && (
-                <button className="w-full mt-1.5 text-[12px] text-purple-600 hover:text-purple-700 handwritten">
+                <button
+                  className="w-full mt-1.5 text-[12px] text-purple-600 hover:text-purple-700 handwritten"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSectionClick('restaurants');
+                  }}
+                >
                   + Add more
                 </button>
               )}
@@ -97,7 +131,10 @@ export const ItinerarySidebar: React.FC = () => {
         </div>
 
         {/* ── Activities — 2-col grid ────────────────── */}
-        <div className="mb-6">
+        <div
+          className={`mb-6 rounded-lg transition-colors duration-150${onSectionClick ? ' cursor-pointer hover:bg-purple-50/40' : ''}`}
+          onClick={() => handleSectionClick('activities')}
+        >
           <h3 className="handwritten-subtitle text-lg mb-1 sketch-underline">
             🎭 Activities {activities.length > 0 && (
               <span className="text-[13px] text-gray-500 ml-1">({activities.length})</span>
@@ -115,7 +152,13 @@ export const ItinerarySidebar: React.FC = () => {
                 ))}
               </div>
               {activities.length < 10 && (
-                <button className="w-full mt-1.5 text-[12px] text-purple-600 hover:text-purple-700 handwritten">
+                <button
+                  className="w-full mt-1.5 text-[12px] text-purple-600 hover:text-purple-700 handwritten"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleSectionClick('activities');
+                  }}
+                >
                   + Add more
                 </button>
               )}
