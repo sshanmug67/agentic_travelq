@@ -2,6 +2,11 @@
 Preprocessor Agent — Natural Language Override Layer
 Location: backend/agents/preprocessor_agent.py
 
+Changes (v3 — Preferred-Field Targeting):
+  - System message + extraction prompt now enforce PREFERRED fields for all user requests
+  - Auto-promote: when adding to preferred_*, removes item from interested_* counterpart
+  - Fixes bug where LLM targeted interested_carriers for user-typed airline requests
+
 Changes (v2 — Granular Status Messages):
   - Added _update_status() helper for real-time progress to Redis
   - Status calls at: init, LLM extraction, merge, completion
@@ -47,8 +52,9 @@ import openai
 
 class PreprocessorAgent(TravelQBaseAgent):
     """
-    Pre-orchestration agent v2 that parses natural language user requests
-    and merges them into TravelPreferences, with granular status messages.
+    Pre-orchestration agent v3 that parses natural language user requests
+    and merges them into TravelPreferences, with granular status messages
+    and preferred-field targeting.
     """
 
     def __init__(self, trip_id: str, trip_storage: TripStorageInterface, **kwargs):
@@ -65,6 +71,13 @@ RULES:
 4. For budget changes, just change total_budget — sub-budgets will be recalculated.
 5. For dates, output in YYYY-MM-DD format.
 6. For airlines/hotels/cuisines/activities, use standard names.
+7. CRITICAL: Everything the user requests ALWAYS goes into the PREFERRED fields, never interested.
+   - Airlines → flight_prefs.preferred_carriers (NOT interested_carriers)
+   - Hotels → hotel_prefs.preferred_chains (NOT interested_chains)
+   - Cuisines → restaurant_prefs.preferred_cuisines (NOT interested_cuisines)
+   - Activities → activity_prefs.preferred_interests (NOT interested_interests)
+   Even if the item currently exists in an "interested" list, target the "preferred" field.
+   The user's typed request is their strongest signal of preference.
 
 You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra text."""
 
@@ -80,7 +93,7 @@ You MUST respond with ONLY valid JSON — no markdown, no backticks, no extra te
         self.trip_id = trip_id
         self.trip_storage = trip_storage
 
-        log_agent_raw("🧠 PreprocessorAgent v2 initialized (with granular status)", agent_name="PreprocessorAgent")
+        log_agent_raw("🧠 PreprocessorAgent v3 initialized (preferred-field targeting)", agent_name="PreprocessorAgent")
 
     # ─────────────────────────────────────────────────────────────────────
     # v2: Granular status helper
@@ -240,20 +253,29 @@ Extract the user's intended changes. Return ONLY a JSON object with this structu
   ]
 }}
 
+CRITICAL RULE — ALWAYS USE PREFERRED FIELDS:
+Anything the user asks for MUST target the "preferred" field, NEVER "interested":
+- Airlines → flight_prefs.preferred_carriers (NEVER flight_prefs.interested_carriers)
+- Hotel chains → hotel_prefs.preferred_chains (NEVER hotel_prefs.interested_chains)
+- Cuisines → restaurant_prefs.preferred_cuisines (NEVER restaurant_prefs.interested_cuisines)
+- Activities → activity_prefs.preferred_interests (NEVER activity_prefs.interested_interests)
+Even if the item already exists in an "interested_*" list in the current preferences,
+you MUST still target the "preferred_*" field. The user's typed request is their
+strongest signal of intent and always indicates a preference, not just interest.
+
 FIELD MAPPING (use these exact dot-paths):
 - Trip details: "destination", "origin", "departure_date", "return_date", "num_travelers", "trip_purpose"
-- Flight: "flight_prefs.preferred_carriers", "flight_prefs.interested_carriers",
-          "flight_prefs.max_stops", "flight_prefs.cabin_class", "flight_prefs.time_preference",
-          "flight_prefs.seat_preference"
-- Hotel: "hotel_prefs.preferred_chains", "hotel_prefs.interested_chains",
-         "hotel_prefs.min_rating", "hotel_prefs.preferred_location", "hotel_prefs.amenities",
-         "hotel_prefs.room_type", "hotel_prefs.price_range"
-- Activities: "activity_prefs.preferred_interests", "activity_prefs.interested_interests",
-              "activity_prefs.pace"
-- Restaurant: "restaurant_prefs.preferred_cuisines", "restaurant_prefs.interested_cuisines",
-              "restaurant_prefs.meals", "restaurant_prefs.price_level"
+- Flight: "flight_prefs.preferred_carriers", "flight_prefs.max_stops", "flight_prefs.cabin_class",
+          "flight_prefs.time_preference", "flight_prefs.seat_preference"
+- Hotel: "hotel_prefs.preferred_chains", "hotel_prefs.min_rating", "hotel_prefs.preferred_location",
+         "hotel_prefs.amenities", "hotel_prefs.room_type", "hotel_prefs.price_range"
+- Activities: "activity_prefs.preferred_interests", "activity_prefs.pace"
+- Restaurant: "restaurant_prefs.preferred_cuisines", "restaurant_prefs.meals",
+              "restaurant_prefs.price_level"
 - Budget: "budget.total_budget"
 - Special: "special_requirements"
+
+NOTE: The "interested_*" fields are NOT listed above on purpose. Never target them.
 
 EXAMPLES:
 
@@ -267,6 +289,11 @@ User: "Add American Airlines and remove Delta"
 → {{"changes": [
     {{"field": "flight_prefs.preferred_carriers", "action": "add", "value": ["American Airlines"]}},
     {{"field": "flight_prefs.preferred_carriers", "action": "delete", "value": ["Delta"]}}
+  ]}}
+
+User: "Get me some flights from British Airways too"
+→ {{"changes": [
+    {{"field": "flight_prefs.preferred_carriers", "action": "add", "value": ["British Airways"]}}
   ]}}
 
 User: "I want Hilton hotels, budget $5000, and Japanese food"
@@ -360,6 +387,15 @@ Now extract changes for the given user text. Return valid JSON only.
             for change in changes:
                 if all(k in change for k in ("field", "action", "value")):
                     if change["action"] in ("replace", "add", "delete"):
+                        # v3: Safety net — redirect any interested_* targets to preferred_*
+                        field = change["field"]
+                        if "interested_" in field:
+                            corrected = field.replace("interested_", "preferred_")
+                            log_agent_raw(
+                                f"   🔄 Redirected: {field} → {corrected} (v3: always use preferred)",
+                                agent_name="PreprocessorAgent"
+                            )
+                            change["field"] = corrected
                         validated.append(change)
                     else:
                         log_agent_raw(
@@ -427,6 +463,43 @@ Now extract changes for the given user text. Return valid JSON only.
                                 "old": _safe_str(old_value),
                                 "new": _safe_str(merged_list)
                             })
+
+                            # ── v3: Auto-promote — remove from interested counterpart ──
+                            #    When user adds to preferred_carriers, remove from
+                            #    interested_carriers so the item doesn't appear in both.
+                            if "preferred_" in field_path:
+                                interested_counterpart = field_path.replace("preferred_", "interested_")
+                                interested_list = _get_nested(prefs_dict, interested_counterpart)
+                                if isinstance(interested_list, list):
+                                    add_lower = {
+                                        i.lower() for i in new_items if isinstance(i, str)
+                                    }
+                                    cleaned = [
+                                        i for i in interested_list
+                                        if not (isinstance(i, str) and i.lower() in add_lower)
+                                    ]
+                                    if len(cleaned) != len(interested_list):
+                                        removed_items = [
+                                            i for i in interested_list
+                                            if isinstance(i, str) and i.lower() in add_lower
+                                        ]
+                                        _set_nested(prefs_dict, interested_counterpart, cleaned)
+                                        changes_log.append({
+                                            "field": interested_counterpart,
+                                            "action": "delete",
+                                            "old": _safe_str(interested_list),
+                                            "new": _safe_str(cleaned)
+                                        })
+                                        log_agent_raw(
+                                            f"   🔄 Auto-promoted: {removed_items} moved from "
+                                            f"{interested_counterpart} → {field_path}",
+                                            agent_name="PreprocessorAgent"
+                                        )
+                        else:
+                            log_agent_raw(
+                                f"   ℹ️  '{items_to_add}' already in {field_path} — no change",
+                                agent_name="PreprocessorAgent"
+                            )
                     else:
                         _set_nested(prefs_dict, field_path, value)
                         changes_log.append({

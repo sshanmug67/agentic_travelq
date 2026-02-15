@@ -54,7 +54,8 @@ export const Dashboard: React.FC = () => {
   const [aiRecommendedRestaurantIds, setAiRecommendedRestaurantIds] = useState<string[]>([]);
   const [aiRecommendedActivityIds, setAiRecommendedActivityIds] = useState<string[]>([]);
   const [recommendations, setRecommendations] = useState<Record<string, any> | null>(null);
-
+  const [feedResetKey, setFeedResetKey] = useState(0);
+  
   // ════════════════════════════════════════════════════════════════════════
   // v5: Three-column collapse/expand state + elapsed timer
   // ════════════════════════════════════════════════════════════════════════
@@ -237,6 +238,7 @@ export const Dashboard: React.FC = () => {
     }
 
     clearTrip();
+    setFeedResetKey((k) => k + 1);
 
     await submitTrip({
       tripId: tripData.id,
@@ -424,6 +426,7 @@ export const Dashboard: React.FC = () => {
               <AgentFeedColumn
                 pollData={pollData}
                 isActive={isPlanning}
+                resetKey={feedResetKey}
               />
             </div>
           </div>

@@ -271,7 +271,7 @@ def plan_trip_task(self, trip_id: str):
             # ── v7: Capture original preferences BEFORE preprocessing ──
             original_prefs_dict = travel_preferences.model_dump()
 
-            _log_json(preferences_dict, label="📨 Original Travel Preferences:")
+            # _log_json(preferences_dict, label="📨 Original Travel Preferences:")
 
             preproc_storage = _RedisBackedTripStorage(trip_id, redis_service)
             preprocessor = PreprocessorAgent(
@@ -287,6 +287,10 @@ def plan_trip_task(self, trip_id: str):
             )
             preproc_duration = (datetime.now() - preproc_start).total_seconds()
             _log(f"   🧠 Preprocessing completed in {preproc_duration:.2f}s")
+
+            _log("─" * 40)
+            _log_json(travel_preferences.model_dump(), label="📨 Merged Travel Preferences:")
+            _log("─" * 40)
 
             if changes_log:
                 redis_service.store_preference_changes(trip_id, changes_log)

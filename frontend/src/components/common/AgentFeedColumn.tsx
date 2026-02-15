@@ -39,9 +39,10 @@ interface FeedItem {
 interface AgentFeedColumnProps {
   pollData: TripPollResponse | null;
   isActive: boolean;
+  resetKey?: number;
 }
 
-const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive }) => {
+const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive, resetKey }) => {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('timeline');
   const feedRef = useRef<HTMLDivElement>(null);
@@ -49,17 +50,15 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
   const prevMessagesRef = useRef<Record<string, string | null>>({});
   const prevTripIdRef = useRef<string | null>(null);
 
-  // Reset feed on new trip
+  // Reset feed whenever Dashboard signals a new planning request
   useEffect(() => {
-    const tripId = pollData?.trip_id || null;
-    if (tripId && tripId !== prevTripIdRef.current) {
-      setFeed([]);
-      prevStatesRef.current = {};
-      prevMessagesRef.current = {};
-      prevTripIdRef.current = tripId;
-      setViewMode('timeline');
-    }
-  }, [pollData?.trip_id]);
+    if (resetKey === undefined || resetKey === 0) return;
+    setFeed([]);
+    prevStatesRef.current = {};
+    prevMessagesRef.current = {};
+    prevTripIdRef.current = null;
+    setViewMode('timeline');
+  }, [resetKey]);
 
   // Accumulate feed items from pollData changes
   useEffect(() => {
