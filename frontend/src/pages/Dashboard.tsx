@@ -357,7 +357,7 @@ export const Dashboard: React.FC = () => {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-white/40 text-[10px]">Click to expand ▼</span>
+                  <span className="text-white font-bold text-[13px] tracking-wide drop-shadow-sm">Click to expand ▼</span>
                 </div>
               </div>
             </div>
@@ -380,7 +380,7 @@ export const Dashboard: React.FC = () => {
               className="lg:h-[380px] lg:overflow-y-auto rounded-xl"
               style={{ scrollbarWidth: 'thin', scrollbarColor: '#CBD5E1 transparent' }}
             >
-              <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-5 h-full">
+              <div className="bg-white rounded-xl shadow-lg border-2 border-gray-300 overflow-hidden h-full">
                 <NaturalLanguageInput
                   value={naturalLanguageRequest}
                   onChange={setNaturalLanguageRequest}
@@ -472,7 +472,7 @@ export const Dashboard: React.FC = () => {
                         </span>
                       )}
                       {(isComplete || isFailed) && (
-                        <span className="text-white/40 text-[10px]">▲ Collapse</span>
+                        <span className="text-white font-bold text-[13px] tracking-wide drop-shadow-sm">▲ Collapse</span>
                       )}
                     </div>
                   </div>

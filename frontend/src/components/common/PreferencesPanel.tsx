@@ -1,36 +1,7 @@
 // frontend/src/components/common/PreferencesPanel.tsx
 //
-// Revamped v4 — Chip-based compact layout + Activity Settings
-//
-// Design:
-//   ┌─────────────────────────────────────────────────┐
-//   │ ⚙️ Preferences                                  │
-//   │ [ Airlines | Hotels | Activities | Restaurant ]  │
-//   │                                                  │
-//   │  (Activities tab only:)                          │
-//   │  ┌ Activity Settings ─────────────────────────┐  │
-//   │  │ Pace:  [Relaxed] [Moderate] [Aggressive]   │  │
-//   │  │ Time:  [Morning] [Afternoon] [Evening]     │  │
-//   │  │ Hours: [4 hrs] [6 hrs] [8 hrs] [10 hrs]   │  │
-//   │  └────────────────────────────────────────────┘  │
-//   │                                                  │
-//   │  Selected:                                       │
-//   │  ┌────────────────────────────────────────────┐  │
-//   │  │ ⭐ Museums × ☆ Walking Tours ×             │  │
-//   │  └────────────────────────────────────────────┘  │
-//   │                                                  │
-//   │  [ Add activity...          ] [Add]              │
-//   │  Suggestions: + Theater  + Food Tours            │
-//   └─────────────────────────────────────────────────┘
-//
-// Semantics:
-//   - Items in the list = user is interested
-//   - ⭐ starred items  = user wants priority
-//   - Items NOT in list = user doesn't care
-//
-// Only items in the list get sent to the backend.
-// The backend receives both `preferred` and non-preferred items
-// and can prioritize accordingly.
+// v5 — Compact header matching Agent Feed / NL Input style
+// Only the header block changed from v4.
 
 import React, { useState } from 'react';
 
@@ -72,11 +43,9 @@ interface PreferencesPanelProps {
 
 type TabType = 'airlines' | 'hotels' | 'activities' | 'restaurant';
 
-// ── Tab → store key mapping ────────────────────────────────────────────────
 const tabToKey = (tab: TabType): keyof PreferencesData =>
   tab === 'restaurant' ? 'cuisines' : tab === 'hotels' ? 'hotelChains' : tab;
 
-// ── Suggested quick-adds per category ──────────────────────────────────────
 const SUGGESTIONS: Record<TabType, string[]> = {
   airlines: ['United Airlines', 'Delta', 'American Airlines', 'British Airways', 'Southwest', 'JetBlue', 'Emirates', 'Lufthansa'],
   hotels: ['Marriott', 'Hilton', 'Hyatt', 'IHG', 'Best Western', 'Radisson', 'Wyndham', 'Four Seasons'],
@@ -102,12 +71,9 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
   const items = (preferences[storeKey] as Preference[]) || [];
   const itemNames = new Set(items.map((i) => i.name.toLowerCase()));
 
-  // Suggestions that haven't been added yet
   const availableSuggestions = SUGGESTIONS[activeTab].filter(
     (s) => !itemNames.has(s.toLowerCase())
   );
-
-  // ── Actions ────────────────────────────────────────────────────────────
 
   const addItem = (name: string, preferred = false) => {
     if (!name.trim()) return;
@@ -133,19 +99,17 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
     if (e.key === 'Enter') addItem(newItem);
   };
 
-  // ── Count badges for tabs ──────────────────────────────────────────────
   const getTabCount = (tab: TabType) => {
     const key = tabToKey(tab);
     return ((preferences[key] as Preference[]) || []).length;
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-3">
-        <h3 className="text-lg font-bold text-white flex items-center gap-2">
-          ⚙️ Preferences
-        </h3>
+    <div className="bg-white rounded-xl shadow-lg border-2 border-gray-300 overflow-hidden">
+      {/* v5: Compact header — matching Agent Feed / NL Input style */}
+      <div className="px-4 py-2.5 border-b-2 border-gray-200 flex items-center gap-2 flex-shrink-0 bg-gradient-to-r from-gray-50 to-white">
+        <span className="text-base">⚙️</span>
+        <span className="text-[15px] font-bold text-gray-800">Preferences</span>
       </div>
 
       {/* Tab Headers */}
@@ -224,14 +188,12 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
 
           const toggleTime = (time: string) => {
             const current = ap.preferredTimes || [];
-            // If "all_day" is clicked, toggle it exclusively
             if (time === 'all_day') {
               updateActivityPrefs({
                 preferredTimes: current.includes('all_day') ? [] : ['all_day'],
               });
               return;
             }
-            // If selecting a specific time, remove "all_day"
             const withoutAllDay = current.filter((t) => t !== 'all_day');
             const updated = withoutAllDay.includes(time)
               ? withoutAllDay.filter((t) => t !== time)
@@ -245,7 +207,6 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                 Activity Settings
               </div>
 
-              {/* Row 1: Hours/Day (left) + Pace (right) */}
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-[11px] text-gray-500 mb-1.5">Hours / Day</div>
@@ -285,7 +246,6 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                 </div>
               </div>
 
-              {/* Row 2: Preferred Times */}
               <div>
                 <div className="text-[11px] text-gray-500 mb-1.5">Preferred Time</div>
                 <div className="flex flex-wrap gap-1.5">
@@ -358,7 +318,6 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                 Dining Settings
               </div>
 
-              {/* Row 1: Meals (left) + Price Level (right) */}
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="text-[11px] text-gray-500 mb-1.5">Meals</div>
@@ -423,7 +382,6 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                       : 'bg-gray-100 border-gray-200 text-gray-700 hover:border-gray-300'
                   }`}
                 >
-                  {/* Star toggle */}
                   <button
                     onClick={() => togglePreferred(item.name)}
                     className="text-base leading-none transition-transform hover:scale-125"
@@ -440,7 +398,6 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
                     </span>
                   )}
 
-                  {/* Remove button */}
                   <button
                     onClick={() => removeItem(item.name)}
                     className="text-gray-400 hover:text-red-500 transition-colors ml-0.5 text-base leading-none"
