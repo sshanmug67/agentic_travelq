@@ -64,7 +64,7 @@ autogen:
 agents:
   flight:
     enabled: true
-    max_results: 10             # Max flight results to return
+    max_results: 15             # Max flight results to return
 
   hotel:
     enabled: true
