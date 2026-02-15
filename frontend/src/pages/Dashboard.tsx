@@ -118,6 +118,15 @@ export const Dashboard: React.FC = () => {
           const match = restaurantResults.find((r: any) => String(r.id) === String(recId));
           if (match) toggleRestaurant(match);
         }
+      } else {
+        // Fallback: auto-select top 3 restaurants when no AI picks provided
+        const fallbackCount = Math.min(3, restaurantResults.length);
+        const fallbackIds: string[] = [];
+        for (let i = 0; i < fallbackCount; i++) {
+          toggleRestaurant(restaurantResults[i]);
+          fallbackIds.push(restaurantResults[i].id);
+        }
+        setAiRecommendedRestaurantIds(fallbackIds);
       }
     }
 
@@ -131,6 +140,15 @@ export const Dashboard: React.FC = () => {
           const match = activityResults.find((a: any) => String(a.id) === String(recId));
           if (match) toggleActivity(match);
         }
+      } else {
+        // Fallback: auto-select top 5 activities when no AI picks provided
+        const fallbackCount = Math.min(5, activityResults.length);
+        const fallbackIds: string[] = [];
+        for (let i = 0; i < fallbackCount; i++) {
+          toggleActivity(activityResults[i]);
+          fallbackIds.push(activityResults[i].id);
+        }
+        setAiRecommendedActivityIds(fallbackIds);
       }
     }
 
