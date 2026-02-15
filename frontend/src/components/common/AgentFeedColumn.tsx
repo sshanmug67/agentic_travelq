@@ -2,16 +2,15 @@
  * AgentFeedColumn — Live Streaming Agent Activity Feed
  * Location: frontend/src/components/common/AgentFeedColumn.tsx
  *
+ * v2 Refinements:
+ *   - Font sizes increased ~3-4px to match NL Input column readability
+ *   - Agent labels now include "Agent" suffix (e.g., "Flight Agent")
+ *   - View toggle: Timeline (chronological) vs By Agent (grouped)
+ *   - By Agent view groups feed items under each agent's colored header
+ *
  * Right column of the three-column planning layout.
  * Accumulates a chronological feed from pollData snapshots — each time
  * an agent's status_message changes, a new feed item is appended.
- *
- * Features:
- *   - Color-coded by agent (matches TravelQ agent palette)
- *   - Auto-scrolls to latest entry
- *   - Agent status pills at top for at-a-glance progress
- *   - START / DONE badges on lifecycle events
- *   - Resets automatically when a new trip starts
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -19,15 +18,17 @@ import type { TripPollResponse, AgentDetail } from '../../services/api';
 
 // ── Agent display config ────────────────────────────────────────────
 const AGENTS: Record<string, { icon: string; label: string; color: string; bg: string }> = {
-  preprocessor: { icon: '🧠', label: 'Analyzer',    color: '#8B5CF6', bg: '#F5F3FF' },
-  flight:       { icon: '✈️', label: 'Flight',      color: '#EF4444', bg: '#FEF2F2' },
-  hotel:        { icon: '🏨', label: 'Hotel',       color: '#3B82F6', bg: '#EFF6FF' },
-  weather:      { icon: '🌤️', label: 'Weather',     color: '#F59E0B', bg: '#FFFBEB' },
-  places:       { icon: '🎭', label: 'Activities',  color: '#10B981', bg: '#ECFDF5' },
-  restaurant:   { icon: '🍽️', label: 'Restaurant',  color: '#EC4899', bg: '#FDF2F8' },
+  preprocessor: { icon: '🧠', label: 'Analyzer Agent',    color: '#8B5CF6', bg: '#F5F3FF' },
+  flight:       { icon: '✈️', label: 'Flight Agent',      color: '#EF4444', bg: '#FEF2F2' },
+  hotel:        { icon: '🏨', label: 'Hotel Agent',       color: '#3B82F6', bg: '#EFF6FF' },
+  weather:      { icon: '🌤️', label: 'Weather Agent',     color: '#F59E0B', bg: '#FFFBEB' },
+  places:       { icon: '🎭', label: 'Activities Agent',  color: '#10B981', bg: '#ECFDF5' },
+  restaurant:   { icon: '🍽️', label: 'Restaurant Agent',  color: '#EC4899', bg: '#FDF2F8' },
 };
 
 const AGENT_ORDER = ['preprocessor', 'flight', 'hotel', 'weather', 'places', 'restaurant'];
+
+type ViewMode = 'timeline' | 'byAgent';
 
 // ── Types ───────────────────────────────────────────────────────────
 interface FeedItem {
@@ -46,6 +47,7 @@ interface AgentFeedColumnProps {
 // ── Component ───────────────────────────────────────────────────────
 const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive }) => {
   const [feed, setFeed] = useState<FeedItem[]>([]);
+  const [viewMode, setViewMode] = useState<ViewMode>('timeline');
   const feedRef = useRef<HTMLDivElement>(null);
   const prevStatesRef = useRef<Record<string, string>>({});
   const prevMessagesRef = useRef<Record<string, string | null>>({});
@@ -59,6 +61,7 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
       prevStatesRef.current = {};
       prevMessagesRef.current = {};
       prevTripIdRef.current = tripId;
+      setViewMode('timeline');
     }
   }, [pollData?.trip_id]);
 
@@ -89,9 +92,8 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
         });
       }
 
-      // Status message changed (the granular v7 updates)
+      // Status message changed
       if (currentMsg && currentMsg !== prevMsg) {
-        // Skip if this would duplicate a start/done message
         const isDoneMsg = status === 'completed' && prevStatus !== 'completed';
         if (!isDoneMsg) {
           newItems.push({
@@ -126,7 +128,6 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
         });
       }
 
-      // Update tracking refs
       prevStatesRef.current[key] = status || '';
       prevMessagesRef.current[key] = currentMsg;
     }
@@ -136,12 +137,12 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
     }
   }, [pollData]);
 
-  // ── Auto-scroll to bottom ──────────────────────────────────────
+  // ── Auto-scroll to bottom (timeline mode only) ─────────────────
   useEffect(() => {
-    if (feedRef.current) {
+    if (feedRef.current && viewMode === 'timeline') {
       feedRef.current.scrollTop = feedRef.current.scrollHeight;
     }
-  }, [feed]);
+  }, [feed, viewMode]);
 
   // ── Derived state ─────────────────────────────────────────────
   const agents = pollData?.agents || {};
@@ -157,27 +158,133 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
     });
   };
 
+  // ── Group feed items by agent for "By Agent" view ──────────────
+  const feedByAgent: Record<string, FeedItem[]> = {};
+  for (const key of AGENT_ORDER) {
+    feedByAgent[key] = feed.filter((item) => item.agentKey === key);
+  }
+
+  // ── Render a single feed item ─────────────────────────────────
+  const renderFeedItem = (item: FeedItem, isLatest: boolean, showAgentLabel: boolean) => {
+    const agent = AGENTS[item.agentKey] || { icon: '🔧', label: item.agentKey, color: '#6B7280', bg: '#F9FAFB' };
+
+    return (
+      <div
+        key={item.id}
+        className={`flex items-start gap-2 py-1.5 px-2 rounded-md transition-colors duration-500 ${
+          isLatest && isActive ? 'bg-purple-50/60' : ''
+        }`}
+      >
+        {/* Timestamp */}
+        <span className="text-[12px] text-gray-400 font-mono tabular-nums flex-shrink-0 mt-0.5 w-[56px]">
+          {formatTime(item.timestamp)}
+        </span>
+
+        {/* Color dot */}
+        <span
+          className="w-2.5 h-2.5 rounded-full flex-shrink-0 mt-1"
+          style={{ background: agent.color }}
+        />
+
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {showAgentLabel && (
+              <span
+                className="text-[13px] font-bold flex-shrink-0"
+                style={{ color: agent.color }}
+              >
+                {agent.label}
+              </span>
+            )}
+
+            {/* Badges */}
+            {item.type === 'start' && (
+              <span className="text-[9px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                Start
+              </span>
+            )}
+            {item.type === 'done' && (
+              <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                Done
+              </span>
+            )}
+            {item.type === 'error' && (
+              <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
+                Error
+              </span>
+            )}
+          </div>
+
+          {/* Message */}
+          {!(item.type === 'start' && item.message === 'Started') && (
+            <p className={`text-[14px] leading-snug mt-0.5 ${
+              item.type === 'done'
+                ? 'text-emerald-700'
+                : item.type === 'error'
+                  ? 'text-red-600'
+                  : 'text-gray-600'
+            }`}>
+              {item.message}
+            </p>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden flex flex-col h-full">
       {/* ── Header ──────────────────────────────────────────────── */}
       <div className="px-4 py-2.5 border-b border-gray-100 flex items-center justify-between flex-shrink-0 bg-gradient-to-r from-gray-50 to-white">
         <div className="flex items-center gap-2">
           <span className="text-base">📡</span>
-          <span className="text-sm font-bold text-gray-800">Agent Feed</span>
+          <span className="text-[15px] font-bold text-gray-800">Agent Feed</span>
           {isActive && !isComplete && (
             <span
               className="w-2 h-2 rounded-full bg-red-500"
               style={{
-                animation: 'pulse 1.2s ease-in-out infinite',
+                animation: 'agentPulse 1.2s ease-in-out infinite',
                 boxShadow: '0 0 6px rgba(239,68,68,0.5)',
               }}
             />
           )}
           {isComplete && <span className="text-xs text-emerald-600 font-semibold">✓ Done</span>}
         </div>
-        <span className="text-[10px] text-gray-400 font-mono tabular-nums">
-          {feed.length > 0 ? `${feed.length} events` : ''}
-        </span>
+
+        <div className="flex items-center gap-2">
+          {/* View toggle */}
+          {feed.length > 0 && (
+            <div className="flex items-center bg-gray-100 rounded-full p-0.5">
+              <button
+                onClick={() => setViewMode('timeline')}
+                className={`text-[10px] font-semibold px-2.5 py-1 rounded-full transition-all duration-200 ${
+                  viewMode === 'timeline'
+                    ? 'bg-white text-purple-700 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+                title="Chronological timeline"
+              >
+                🕐 Timeline
+              </button>
+              <button
+                onClick={() => setViewMode('byAgent')}
+                className={`text-[10px] font-semibold px-2.5 py-1 rounded-full transition-all duration-200 ${
+                  viewMode === 'byAgent'
+                    ? 'bg-white text-purple-700 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+                title="Grouped by agent"
+              >
+                🤖 By Agent
+              </button>
+            </div>
+          )}
+
+          <span className="text-[11px] text-gray-400 font-mono tabular-nums">
+            {feed.length > 0 ? `${feed.length} events` : ''}
+          </span>
+        </div>
       </div>
 
       {/* ── Agent Status Pills ──────────────────────────────────── */}
@@ -193,13 +300,14 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
             return (
               <div
                 key={key}
-                className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold transition-all duration-300"
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-semibold transition-all duration-300 cursor-default"
                 style={{
                   background: isDone ? `${agent.color}15` : isFailed ? '#FEE2E2' : isRunning ? agent.bg : '#F8FAFC',
                   color: isDone ? agent.color : isFailed ? '#DC2626' : isRunning ? agent.color : '#94A3B8',
                   border: `1px solid ${isRunning ? agent.color + '40' : 'transparent'}`,
                   boxShadow: isRunning ? `0 0 8px ${agent.color}25` : 'none',
                 }}
+                title={agent.label}
               >
                 <span className="text-xs">{agent.icon}</span>
                 {isDone && <span>✓</span>}
@@ -209,7 +317,7 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
                     className="inline-block w-1.5 h-1.5 rounded-full"
                     style={{
                       background: agent.color,
-                      animation: 'pulse 1s ease-in-out infinite',
+                      animation: 'agentPulse 1s ease-in-out infinite',
                     }}
                   />
                 )}
@@ -222,88 +330,95 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
       {/* ── Feed Items (scrollable) ─────────────────────────────── */}
       <div
         ref={feedRef}
-        className="flex-1 overflow-y-auto px-3 py-2 space-y-0.5"
+        className="flex-1 overflow-y-auto px-3 py-2"
         style={{ scrollbarWidth: 'thin', scrollbarColor: '#CBD5E1 transparent' }}
       >
         {feed.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-300">
             <span className="text-3xl mb-2">📡</span>
-            <p className="text-xs font-medium">Waiting to start...</p>
-            <p className="text-[10px] mt-1">Agent activity will stream here</p>
+            <p className="text-sm font-medium">Waiting to start...</p>
+            <p className="text-[12px] mt-1">Agent activity will stream here</p>
+          </div>
+        ) : viewMode === 'timeline' ? (
+          /* ── Timeline View (chronological) ────────────────────── */
+          <div className="space-y-0.5">
+            {feed.map((item, idx) =>
+              renderFeedItem(item, idx === feed.length - 1, true)
+            )}
           </div>
         ) : (
-          feed.map((item, idx) => {
-            const agent = AGENTS[item.agentKey] || { icon: '🔧', label: item.agentKey, color: '#6B7280', bg: '#F9FAFB' };
-            const isLatest = idx === feed.length - 1 && isActive;
+          /* ── By Agent View (grouped) ──────────────────────────── */
+          <div className="space-y-3">
+            {AGENT_ORDER.map((key) => {
+              const agent = AGENTS[key];
+              const items = feedByAgent[key];
+              if (!items || items.length === 0) return null;
 
-            return (
-              <div
-                key={item.id}
-                className={`flex items-start gap-2 py-1.5 px-2 rounded-md transition-colors duration-500 ${
-                  isLatest ? 'bg-purple-50/60' : ''
-                }`}
-              >
-                {/* Timestamp */}
-                <span className="text-[9px] text-gray-400 font-mono tabular-nums flex-shrink-0 mt-0.5 w-[52px]">
-                  {formatTime(item.timestamp)}
-                </span>
+              const status = agents[key];
+              const isDone = status === 'completed';
+              const isFailed = status === 'failed';
+              const isRunning = status === 'in_progress';
 
-                {/* Color dot */}
-                <span
-                  className="w-2 h-2 rounded-full flex-shrink-0 mt-1"
-                  style={{ background: agent.color }}
-                />
-
-                {/* Content */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-1.5">
-                    <span
-                      className="text-[10px] font-bold flex-shrink-0"
-                      style={{ color: agent.color }}
-                    >
-                      {agent.label}
+              return (
+                <div
+                  key={key}
+                  className="rounded-lg border overflow-hidden"
+                  style={{ borderColor: `${agent.color}30` }}
+                >
+                  {/* Agent group header */}
+                  <div
+                    className="flex items-center justify-between px-3 py-2"
+                    style={{ background: agent.bg }}
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">{agent.icon}</span>
+                      <span
+                        className="text-[13px] font-bold"
+                        style={{ color: agent.color }}
+                      >
+                        {agent.label}
+                      </span>
+                      {isDone && (
+                        <span className="text-[9px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full uppercase">
+                          Done
+                        </span>
+                      )}
+                      {isFailed && (
+                        <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full uppercase">
+                          Error
+                        </span>
+                      )}
+                      {isRunning && (
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{
+                            background: agent.color,
+                            animation: 'agentPulse 1s ease-in-out infinite',
+                          }}
+                        />
+                      )}
+                    </div>
+                    <span className="text-[10px] text-gray-400 font-mono">
+                      {items.length} event{items.length !== 1 ? 's' : ''}
                     </span>
-
-                    {/* Badges */}
-                    {item.type === 'start' && (
-                      <span className="text-[8px] font-bold bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                        Start
-                      </span>
-                    )}
-                    {item.type === 'done' && (
-                      <span className="text-[8px] font-bold bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                        Done
-                      </span>
-                    )}
-                    {item.type === 'error' && (
-                      <span className="text-[8px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full uppercase tracking-wider">
-                        Error
-                      </span>
-                    )}
                   </div>
 
-                  {/* Message (skip for bare "Started" messages) */}
-                  {!(item.type === 'start' && item.message === 'Started') && (
-                    <p className={`text-[11px] leading-snug mt-0.5 ${
-                      item.type === 'done'
-                        ? 'text-emerald-700'
-                        : item.type === 'error'
-                          ? 'text-red-600'
-                          : 'text-gray-600'
-                    }`}>
-                      {item.message}
-                    </p>
-                  )}
+                  {/* Agent's feed items */}
+                  <div className="px-2 py-1 bg-white space-y-0.5">
+                    {items.map((item, idx) =>
+                      renderFeedItem(item, idx === items.length - 1, false)
+                    )}
+                  </div>
                 </div>
-              </div>
-            );
-          })
+              );
+            })}
+          </div>
         )}
 
         {/* Completion banner */}
         {isComplete && feed.length > 0 && (
           <div className="mt-2 mb-1 py-2 px-3 rounded-lg bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 text-center">
-            <span className="text-xs font-semibold text-emerald-700">
+            <span className="text-[13px] font-semibold text-emerald-700">
               ✓ All {completedCount} agents finished — {feed.length} events
             </span>
           </div>
@@ -312,7 +427,7 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive })
 
       {/* ── Keyframe for pulse animation ────────────────────────── */}
       <style>{`
-        @keyframes pulse {
+        @keyframes agentPulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.4; }
         }
