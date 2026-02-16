@@ -1,0 +1,97 @@
+Styling/UI:
+├── Tailwind CSS          ← utility classes for layout/spacing
+└── Inline styles         ← heavy use of CSS-in-JS style objects
+                            (no component library like MUI or shadcn)
+
+Core Libraries:
+├── React 18 + TypeScript
+├── Vite (build tool)
+├── react-router-dom      ← routing
+├── @tanstack/react-query ← API data fetching
+├── zustand               ← state management
+├── axios                 ← HTTP client
+├── framer-motion         ← animations
+├── date-fns              ← date formatting
+└── clsx                  ← conditional CSS classes
+
+
+The Golden Rule
+Never claim you hand-coded every line. Instead, own the decisions and understand the architecture.
+In modern development, using AI tools (Cursor, Claude, Copilot) to build code is not only accepted — it's expected. What interviewers care about is: do you understand what was built and why?
+
+When asked "Tell me about the frontend":
+
+"I built the frontend using React with TypeScript and Vite. 
+For styling, I used Tailwind CSS with custom inline styles rather than a component library — it gave me 
+full control over the UI. I used React Query for API data fetching with automatic caching, Zustand for 
+lightweight state management, and Framer Motion for animations on the itinerary panel. I developed it 
+using AI-assisted tooling in Cursor, which is how most teams are working now."
+
+Level 1 — Architecture (you should know this well):
+──────────────────────────────────────────────────
+✓ Why React? (most popular, component-based, huge ecosystem)
+✓ Why TypeScript? (type safety, better IDE support, catches bugs)
+✓ Why Vite over Webpack? (faster dev server, modern ESM-based)
+✓ Why Tailwind? (utility-first, no context switching to CSS files)
+✓ How does frontend talk to backend? (axios calls to FastAPI via VITE_API_URL)
+✓ How is state managed? (Zustand for global, React Query for server state)
+
+Level 2 — Key Patterns (you should understand these):
+──────────────────────────────────────────────────────
+✓ Component structure (pages, components, hooks, services, types)
+✓ How React Query works (caching, refetching, loading states)
+✓ How environment variables work (VITE_ prefix, .env files)
+✓ What npm run build produces (static files in dist/)
+✓ How React Router handles navigation (client-side routing)
+
+Level 3 — Code Details (nice to know, not critical):
+────────────────────────────────────────────────────
+○ Specific component implementations
+○ Exact Tailwind classes used
+○ Framer Motion animation configs
+
+---------------------------------------------------------------
+Common Interview Questions & Your Answers
+Q: "Did you build the frontend yourself?"
+
+"I designed the architecture and built it using AI-assisted development tools — specifically Cursor 
+with Claude. This is the same workflow top engineering teams are adopting. I made all the technology choices, 
+designed the component structure, and understand every piece of the stack. 
+I can walk you through any part of it."
+
+---------------------------------------------------------------
+
+Q: "Why didn't you use a component library like Material UI?"
+
+"I wanted full control over the design. TravelQ has a unique itinerary-focused UI with custom agent status 
+panels and real-time progress tracking. A component library would have added overhead and constrained the 
+design. Tailwind with custom styles was the right trade-off for this project."
+
+---------------------------------------------------------------
+
+Q: "How does data flow in your frontend?"
+
+"User actions trigger API calls through Axios, managed by React Query which handles caching, loading states, 
+and automatic refetching. Global UI state like selected trip or filter settings lives in Zustand stores. 
+The backend returns trip data that flows down through React components as props."
+
+---------------------------------------------------------------
+
+Q: "What's the difference between React Query and Zustand?"
+
+"Different jobs. React Query manages server state — data that comes from the API. It handles caching, 
+background refetching, and stale data. Zustand manages client state — UI preferences, selected items, 
+filters. Mixing these two concerns in one tool creates complexity, so I separated them."
+
+
+Your real strength in interviews isn't the frontend code — it's the full-stack architecture:
+
+What makes TravelQ impressive:
+─────────────────────────────
+✓ Multi-agent AI orchestration (Autogen)
+✓ Async task processing (Celery + Redis)
+✓ Production deployment (Docker, EC2, Amplify, CI/CD)
+✓ API integration (5+ external services)
+✓ Full-stack architecture (React ↔ FastAPI ↔ AI Agents)
+
+The frontend is ONE piece. The system design is the story.

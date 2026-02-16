@@ -1,0 +1,46 @@
+# Create the key pair and save to your existing Keys folder
+aws ec2 create-key-pair --key-name travelq-key --query "KeyMaterial" --output text > C:\Users\sures\AWS\Keys\travelq-key.pem
+
+
+# Check whether the Key worked.
+aws ec2 create-key-pair --key-name travelq-key --query "KeyMaterial" --output text > C:\Users\sures\AWS\Keys\travelq-key.pem
+
+
+# Create ECR Repository.
+aws ecr create-repository --repository-name travelq-backend --region us-east-1 --output table
+
+# Create Security Group.
+# 1. Create security group
+aws ec2 create-security-group --group-name travelq-sg --description "TravelQ Backend Security Group" --output table
+
+# 2. # Get your IP first
+(Invoke-WebRequest -Uri https://checkip.amazonaws.com).Content.Trim()
+96.231.64.246
+
+# Replace YOUR_IP with what you got above
+aws ec2 authorize-security-group-ingress --group-name travelq-sg --protocol tcp --port 22 --cidr 96.231.64.246/32
+
+# HTTP
+aws ec2 authorize-security-group-ingress --group-name travelq-sg --protocol tcp --port 80 --cidr 0.0.0.0/0
+
+# HTTPS
+aws ec2 authorize-security-group-ingress --group-name travelq-sg --protocol tcp --port 443 --cidr 0.0.0.0/0
+
+
+# to Reset the local laptop IP Address in security Group:
+# If SSH stops working, update the rule with your new IP:
+# 1. Get new IP
+(Invoke-WebRequest -Uri https://checkip.amazonaws.com -UseBasicParsing).Content.Trim()
+
+# 2. Remove old rule
+aws ec2 revoke-security-group-ingress --group-name travelq-sg --protocol tcp --port 22 --cidr 96.231.64.246/32
+
+# 3. Add new rule
+aws ec2 authorize-security-group-ingress --group-name travelq-sg --protocol tcp --port 22 --cidr NEW_IP/32
+
+Your PC       (192.168.1.152) ──┐
+Your Phone    (192.168.1.153) ──┤── Router ── 96.231.64.246 ── Internet
+Smart TV      (192.168.1.154) ──┘
+                                    ↑
+                              All appear as the same
+                              public IP to AWS
