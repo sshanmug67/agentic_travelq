@@ -1,0 +1,63 @@
+
+You can have multiple workflow files in the same repo, each deploying to a different target:
+
+AWSTemplateFormatVersion: "2010-09-09".github/
+└── workflows/
+    ├── deploy-aws.yml       ← push to main → deploy to AWS EC2
+    ├── deploy-azure.yml     ← push to main → deploy to Azure App Service
+    └── deploy-fargate.yml   ← push to main → deploy to AWS Fargate (Phase 2)
+
+
+Each file controls its own trigger independently:
+# deploy-aws.yml
+on:
+  push:
+    branches: [main]        # triggers on main
+
+# deploy-azure.yml
+on:
+  push:
+    branches: [main]        # also triggers on main (both run simultaneously)
+  
+# OR you could separate by branch:
+# deploy-azure.yml
+on:
+  push:
+    branches: [deploy/azure]  # only triggers on a different branch
+```
+
+You have full flexibility. Some common strategies:
+```
+Strategy 1: Same branch, multiple workflows (both deploy on every push)
+─────────────────────────────────────────────────────────────────────
+  git push main → deploy-aws.yml runs    → AWS EC2
+                → deploy-azure.yml runs  → Azure
+
+Strategy 2: Different branches per environment
+─────────────────────────────────────────────────────────────────────
+  git push main        → deploy-aws.yml      → AWS Production
+  git push staging     → deploy-staging.yml   → AWS Staging
+  git push azure/main  → deploy-azure.yml     → Azure Production
+
+Strategy 3: Manual trigger for secondary deployments
+─────────────────────────────────────────────────────────────────────
+  git push main        → deploy-aws.yml (automatic)
+  Manual button click  → deploy-azure.yml (workflow_dispatch only)
+```
+
+## For Your Situation
+
+Here's what I'd recommend for your learning roadmap:
+```
+Now (Phase 1):     deploy-aws-ec2.yml       → EC2 deployment
+Later (Phase 2):   deploy-aws-fargate.yml   → Fargate deployment
+Future:            deploy-azure.yml         → Azure deployment
+
+All in the SAME repo, same main branch
+
+
+git checkout -b feature/aws-deployment
+git add .
+git commit -m "Add AWS deployment configuration files"
+git push origin feature/aws-deployment
+
