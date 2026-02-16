@@ -1,20 +1,3 @@
-# .github/workflows/deploy.yml
-# ============================================
-# TravelQ CI/CD — Push to main → Deploy to AWS
-# ============================================
-#
-# What this does:
-#   1. Builds Docker image of your FastAPI backend
-#   2. Pushes image to AWS ECR (container registry)
-#   3. SSHs into EC2 and restarts the stack
-#
-# Required GitHub Secrets (Settings → Secrets → Actions):
-#   AWS_ACCESS_KEY_ID      — IAM user access key
-#   AWS_SECRET_ACCESS_KEY  — IAM user secret key
-#   AWS_ACCOUNT_ID         — Your 12-digit AWS account ID
-#   EC2_HOST               — EC2 public IP or Elastic IP
-#   EC2_SSH_KEY            — Contents of your .pem key file
-
 name: Deploy TravelQ — AWS EC2
 
 on:
@@ -27,8 +10,11 @@ env:
   ECR_REPOSITORY: travelq-backend
 
 jobs:
-  deploy:
-    name: Build & Deploy
+  # ============================================
+  # Job 1: Build & Push Backend Image to ECR
+  # ============================================
+  build-backend:
+    name: Build & Push Backend
     runs-on: ubuntu-latest
 
     steps:
@@ -46,18 +32,28 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & push backend image
+      - name: Build and push Docker image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
         run: |
           cd backend
           docker build --platform=linux/amd64 \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
             -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
 
-      - name: Deploy to EC2
+  # ============================================
+  # Job 2: Deploy to EC2
+  # ============================================
+  deploy-ec2:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: build-backend
+
+    steps:
+      - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -73,14 +69,19 @@ jobs:
               docker login --username AWS --password-stdin \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
 
-            # Rebuild and restart
+            # Pull latest backend image and restart
+            docker compose -f docker-compose.prod.yml pull backend
             docker compose -f docker-compose.prod.yml up -d --build
 
             # Cleanup old images
             docker image prune -f
 
-            # Verify
+            # Verify health
             sleep 15
-            curl -sf http://localhost/api/trips/health && \
-              echo "✅ Deploy successful!" || \
-              echo "❌ Health check failed"
+            if curl -sf http://localhost/api/trips/health > /dev/null; then
+              echo "Deployment successful! TravelQ is healthy."
+            else
+              echo "Health check failed!"
+              docker compose -f docker-compose.prod.yml logs --tail=50
+              exit 1
+            fi
