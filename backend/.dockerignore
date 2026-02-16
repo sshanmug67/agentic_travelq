@@ -1,0 +1,17 @@
+# backend/.dockerignore
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.env
+.env.local
+.env.example
+.git
+.gitignore
+.mypy_cache
+.pytest_cache
+logs/
+*.log
+README.md
+.python-version

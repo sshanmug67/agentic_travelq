@@ -1,0 +1,86 @@
+# .github/workflows/deploy.yml
+# ============================================
+# TravelQ CI/CD — Push to main → Deploy to AWS
+# ============================================
+#
+# What this does:
+#   1. Builds Docker image of your FastAPI backend
+#   2. Pushes image to AWS ECR (container registry)
+#   3. SSHs into EC2 and restarts the stack
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   AWS_ACCESS_KEY_ID      — IAM user access key
+#   AWS_SECRET_ACCESS_KEY  — IAM user secret key
+#   AWS_ACCOUNT_ID         — Your 12-digit AWS account ID
+#   EC2_HOST               — EC2 public IP or Elastic IP
+#   EC2_SSH_KEY            — Contents of your .pem key file
+
+name: Deploy TravelQ — AWS EC2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: travelq-backend
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push backend image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          cd backend
+          docker build --platform=linux/amd64 \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/agentic-travelq
+            git pull origin main
+
+            # Login to ECR
+            aws ecr get-login-password --region us-east-1 | \
+              docker login --username AWS --password-stdin \
+              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.us-east-1.amazonaws.com
+
+            # Rebuild and restart
+            docker compose -f docker-compose.prod.yml up -d --build
+
+            # Cleanup old images
+            docker image prune -f
+
+            # Verify
+            sleep 15
+            curl -sf http://localhost/api/trips/health && \
+              echo "✅ Deploy successful!" || \
+              echo "❌ Health check failed"

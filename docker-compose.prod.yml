@@ -1,0 +1,176 @@
+# docker-compose.prod.yml
+# ============================================
+# TravelQ Production Stack for AWS EC2
+# ============================================
+#
+# This replaces your 3 PowerShell terminals:
+#   Terminal 1 (Redis)   → redis service
+#   Terminal 2 (Celery)  → celery_worker service
+#   Terminal 3 (FastAPI) → backend service
+#   + adds Nginx to serve React and proxy API
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d        # Start all
+#   docker compose -f docker-compose.prod.yml logs -f       # View logs
+#   docker compose -f docker-compose.prod.yml down          # Stop all
+#   docker compose -f docker-compose.prod.yml up -d --build # Rebuild & start
+
+version: '3.8'
+
+services:
+  # ==========================================
+  # NGINX — Replaces your browser's dev server
+  # Serves React static files + proxies /api/* to FastAPI
+  # ==========================================
+  nginx:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: /api
+    container_name: travelq-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+    networks:
+      - travelq-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================
+  # FASTAPI BACKEND — Replaces your PowerShell Terminal 3
+  # Was: uvicorn api.main:app --reload
+  # Now: Gunicorn + Uvicorn workers (production-grade)
+  # ==========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: travelq-backend
+    env_file:
+      - .env.prod
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - APP_ENV=production
+    volumes:
+      # settings.py resolves project_root to / inside container
+      # so it looks for /config/app_config.yaml
+      - ./config:/config:ro
+      # Application log files (agent logs, etc.)
+      # logging_config.py resolves log dir to /logs/ inside container
+      - backend-logs:/logs
+    expose:
+      - "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/trips/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - travelq-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ==========================================
+  # CELERY WORKER — Replaces your PowerShell Terminal 2
+  # Was: celery -A celery_app worker --loglevel=info
+  # Now: Same command, but inside a container that auto-restarts
+  # ==========================================
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: travelq-celery
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env.prod
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - APP_ENV=production
+    volumes:
+      # Same config mount as backend
+      - ./config:/config:ro
+      # Shares same log volume as backend
+      - backend-logs:/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: always
+    networks:
+      - travelq-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ==========================================
+  # REDIS — Same as your Docker Desktop container
+  # Was: Docker Desktop Redis container
+  # Now: Same thing, just managed by docker compose
+  # ==========================================
+  redis:
+    image: redis:7-alpine
+    container_name: travelq-redis
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --appendonly yes
+        --appendfsync everysec
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - travelq-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
+
+# ==========================================
+# NETWORK — How containers talk to each other
+# Instead of localhost, containers use service names:
+#   backend connects to redis at "redis:6379"
+#   nginx connects to backend at "backend:8000"
+# ==========================================
+networks:
+  travelq-network:
+    driver: bridge
+
+# ==========================================
+# VOLUMES — Persistent data (survives restarts)
+# ==========================================
+volumes:
+  redis-data:
+    driver: local
+  backend-logs:
+    driver: local
