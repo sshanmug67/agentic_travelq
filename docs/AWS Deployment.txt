@@ -73,3 +73,5 @@ Manual scaling                         Auto-scaling policies
 Nginx reverse proxy                    Application Load Balancer (ALB)
 GitHub Actions SSH deploy              GitHub Actions ECS deploy action
 One instance = single point of failure Multiple tasks across AZs (high availability)
+
+

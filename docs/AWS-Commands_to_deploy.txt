@@ -13,7 +13,7 @@ aws ecr create-repository --repository-name travelq-backend --region us-east-1 -
 # 1. Create security group
 aws ec2 create-security-group --group-name travelq-sg --description "TravelQ Backend Security Group" --output table
 
-# 2. # Get your IP first
+# 2. # Get your public IP address first (This is what the Internet Service Provider assigned to the Router at home network)
 (Invoke-WebRequest -Uri https://checkip.amazonaws.com).Content.Trim()
 96.231.64.246
 
@@ -29,7 +29,7 @@ aws ec2 authorize-security-group-ingress --group-name travelq-sg --protocol tcp 
 
 # to Reset the local laptop IP Address in security Group:
 # If SSH stops working, update the rule with your new IP:
-# 1. Get new IP
+# 1. Get your new public IP
 (Invoke-WebRequest -Uri https://checkip.amazonaws.com -UseBasicParsing).Content.Trim()
 
 # 2. Remove old rule
@@ -44,3 +44,187 @@ Smart TV      (192.168.1.154) ──┘
                                     ↑
                               All appear as the same
                               public IP to AWS
+
+
+# To get the latest Amazon Linux images:
+aws ec2 describe-images --owners amazon --filters "Name=name,Values=al2023-ami-2023*-x86_64" "Name=state,Values=available" --query "sort_by(Images, &CreationDate)[-1].[ImageId,Name]" --output text
+
+# Launch EC2 with 2 vCPU, 2GB, 20GB gp3 volume
+aws ec2 run-instances `
+    --image-id ami-0c1fe732b5494dc14 `
+    --instance-type t3.small `
+    --key-name travelq-key `
+    --security-groups travelq-sg `
+    --block-device-mappings '[{\"DeviceName\":\"/dev/xvda\",\"Ebs\":{\"VolumeSize\":20,\"VolumeType\":\"gp3\"}}]' `
+    --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=TravelQ}]'
+
+
+{
+    "ReservationId": "r-018921f86193c6179",
+    "OwnerId": "589516862821",
+    "Groups": [],
+    "Instances": [
+        {
+            "Architecture": "x86_64",
+            "BlockDeviceMappings": [],
+            "ClientToken": "143618b9-dbcf-46b8-8adc-6cc672b3213d",
+            "EbsOptimized": false,
+            "EnaSupport": true,
+            "Hypervisor": "xen",
+            "NetworkInterfaces": [
+                {
+                    "Attachment": {
+                        "AttachTime": "2026-02-17T13:21:40+00:00",
+                        "AttachmentId": "eni-attach-0fee87b012221aabe",
+                        "DeleteOnTermination": true,
+                        "DeviceIndex": 0,
+                        "Status": "attaching",
+                        "NetworkCardIndex": 0
+                    },
+                    "Description": "",
+                    "Groups": [
+                        {
+                            "GroupId": "sg-0e4ca463608692188",
+                            "GroupName": "travelq-sg"
+                        }
+                    ],
+                    "Ipv6Addresses": [],
+                    "MacAddress": "02:ee:91:c9:f0:5f",
+                    "NetworkInterfaceId": "eni-0ae1f26fb416d0f98",
+                    "OwnerId": "589516862821",
+                    "PrivateDnsName": "ip-172-31-7-198.ec2.internal",
+                    "PrivateIpAddress": "172.31.7.198",
+                    "PrivateIpAddresses": [
+                        {
+                            "Primary": true,
+                            "PrivateDnsName": "ip-172-31-7-198.ec2.internal",
+                            "PrivateIpAddress": "172.31.7.198"
+                        }
+                    ],
+                    "SourceDestCheck": true,
+                    "Status": "in-use",
+                    "SubnetId": "subnet-08dc60028fa526a8a",
+                    "VpcId": "vpc-4ec17533",
+                    "InterfaceType": "interface",
+                    "Operator": {
+                        "Managed": false
+                    }
+                }
+            ],
+            "RootDeviceName": "/dev/xvda",
+            "RootDeviceType": "ebs",
+            "SecurityGroups": [
+                {
+                    "GroupId": "sg-0e4ca463608692188",
+                    "GroupName": "travelq-sg"
+                }
+            ],
+            "SourceDestCheck": true,
+            "StateReason": {
+                "Code": "pending",
+                "Message": "pending"
+            },
+            "Tags": [
+                {
+                    "Key": "Name",
+                    "Value": "TravelQ"
+                }
+            ],
+            "VirtualizationType": "hvm",
+            "CpuOptions": {
+                "CoreCount": 1,
+                "ThreadsPerCore": 2
+            },
+            "CapacityReservationSpecification": {
+                "CapacityReservationPreference": "open"
+            },
+            "MetadataOptions": {
+                "State": "pending",
+                "HttpTokens": "required",
+                "HttpPutResponseHopLimit": 2,
+                "HttpEndpoint": "enabled",
+                "HttpProtocolIpv6": "disabled",
+                "InstanceMetadataTags": "disabled"
+            },
+            "EnclaveOptions": {
+                "Enabled": false
+            },
+            "BootMode": "uefi-preferred",
+            "PrivateDnsNameOptions": {
+                "HostnameType": "ip-name",
+                "EnableResourceNameDnsARecord": false,
+                "EnableResourceNameDnsAAAARecord": false
+            },
+            "MaintenanceOptions": {
+                "AutoRecovery": "default",
+                "RebootMigration": "default"
+            },
+            "CurrentInstanceBootMode": "uefi",
+            "Operator": {
+                "Managed": false
+            },
+            "InstanceId": "i-0cf321bb38216cb5e",
+            "ImageId": "ami-0c1fe732b5494dc14",
+            "State": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PrivateDnsName": "ip-172-31-7-198.ec2.internal",
+            "PublicDnsName": "",
+            "StateTransitionReason": "",
+            "KeyName": "travelq-key",
+            "AmiLaunchIndex": 0,
+            "ProductCodes": [],
+            "InstanceType": "t3.small",
+            "LaunchTime": "2026-02-17T13:21:40+00:00",
+            "Placement": {
+                "AvailabilityZoneId": "use1-az1",
+                "GroupName": "",
+                "Tenancy": "default",
+                "AvailabilityZone": "us-east-1a"
+            },
+            "Monitoring": {
+                "State": "disabled"
+            },
+            "SubnetId": "subnet-08dc60028fa526a8a",
+            "VpcId": "vpc-4ec17533",
+            "PrivateIpAddress": "172.31.7.198"
+        }
+    ]
+}
+
+# Allocate an Elastic IP Address:
+aws ec2 allocate-address --domain vpc
+
+# Associated EIP with the instance just created.
+aws ec2 associate-address `
+    --instance-id i-0cf321bb38216cb5e `
+    --allocation-id eipalloc-016ba7db0929d7c4b
+
+
+# ssh to EC2 from new Powershell Terminal.
+cd C:\Users\sures\AWS\Keys
+ssh -i travelq-key.pem ec2-user@44.214.231.173
+
+# copy the ec2-setup.sh to EC2 to install docker and docker-compose from a different powershell terminal
+scp -i C:\Users\sures\AWS\Keys\travelq-key-fixed.pem -o IdentitiesOnly=yes D:\Git-Proj\GitHub\agentic_travelq\ec2-setup.sh ec2-user@44.214.231.173:~/
+
+
+# GO back to ssh Powershell terminal and verify the file got copied. Change the mode of the file, remove windows style line ending (\r\n) and 
+# replace it with unix style line ending (\n) and run it.
+chmod +x ec2-setup.sh
+sed -i 's/\r$//' ec2-setup.sh
+./ec2-setup.sh
+
+
+# exit and logback in for Docker to relogin in ssh Powershell Terminal.
+exit
+ssh -i travelq-key-fixed.pem -o IdentitiesOnly=yes ec2-user@44.214.231.173
+
+# Check docker and docker-compose version.
+docker --version
+docker compose version
+
+# get the code from Github using git clone and cd to the directory
+git clone https://github.com/sshanmug67/agentic_travelq.git
+cd agentic_travelq
