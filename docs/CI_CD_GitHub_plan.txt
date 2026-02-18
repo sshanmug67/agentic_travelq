@@ -154,3 +154,13 @@ docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
 
 # Health check on docker images.
 curl http://localhost/api/trips/health
+
+
+------------------------------------------------------------------------------------
+CI/CD Pipeline setup.
+
+# Clean up unused docker images from EC2
+docker image prune -a -f
+
+# Che the containers running now.
+docker ps
