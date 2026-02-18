@@ -143,3 +143,14 @@ docker tag travelq-frontend:latest 589516862821.dkr.ecr.us-east-1.amazonaws.com/
 
 # Push the docker image to ECR.
 docker push 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-frontend:latest
+
+# Bring Dwon and Up the containers in EC2.
+# login to EC2.
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d
+
+# Verify whther the front end is deployed through docker image download.
+docker ps --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+
+# Health check on docker images.
+curl http://localhost/api/trips/health
