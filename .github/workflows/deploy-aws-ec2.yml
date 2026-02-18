@@ -98,7 +98,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
-            cd ~/agentic-travelq
+            cd ~/agentic_travelq
             git pull origin main
 
             # Login to ECR
