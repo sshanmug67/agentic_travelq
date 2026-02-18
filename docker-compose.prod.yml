@@ -21,11 +21,7 @@ services:
   # Serves React static files + proxies /api/* to FastAPI
   # ==========================================
   nginx:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile.prod
-      args:
-        VITE_API_URL: /api
+    image: 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-frontend:latest
     container_name: travelq-nginx
     ports:
       - "80:80"

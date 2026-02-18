@@ -121,3 +121,25 @@ docker pull 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
 # Check whether the image is pulled from ECR to EC2.
 docker images
 
+# Bring down the docker containers.
+docker compose -f docker-compose.prod.yml down
+
+# Bring up the docker containers.
+docker compose -f docker-compose.prod.yml up -d
+
+
+---------------------------------------------------------------------------------
+
+Build Front end docker image and push it to ECR.
+
+# Create the ECR repository for the frontend:
+aws ecr create-repository --repository-name travelq-frontend --region us-east-1
+
+# build the frontend image
+docker build -t travelq-frontend --build-arg VITE_API_URL=/api ./frontend -f ./frontend/Dockerfile.prod
+
+# Tag the docker image to get it ready for push to ECR
+docker tag travelq-frontend:latest 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-frontend:latest
+
+# Push the docker image to ECR.
+docker push 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-frontend:latest
