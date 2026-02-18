@@ -225,6 +225,75 @@ ssh -i travelq-key-fixed.pem -o IdentitiesOnly=yes ec2-user@44.214.231.173
 docker --version
 docker compose version
 
-# get the code from Github using git clone and cd to the directory
-git clone https://github.com/sshanmug67/agentic_travelq.git
+# get the code from Github using git clone and cd to the directory, but first generate private/public key for 
+# downloading code from GitHub.
+ssh-keygen -t ed25519 -C "ec2-travelq"
+cat ~/.ssh/id_ed25519.pub
+
+# copy the public part of the key to GitHub at ssh
+# Test Github connection.
+ssh -T git@github.com
+
+git clone git@github.com:sshanmug67/agentic_travelq.git
 cd agentic_travelq
+
+# To se the branch we are connected to in Git.
+git branch -A
+
+git checkout feature/aws-deployment
+ls
+
+# update the .env.prod with actual API Keys. 
+docker compose -f docker-compose.prod.yml up -d --build
+
+# TO check current version of buildx.
+docker buildx version
+github.com/docker/buildx 0.12.1 30feaa1a915b869ebc2eea6328624b49facd4bfb
+
+# Install latest buildx
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+
+sudo curl -L "https://github.com/docker/buildx/releases/download/v0.21.1/buildx-v0.21.1.linux-amd64" \
+    -o /usr/local/lib/docker/cli-plugins/docker-buildx
+
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
+docker buildx version
+
+
+# Get fresh requirements.txt
+cd D:\Git-Proj\GitHub\agentic_travelq\backend
+uv pip freeze > requirements-fresh.txt
+cat requirements-fresh.txt
+
+# TO check docker logs.
+docker logs travelq-backend
+docker compose -f docker-compose.prod.yml logs
+
+# To check whether the docker containers are working.
+docker compose -f docker-compose.prod.yml ps
+
+curl http://localhost/api/trips/health
+
+---------------------------------------------------------------------------------------
+1. Logs sent to CloudWatch
+
+2. Setup DNS Service
+
+3. Set up AWS Secrets Manager.
+
+---------------------------------------------------------------------------------------
+# TO ssh to EC2.
+ssh -i C:\Users\sures\AWS\Keys\travelq-key-fixed.pem -o IdentitiesOnly=yes ec2-user@44.214.231.173
+
+# 1. See all running containers with status
+docker compose -f ~/agentic_travelq/docker-compose.prod.yml ps
+
+# 2. See resource usage (CPU, memory) per container
+docker stats --no-stream
+
+# 3. List all Docker images on this instance
+docker images
+
+#4. TO check on logs.
+docker logs travelq-celery
+docker inspect travelq-celery | grep -A 10 "Health"

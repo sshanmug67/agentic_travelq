@@ -21,16 +21,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create non-root user for security
-RUN adduser --disabled-password --gecos '' appuser && \
-    chown -R appuser:appuser /app
+RUN mkdir -p /logs && \
+    adduser --disabled-password --gecos '' appuser && \
+    chown -R appuser:appuser /app /logs
 USER appuser
 
 # Expose port
 EXPOSE 8000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=40s \
-    CMD curl -f http://localhost:8000/api/trips/health || exit 1
 
 # Default: run FastAPI with Gunicorn + Uvicorn workers
 # main.py is at backend/main.py → inside container it's /app/main.py → "main:app"

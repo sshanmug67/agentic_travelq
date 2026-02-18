@@ -15,8 +15,6 @@
 #   docker compose -f docker-compose.prod.yml down          # Stop all
 #   docker compose -f docker-compose.prod.yml up -d --build # Rebuild & start
 
-version: '3.8'
-
 services:
   # ==========================================
   # NGINX — Replaces your browser's dev server
@@ -116,6 +114,8 @@ services:
       backend:
         condition: service_healthy
     restart: always
+    healthcheck:
+      disable: true
     networks:
       - travelq-network
     logging:
