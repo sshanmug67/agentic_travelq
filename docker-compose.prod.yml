@@ -47,9 +47,7 @@ services:
   # Now: Gunicorn + Uvicorn workers (production-grade)
   # ==========================================
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
     container_name: travelq-backend
     env_file:
       - .env.prod
@@ -91,9 +89,7 @@ services:
   # Now: Same command, but inside a container that auto-restarts
   # ==========================================
   celery_worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
     container_name: travelq-celery
     command: celery -A celery_app worker --loglevel=info --concurrency=2
     env_file:
