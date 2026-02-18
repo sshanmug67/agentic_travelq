@@ -297,3 +297,10 @@ docker images
 #4. TO check on logs.
 docker logs travelq-celery
 docker inspect travelq-celery | grep -A 10 "Health"
+
+
+---------------------------------------------
+Local Docker Build:
+
+cd D:\Git-Proj\GitHub\agentic_travelq
+docker build -t travelq-backend ./backend

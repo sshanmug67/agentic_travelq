@@ -61,4 +61,63 @@ git add .
 git commit -m "Add AWS deployment configuration files"
 git push origin feature/aws-deployment
 
+# Build backend image in local
+cd to project root.
+docker build -t travelq-backend -f ./backend/Dockerfile ./backend        # uses backend/Dockerfile
+
+# Build frontend image  in localcd to project root
+docker build -t travelq-frontend -f ./frontend/Dockerfile.prod ./frontend      # uses frontend/Dockerfile.prod
+
+# Athenticate to AWS ECR.
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 589516862821.dkr.ecr.us-east-1.amazonaws.com
+
+# Tag the image.
+docker tag travelq-backend:latest 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
+
+# Push to ECR.
+docker push 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
+
+----------------------------------------------------------------------------------------------
+
+# Create a IAM role in AWS to grant privilege to EC2 to pull images from ECR.
+# Create a file to create IAM role for EC2 to pull images from ECR. THis creates a file in wherever the command is run
+@'
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Principal":{"Service":"ec2.amazonaws.com"},"Action":"sts:AssumeRole"}]}
+'@ | Out-File -FilePath trust-policy.json -Encoding ASCII
+
+# Create a AssumeRole IAM role.
+aws iam create-role --role-name travelq-ec2-role --assume-role-policy-document file://trust-policy.json
+
+# Step 2 — Attach ECR read permission to the IAM role created.
+aws iam attach-role-policy --role-name travelq-ec2-role --policy-arn arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+
+# Step 3 — Create instance profile and add role:
+aws iam create-instance-profile --instance-profile-name travelq-ec2-profile
+
+#TO check the instance profile, that is created.
+aws iam list-instance-profiles
+
+# Attche Role to Instance Profile created.
+aws iam add-role-to-instance-profile --instance-profile-name travelq-ec2-profile --role-name travelq-ec2-role
+
+# Attach EC2 Profile created to EC2:
+aws ec2 associate-iam-instance-profile --instance-id i-0cf321bb38216cb5e --iam-instance-profile Name=travelq-ec2-profile --region us-east-1
+
+# Check whether the profile is attached to the EC2 instance.
+aws ec2 describe-iam-instance-profile-associations --region us-east-1
+
+# to pull the image uploaded to ECR into EC2.
+# Loging to ECR from EC2aws iam get-policy --policy-arn arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+
+# ssh to EC2
+ssh -i C:\Users\sures\AWS\Keys\travelq-key-fixed.pem -o IdentitiesOnly=yes ec2-user@44.214.231.173
+
+# login to ECR.
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 589516862821.dkr.ecr.us-east-1.amazonaws.com
+
+# pull the image from ECR.
+docker pull 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
+
+# Check whether the image is pulled from ECR to EC2.
+docker images
 

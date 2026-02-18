@@ -1,0 +1,63 @@
+1. Code in Cursor IDE (local)
+        ↓
+2. Test locally (uvicorn/dev server, no Docker)
+        ↓
+3. Git commit → push to feature branch
+        ↓
+4. Build Docker image locally
+   docker build -t travelq-backend ./backend
+        ↓
+5. Test Docker image locally
+   docker compose -f docker-compose.prod.yml up -d --build
+   curl http://localhost/api/trips/health
+        ↓
+6. Push to ECR
+   docker tag travelq-backend:latest 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
+   docker push 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
+        ↓
+7. Deploy to EC2
+   docker pull (on EC2)
+   docker compose up -d
+
+
+PHASE 1 — DAILY DEVELOPMENT
+─────────────────────────────
+1. Code changes in Cursor IDE
+
+2. Run locally (fast, no Docker build needed):
+   docker compose up -d redis
+   cd backend && uvicorn main:app --reload
+   cd backend && celery -A celery_app worker --loglevel=info --pool=solo
+
+   OR full Docker dev stack:
+   docker compose up -d --build
+
+3. Test at http://localhost:8000
+   git commit → push to feature branch
+
+
+PHASE 2 — PRE-PUSH VALIDATION
+──────────────────────────────
+4. Test with prod compose (mirrors EC2 exactly):
+   docker compose -f docker-compose.prod.yml up -d --build
+   curl http://localhost/api/trips/health
+
+5. If healthy → ready to push to ECR
+
+
+PHASE 3 — DEPLOY TO ECR + EC2
+──────────────────────────────
+6. Build & tag:
+   docker build -t travelq-backend ./backend
+   $TAG = git rev-parse --short HEAD
+   docker tag travelq-backend:latest 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:$TAG
+   docker tag travelq-backend:latest 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
+
+7. Push to ECR:
+   docker push 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:$TAG
+   docker push 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
+
+8. Deploy on EC2:
+   ssh into EC2
+   docker pull 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-backend:latest
+   docker compose -f docker-compose.prod.yml up -d backend celery_worker

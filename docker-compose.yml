@@ -1,95 +1,158 @@
-# Docker Compose — TravelQ Async Pipeline
-# Location: docker-compose.yml (project root)
+# docker-compose.yml
+# ============================================
+# TravelQ Local Build & Test Stack
+# ============================================
 #
-# Services:
-#   redis    — Data store for trip state, agent status, results
-#   api      — FastAPI server (receives requests, returns immediately)
-#   worker   — Celery worker (runs preprocessing + orchestration)
+# Use this to build and test locally before pushing to ECR.
+# Mirrors docker-compose.prod.yml exactly — same Gunicorn server,
+# same healthchecks, same network setup — but builds from local source.
+#
+# Workflow:
+#   1. Make code changes in Cursor
+#   2. docker compose up -d --build     ← test locally with this file
+#   3. curl http://localhost/api/trips/health
+#   4. If healthy → push to ECR → deploy to EC2
 #
 # Usage:
-#   docker-compose up -d          # Start all services
-#   docker-compose logs -f worker # Watch Celery worker logs
-#   docker-compose down           # Stop all services
-#
-# Development (run API locally, just use Redis + Worker):
-#   docker-compose up -d redis    # Start Redis only
-#   cd backend && uvicorn main:app --reload  # Run API locally
-#   cd backend && celery -A celery_app worker --loglevel=info --pool=solo
-
-version: "3.8"
+#   docker compose up -d --build        # Build & start all
+#   docker compose logs -f backend      # Watch backend logs
+#   docker compose down                 # Stop all
+#   docker compose up -d --build backend celery_worker  # Rebuild specific service
 
 services:
-  # ────────────────────────────────────────────────────────────────────
-  # Redis — Broker + Result Backend + Trip State Store
-  # ────────────────────────────────────────────────────────────────────
+  # ==========================================
+  # NGINX — Serves React static files + proxies /api/* to FastAPI
+  # ==========================================
+  nginx:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        VITE_API_URL: /api
+    container_name: travelq-nginx
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: always
+    networks:
+      - travelq-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ==========================================
+  # FASTAPI BACKEND — Gunicorn + Uvicorn workers (matches production)
+  # ==========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: travelq-backend
+    env_file:
+      - .env.prod
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - APP_ENV=production
+    volumes:
+      - ./config:/config:ro
+      - backend-logs:/logs
+    expose:
+      - "8000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/trips/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - travelq-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ==========================================
+  # CELERY WORKER — Same as production
+  # ==========================================
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: travelq-celery
+    command: celery -A celery_app worker --loglevel=info --concurrency=2
+    env_file:
+      - .env.prod
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - APP_ENV=production
+    volumes:
+      - ./config:/config:ro
+      - backend-logs:/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: always
+    healthcheck:
+      disable: true
+    networks:
+      - travelq-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  # ==========================================
+  # REDIS
+  # ==========================================
   redis:
     image: redis:7-alpine
     container_name: travelq-redis
-    ports:
-      - "6379:6379"
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --appendonly yes
+        --appendfsync everysec
+    expose:
+      - "6379"
     volumes:
-      - redis_data:/data
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+      - redis-data:/data
+    restart: always
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
-      timeout: 3s
-      retries: 3
-    restart: unless-stopped
+      timeout: 5s
+      retries: 5
+    networks:
+      - travelq-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "5m"
+        max-file: "2"
 
-  # ────────────────────────────────────────────────────────────────────
-  # FastAPI — HTTP Server (returns immediately, dispatches to Celery)
-  # ────────────────────────────────────────────────────────────────────
-  api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: travelq-api
-    ports:
-      - "8000:8000"
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - AMADEUS_CLIENT_ID=${AMADEUS_CLIENT_ID}
-      - AMADEUS_CLIENT_SECRET=${AMADEUS_CLIENT_SECRET}
-      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
-      - XOTELO_API_KEY=${XOTELO_API_KEY}
-    env_file:
-      - ./backend/.env
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-      - ./backend/logs:/app/logs
-    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    restart: unless-stopped
-
-  # ────────────────────────────────────────────────────────────────────
-  # Celery Worker — Runs preprocessing + agent orchestration
-  # ────────────────────────────────────────────────────────────────────
-  worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: travelq-worker
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - AMADEUS_CLIENT_ID=${AMADEUS_CLIENT_ID}
-      - AMADEUS_CLIENT_SECRET=${AMADEUS_CLIENT_SECRET}
-      - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
-      - XOTELO_API_KEY=${XOTELO_API_KEY}
-    env_file:
-      - ./backend/.env
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./backend:/app
-      - ./backend/logs:/app/logs
-    command: celery -A celery_app worker --loglevel=info --pool=solo --concurrency=2
-    restart: unless-stopped
+networks:
+  travelq-network:
+    driver: bridge
 
 volumes:
-  redis_data:
+  redis-data:
+    driver: local
+  backend-logs:
+    driver: local
