@@ -27,13 +27,33 @@ interface TripData {
 // ============================================================================
 // DEFAULTS — Sensible starting values until user profile DB exists
 // ============================================================================
+// ============================================================================
+// HELPER — Dynamic default dates (next Monday → Saturday)
+// ============================================================================
+
+export function getNextWeekDates(): { startDate: string; endDate: string } {
+  const today = new Date();
+  const day = today.getDay(); // 0=Sun, 1=Mon, ...
+  const daysUntilMonday = day === 0 ? 1 : (8 - day);
+
+  const nextMonday = new Date(today);
+  nextMonday.setDate(today.getDate() + daysUntilMonday);
+
+  const nextSaturday = new Date(nextMonday);
+  nextSaturday.setDate(nextMonday.getDate() + 5);
+
+  const format = (d: Date) => d.toISOString().split('T')[0];
+  return { startDate: format(nextMonday), endDate: format(nextSaturday) };
+}
+
+const { startDate: defaultStart, endDate: defaultEnd } = getNextWeekDates();
 
 const DEFAULT_TRIP_DATA: TripData = {
   id: null,
   origin: 'New York',
   destination: 'London',
-  startDate: '2026-02-20',
-  endDate: '2026-02-25',
+  startDate: defaultStart,   // was '2026-02-20'
+  endDate: defaultEnd,       // was '2026-02-25'
   travelers: 1,
   totalBudget: 4000,
 };

@@ -5,8 +5,17 @@ celery -A celery_app worker --loglevel=info --pool=solo
 #Docker
 Open Docker Desktop
 In Powershell
+
 docker run -d --name travelq-redis -p 6379:6379 redis:7-alpine
 docker ps
+
+# to stop a container.
+docker stop <container_name_or_id>
+
+#To remove redis
+docker rm travelq-redis
+
+# TO restart
 docker restart 5e8fe12be6e7
 
 

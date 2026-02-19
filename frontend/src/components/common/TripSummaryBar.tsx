@@ -8,7 +8,7 @@
 //   - Everything else: UNCHANGED from original
 
 import React, { useState } from 'react';
-import { useTripData } from '../../hooks/useTripData';
+import { useTripData, getNextWeekDates  } from '../../hooks/useTripData';
 import { useItinerary } from '../../hooks/useItinerary';
 
 export const TripSummaryBar: React.FC = () => {
@@ -62,13 +62,14 @@ export const TripSummaryBar: React.FC = () => {
       'Start a new trip? This will clear your current itinerary.'
     );
     if (confirmed) {
+      const { startDate, endDate } = getNextWeekDates();  // ← dynamic
       resetTrip();
       clearItinerary();
       setTempValues({
         origin: 'New York',
         destination: 'London, UK',
-        startDate: '2026-02-20',
-        endDate: '2026-02-25',
+        startDate,    // ← was hardcoded '2026-02-20'
+        endDate,      // ← was hardcoded '2026-02-25'
         travelers: 1,
         budget: 4000,
       });
@@ -78,6 +79,7 @@ export const TripSummaryBar: React.FC = () => {
     setShowTripMenu(false);
   };
 
+  
   const handleClearItinerary = () => {
     const confirmed = window.confirm(
       'Clear all selected items? Trip details will be kept.'

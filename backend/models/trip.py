@@ -2,6 +2,10 @@
 Trip Models - Enhanced for Multi-Agent System
 Location: backend/models/trip.py
 
+Changes (v5):
+  - Added HotelProviderPrice model for multi-OTA price comparison
+  - Hotel: added provider_prices field (list of all OTA prices from Xotelo)
+
 Changes (v4):
   - Added SegmentDetail model (per-hop: terminal, aircraft, operating carrier)
   - Added FlightAmenity model (included vs paid amenities)
@@ -252,6 +256,26 @@ class HotelAmenities(BaseModel):
     breakfast: bool = False
 
 
+class HotelProviderPrice(BaseModel):
+    """
+    Price from a single OTA/booking provider (from Xotelo comparison).
+    
+    v5: New model — enables multi-provider price comparison in the frontend.
+    Xotelo returns 8-13 provider prices per hotel; previously only the cheapest
+    was surfaced. Now all providers are passed through for a comparison table.
+    
+    price_per_night = rate_base + rate_tax (the all-in nightly cost).
+    Most OTAs show rate_base on their search page and add rate_tax at checkout,
+    so the frontend can display both to avoid price-shock when clicking through.
+    """
+    provider: str                                  # "Booking.com", "Expedia", etc.
+    price_per_night: float                         # rate_base + rate_tax (all-in)
+    total_price: float                             # price_per_night × num_nights
+    rate_base: Optional[float] = None              # Base rate per night (before tax)
+    rate_tax: Optional[float] = None               # Tax per night
+    url: Optional[str] = None                      # Direct booking link if available
+
+
 class HotelReview(BaseModel):
     """Individual hotel review from Google Places"""
     author_name: str
@@ -331,6 +355,12 @@ class Hotel(BaseModel):
     price_level: Optional[int] = Field(
         default=None,
         description="Google price level 0-4 (Free to Very Expensive)"
+    )
+
+    # ── v5 addition: Multi-provider pricing from Xotelo ──────────────────
+    provider_prices: Optional[List[HotelProviderPrice]] = Field(
+        default=None,
+        description="All OTA prices sorted cheapest-first (from Xotelo comparison)"
     )
     
     @field_validator('photos', mode='before')

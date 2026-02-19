@@ -1,5 +1,9 @@
 // frontend/src/types/trip.ts
 //
+// Changes (v6):
+//   - Added HotelProviderPrice interface for multi-OTA price comparison
+//   - Hotel: added provider_prices field (all OTA prices from Xotelo)
+//
 // Changes (v5):
 //   - Hotel: added reviews, website, phone_number, google_url, booking_url,
 //     booking_links, cheapest_provider, is_estimated_price, price_level,
@@ -111,6 +115,17 @@ export interface HotelReview {
   relative_time_description?: string;
 }
 
+// ── Hotel Provider Price from Xotelo ────────────────────────────────────
+
+export interface HotelProviderPrice {
+  provider: string;          // "Booking.com", "Expedia", etc.
+  price_per_night: number;   // rate_base + rate_tax (all-in nightly cost)
+  total_price: number;       // price_per_night × num_nights
+  rate_base?: number;        // Base rate per night (what OTAs show on search page)
+  rate_tax?: number;         // Tax per night (added at checkout on most OTAs)
+  url?: string;              // Direct booking link if available
+}
+
 
 export interface Hotel {
   id: string;
@@ -140,6 +155,9 @@ export interface Hotel {
   booking_links?: Record<string, string>; // All OTA URLs: {"Booking.com": url, "Expedia": url}
   cheapest_provider?: string;             // "Booking.com", "Expedia", etc.
   is_estimated_price?: boolean;           // true = estimated, false = real Xotelo price
+
+  // v6 addition — Multi-provider pricing from Xotelo
+  provider_prices?: HotelProviderPrice[]; // All OTA prices, sorted cheapest first
 
   // Frontend-only
   ai_recommended?: boolean;

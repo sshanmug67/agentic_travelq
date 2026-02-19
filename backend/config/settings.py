@@ -81,7 +81,7 @@ class Settings:
         # Optional External APIs
         # =============================================================
         self.google_places_api_key: Optional[str] = None
-        self.xotelo_api_key: Optional[str] = None
+        self.xotelo_rapidapi_key: Optional[str] = None
         self.ticketmaster_api_key: Optional[str] = None
         
         # =============================================================
@@ -241,7 +241,7 @@ class Settings:
             if "external_apis" in data:
                 external = data["external_apis"]
                 self.google_places_api_key = external.get("google_places_key", self.google_places_api_key)
-                self.xotelo_api_key = external.get("xotelo_key", self.xotelo_api_key)
+                self.xotelo_rapidapi_key = external.get("xotelo_rapidapi_key", self.xotelo_rapidapi_key)
                 self.ticketmaster_api_key = external.get("ticketmaster_key", self.ticketmaster_api_key)
             
             # --- Autogen ---
@@ -358,12 +358,12 @@ class Settings:
         else:
             logger.warning("⚠️  GOOGLE_PLACES_API_KEY: NOT set in environment")
         
-        # --- Xotelo API ---
-        if os.getenv("XOTELO_API_KEY"):
-            self.xotelo_api_key = os.getenv("XOTELO_API_KEY")
-            logger.info("✓ XOTELO_API_KEY: Set from environment")
+        # --- Xotelo via RapidAPI ---
+        if os.getenv("XOTELO_RAPIDAPI_KEY"):
+            self.xotelo_rapidapi_key = os.getenv("XOTELO_RAPIDAPI_KEY")
+            logger.info("✓ XOTELO_RAPIDAPI_KEY: Set from environment")
         else:
-            logger.info("ℹ️  XOTELO_API_KEY: Not set (optional, using free tier)")
+            logger.warning("⚠️  XOTELO_RAPIDAPI_KEY: Not set — hotel pricing will use estimates")
         
         # --- Ticketmaster API ---
         if os.getenv("TICKETMASTER_API_KEY"):
@@ -395,8 +395,8 @@ class Settings:
         if not self.google_places_api_key:
             warnings.append("GOOGLE_PLACES_API_KEY not set - hotel search will use Amadeus fallback only")
         
-        if not self.xotelo_api_key:
-            warnings.append("XOTELO_API_KEY not set - using free tier (limited requests)")
+        if not self.xotelo_rapidapi_key:
+            warnings.append("XOTELO_RAPIDAPI_KEY not set - hotel pricing will use estimates only")
         
         # Print errors
         if errors:
@@ -437,7 +437,7 @@ class Settings:
         logger.info("\n📋 API Keys Status:")
         logger.info(f"   OpenAI API Key: {mask_key(self.openai_api_key)}")
         logger.info(f"   Google Places API Key: {mask_key(self.google_places_api_key)}")
-        logger.info(f"   Xotelo API Key: {mask_key(self.xotelo_api_key)}")
+        logger.info(f"   Xotelo RapidAPI Key: {mask_key(self.xotelo_rapidapi_key)}")
         logger.info(f"   Amadeus Client ID: {mask_key(self.amadeus_client_id)}")
         logger.info(f"   Amadeus Client Secret: {mask_key(self.amadeus_client_secret)}")
         logger.info(f"   Weather API Key: {mask_key(self.weather_api_key)}")
@@ -502,8 +502,8 @@ class Settings:
         return self.google_places_api_key
     
     @property
-    def XOTELO_API_KEY(self) -> Optional[str]:
-        return self.xotelo_api_key
+    def XOTELO_RAPIDAPI_KEY(self) -> Optional[str]:
+        return self.xotelo_rapidapi_key
     
     @property
     def TICKETMASTER_API_KEY(self) -> Optional[str]:

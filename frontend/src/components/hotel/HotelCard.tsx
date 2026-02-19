@@ -1,5 +1,7 @@
 // frontend/src/components/hotel/HotelCard.tsx
 //
+// v7 — provider_prices: "Compare Prices" section in expanded view
+//       Shows all OTA prices from Xotelo with per-night rate, total, and Book links
 // v6 — focusedItemId prop: when matched, auto-expand + scroll into view
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -25,6 +27,7 @@ export const HotelCard: React.FC<HotelCardProps> = ({
   const [showPhotos, setShowPhotos] = useState(false);
   const [currentPhotoIndex, setCurrentPhotoIndex] = useState(0);
   const [isFocusHighlight, setIsFocusHighlight] = useState(false);
+  const [showAllProviders, setShowAllProviders] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
 
   const rawPhotos = hotel.photos?.slice(0, 5) || [];
@@ -87,6 +90,24 @@ export const HotelCard: React.FC<HotelCardProps> = ({
     return labels[level] || null;
   };
 
+  /**
+   * Find a booking URL for a provider by matching against hotel.booking_links.
+   * Xotelo rates don't include URLs, but BookingLinkGenerator creates search
+   * URLs for major OTAs. We fuzzy-match provider names (e.g. "Booking.com"
+   * matches "Booking.com" key, "Expedia.com" matches "Expedia").
+   */
+  const findBookingUrl = (providerName: string): string | undefined => {
+    if (!hotel.booking_links) return undefined;
+    const pLower = providerName.toLowerCase().replace(/\.com$/, '');
+    for (const [key, url] of Object.entries(hotel.booking_links)) {
+      const kLower = key.toLowerCase().replace(/\.com$/, '');
+      if (kLower.includes(pLower) || pLower.includes(kLower)) {
+        return url;
+      }
+    }
+    return undefined;
+  };
+
   const ReviewSnippet: React.FC<{ review: HotelReview }> = ({ review }) => {
     const maxLen = 150;
     const text = review.text.length > maxLen
@@ -126,7 +147,7 @@ export const HotelCard: React.FC<HotelCardProps> = ({
     >
       {isAiRecommended && (
         <div className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-400 px-3 py-1 flex items-center justify-center gap-1.5">
-          <span className="text-[12px] font-bold text-amber-900 tracking-wide">✨ AI Recommended</span>
+          <span className="text-[15px] font-bold text-amber-900 tracking-wide handwritten-subtitle">✨ AI Recommended</span>
         </div>
       )}
 
@@ -165,6 +186,11 @@ export const HotelCard: React.FC<HotelCardProps> = ({
           {hotel.is_estimated_price === false && hotel.cheapest_provider && (
             <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full ml-1">
               via {hotel.cheapest_provider}
+            </span>
+          )}
+          {hotel.provider_prices && hotel.provider_prices.length > 1 && (
+            <span className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded-full ml-1">
+              {hotel.provider_prices.length} sites compared
             </span>
           )}
         </div>
@@ -288,6 +314,84 @@ export const HotelCard: React.FC<HotelCardProps> = ({
                   </div>
                 )}
 
+                {/* ── v9: PROVIDER PRICE COMPARISON (tax breakdown + expandable + URL fallback) ── */}
+                {hotel.provider_prices && hotel.provider_prices.length > 1 && (
+                  <div className="bg-gray-50 rounded-lg p-3">
+                    <div className="flex items-baseline justify-between mb-2">
+                      <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
+                        Compare Prices ({hotel.provider_prices.length} sites)
+                      </p>
+                      <span className="text-[10px] text-gray-400 italic">incl. taxes & fees</span>
+                    </div>
+                    <div className="space-y-1.5">
+                      {(showAllProviders ? hotel.provider_prices : hotel.provider_prices.slice(0, 5)).map((pp, idx) => {
+                        const bookUrl = pp.url || findBookingUrl(pp.provider);
+                        return (
+                          <div key={idx}>
+                            <div className="flex items-center justify-between text-[12px]">
+                              <span className="text-gray-600 flex items-center gap-1.5">
+                                {idx === 0 && (
+                                  <span className="text-[9px] bg-green-100 text-green-700 px-1 py-0.5 rounded font-semibold">
+                                    BEST
+                                  </span>
+                                )}
+                                {pp.provider}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <span className={`font-semibold ${idx === 0 ? 'text-green-600' : 'text-gray-700'}`}>
+                                  ${pp.price_per_night.toLocaleString()}<span className="text-[10px] font-normal text-gray-400">/night</span>
+                                </span>
+                                <span className="text-[10px] text-gray-400 w-[70px] text-right">
+                                  ${pp.total_price.toLocaleString()}
+                                </span>
+                                {bookUrl ? (
+                                  <a
+                                    href={bookUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="text-[10px] bg-purple-50 text-purple-600 border border-purple-200 px-1.5 py-0.5 rounded hover:bg-purple-100 font-medium min-w-[48px] text-center"
+                                  >
+                                    Book ↗
+                                  </a>
+                                ) : (
+                                  <span className="min-w-[48px]" />
+                                )}
+                              </div>
+                            </div>
+                            {pp.rate_base != null && pp.rate_tax != null && pp.rate_tax > 0 && (
+                              <p className="text-[10px] text-gray-400 ml-[42px] mt-0.5">
+                                base ${pp.rate_base.toLocaleString()} + ${pp.rate_tax.toLocaleString()} tax/night
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {!showAllProviders && hotel.provider_prices.length > 5 && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setShowAllProviders(true); }}
+                          className="text-[11px] text-purple-600 hover:text-purple-800 font-medium pt-1 w-full text-center hover:underline cursor-pointer"
+                        >
+                          +{hotel.provider_prices.length - 5} more booking sites ▼
+                        </button>
+                      )}
+                      {showAllProviders && hotel.provider_prices.length > 5 && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setShowAllProviders(false); }}
+                          className="text-[11px] text-purple-600 hover:text-purple-800 font-medium pt-1 w-full text-center hover:underline cursor-pointer"
+                        >
+                          Show fewer ▲
+                        </button>
+                      )}
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-2 pt-2 border-t border-gray-200">
+                      💡 Most booking sites show the base rate on their search page and add taxes at checkout.
+                      Our prices include taxes so you see the true total.
+                    </p>
+                  </div>
+                )}
+
+                {/* PRICE DETAILS */}
                 <div className="bg-gray-50 rounded-lg p-3">
                   <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Price Details</p>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-[12px]">

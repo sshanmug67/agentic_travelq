@@ -2,6 +2,10 @@
 Hotel Agent - Complete Implementation
 Google Places + Xotelo + Booking Links + Amadeus Fallback
 
+Changes (v8):
+  - _create_hotel_from_google: maps pricing['all_providers'] → provider_prices
+    field on Hotel model, enabling multi-OTA price comparison in frontend
+
 Changes (v7):
   - Granular status updates: _update_status() sends real-time progress messages
     to Redis via trip_storage, enabling the frontend PlanningStatus component
@@ -38,10 +42,40 @@ Changes (v4):
   - room_type, price_range → passed to LLM for recommendation
 
 Location: backend/agents/hotel_agent.py
+
+Hotel Agent — _enrich_hotels_with_pricing REPLACEMENT (async batch + Redis cache)
+
+This replaces the existing _enrich_hotels_with_pricing in hotel_agent.py.
+
+FLOW:
+  1. Check Redis for cached Xotelo pricing for each hotel+dates combo
+  2. Send only CACHE MISSES to xotelo.batch_get_prices()
+  3. Store fresh results back in Redis (60 min TTL)
+  4. Merge cached + fresh results, build Hotel objects
+
+API SAVINGS:
+  - 33 hotels × 2 Xotelo calls = 66 requests per user search
+  - With cache: second identical search = 0 Xotelo requests
+  - Free tier: 1,000 req/month → ~15 searches without cache, 100+ with cache
+
+REQUIREMENTS:
+  - redis package (pip install redis)
+  - Redis server running (already required for Celery/status updates)
+  - Add _get_redis_client() and _xotelo_cache_key() methods to HotelAgent
+
+CACHE KEY FORMAT:
+  xotelo:pricing:{name_hash}:{destination}:{check_in}:{check_out}
+
+CACHE TTL: 60 minutes (configurable via XOTELO_CACHE_TTL_SECONDS)
+
 """
 import json
 import re
 import time
+import asyncio
+import hashlib
+import redis
+
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -51,7 +85,7 @@ from services.amadeus_service import get_amadeus_service
 from services.google_places_service import get_google_places_service
 from services.xotelo_service import get_xotelo_service
 from utils.booking_links import BookingLinkGenerator
-from models.trip import Hotel, HotelAmenities, HotelReview
+from models.trip import Hotel, HotelAmenities, HotelReview, HotelProviderPrice
 
 from utils.logging_config import log_agent_raw, log_agent_json
 from config.settings import settings
@@ -66,6 +100,9 @@ BUDGET_TOLERANCE = 1.2
 # v6: Wide search multiplier — fetch 3x display_max, LLM curates down
 WIDE_SEARCH_MULTIPLIER = 3
 
+# How long Xotelo pricing stays valid in Redis (seconds)
+# 60 minutes is a good balance — prices don't change minute to minute
+XOTELO_CACHE_TTL_SECONDS = 3600  # 60 minutes
 
 class HotelAgent(TravelQBaseAgent):
     """
@@ -75,6 +112,7 @@ class HotelAgent(TravelQBaseAgent):
     - Amadeus as fallback
     - Booking links for conversion
     
+    v8: provider_prices passed through for multi-OTA comparison
     v7: Granular status updates for frontend PlanningStatus component
     v6: Wide search + LLM curation pattern (mirrors FlightAgent v6)
     """
@@ -111,7 +149,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         self.xotelo = get_xotelo_service()
         self.booking_links = BookingLinkGenerator()
         
-        log_agent_raw("🏨 HotelAgent initialized (v7 — GRANULAR STATUS + WIDE SEARCH + LLM CURATION)", agent_name="HotelAgent")
+        log_agent_raw("🏨 HotelAgent initialized (v8 — PROVIDER PRICES + GRANULAR STATUS + WIDE SEARCH + LLM CURATION)", agent_name="HotelAgent")
         log_agent_raw("   ✓ Google Places service", agent_name="HotelAgent")
         log_agent_raw("   ✓ Xotelo pricing service", agent_name="HotelAgent")
         log_agent_raw("   ✓ Amadeus fallback", agent_name="HotelAgent")
@@ -572,6 +610,45 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         self._update_status("All APIs unavailable — using sample hotel data")
         return self._generate_mock_hotels(destination, check_in_date, check_out_date)
     
+
+    def _get_redis_client(self):
+        """
+        Get Redis client for Xotelo pricing cache (lazy init).
+        
+        Uses the same Redis URL as Celery/status updates.
+        Returns None if Redis unavailable (graceful degradation).
+        """
+        if not hasattr(self, '_redis_client') or self._redis_client is None:
+            try:
+                from config.settings import settings
+                self._redis_client = redis.from_url(
+                    settings.redis_url,
+                    decode_responses=True,  # Return strings, not bytes
+                    socket_connect_timeout=2,
+                    socket_timeout=2,
+                )
+                self._redis_client.ping()
+                self.logger.info("✅ Redis connected for Xotelo pricing cache")
+            except Exception as e:
+                self.logger.warning(f"⚠️  Redis not available for pricing cache: {e}")
+                self._redis_client = None
+        return self._redis_client
+
+
+    def _xotelo_cache_key(self, hotel_name: str, destination: str, check_in: str, check_out: str) -> str:
+        """
+        Build deterministic Redis key for hotel+dates pricing lookup.
+        
+        Normalizes hotel name to avoid misses from casing/whitespace.
+        Uses MD5 hash prefix to keep keys short.
+        
+        Example: xotelo:pricing:a1b2c3d4e5f6:london:2026-02-23:2026-02-28
+        """
+        normalized = " ".join(hotel_name.lower().strip().split())
+        name_hash = hashlib.md5(normalized.encode()).hexdigest()[:12]
+        dest_clean = destination.lower().strip().replace(" ", "_")
+        return f"xotelo:pricing:{name_hash}:{dest_clean}:{check_in}:{check_out}"
+
     # ─────────────────────────────────────────────────────────────────────
     # v6: CHAIN TAGGING (mirrors FlightAgent _tag_flight)
     # ─────────────────────────────────────────────────────────────────────
@@ -1220,20 +1297,182 @@ CRITICAL RULES:
         """
         Enrich Google Places hotels with pricing, booking links, and metadata.
         
-        v7: Per-hotel status updates during enrichment loop.
-        v5: Now passes all pricing metadata (cheapest_provider, is_estimated)
-        and all booking links (not just booking_com) through to Hotel model.
-        """
-        log_agent_raw("💰 Enriching with Xotelo Pricing & Booking Links", agent_name="HotelAgent")
+        REDIS CACHE + ASYNC BATCH:
+        1. Check Redis for each hotel's cached Xotelo pricing
+        2. Only send cache-misses to Xotelo (saves API quota)
+        3. Store fresh results in Redis with 60-min TTL
+        4. Build Hotel objects from cached + fresh pricing
         
-        enriched_hotels = []
-        xotelo_success_count = 0
+        v8: Redis caching for Xotelo API quota conservation (1,000 req/month)
+             + provider_prices passed through to Hotel model
+        v7: Per-hotel status updates during enrichment loop
+        v5: Passes all pricing metadata and booking links through to Hotel model
+        """
+        from utils.logging_config import log_agent_raw
+        
+        log_agent_raw(
+            "💰 Enriching with Xotelo Pricing & Booking Links (ASYNC BATCH + REDIS CACHE)",
+            agent_name="HotelAgent"
+        )
+        
         total_hotels = len(google_hotels)
         
-        for idx, google_hotel in enumerate(google_hotels, 1):
+        # ── Step 1: Check Redis cache for existing pricing ───────────────
+        
+        redis_client = self._get_redis_client()
+        pricing_map: Dict[int, Optional[Dict[str, Any]]] = {}
+        hotels_needing_xotelo: List[Dict] = []
+        xotelo_index_map: Dict[int, int] = {}  # xotelo_batch_idx → original_idx
+        cache_hits = 0
+        cached_indices = set()  # Track which orignal indices came from cache
+        
+        if redis_client:
+            pipe = redis_client.pipeline()
+            cache_keys = []
+            
+            for idx, hotel in enumerate(google_hotels):
+                key = self._xotelo_cache_key(
+                    hotel.get('name', 'Unknown'),
+                    destination,
+                    check_in_date,
+                    check_out_date
+                )
+                cache_keys.append((idx, key))
+                pipe.get(key)
+            
+            try:
+                cached_values = pipe.execute()
+                
+                for (idx, key), cached_json in zip(cache_keys, cached_values):
+                    if cached_json:
+                        try:
+                            pricing_map[idx] = json.loads(cached_json)
+                            cached_indices.add(idx)
+                            cache_hits += 1
+                        except json.JSONDecodeError:
+                            # Corrupted cache entry — treat as miss
+                            xotelo_batch_idx = len(hotels_needing_xotelo)
+                            xotelo_index_map[xotelo_batch_idx] = idx
+                            hotels_needing_xotelo.append(google_hotels[idx])
+                    else:
+                        xotelo_batch_idx = len(hotels_needing_xotelo)
+                        xotelo_index_map[xotelo_batch_idx] = idx
+                        hotels_needing_xotelo.append(google_hotels[idx])
+                        
+            except Exception as e:
+                self.logger.warning(f"⚠️  Redis cache read failed: {e} — fetching all from Xotelo")
+                hotels_needing_xotelo = list(google_hotels)
+                xotelo_index_map = {i: i for i in range(len(google_hotels))}
+                cache_hits = 0
+                cached_indices.clear()
+        else:
+            # No Redis available — all hotels need Xotelo
+            hotels_needing_xotelo = list(google_hotels)
+            xotelo_index_map = {i: i for i in range(len(google_hotels))}
+        
+        self.logger.info(
+            f"📦 Cache: {cache_hits}/{total_hotels} hits, "
+            f"{len(hotels_needing_xotelo)} need Xotelo API "
+            f"(~{len(hotels_needing_xotelo) * 2} requests)"
+        )
+        
+        self._update_status(
+            f"Cache: {cache_hits} hits — fetching {len(hotels_needing_xotelo)} from Xotelo..."
+        )
+        
+        # ── Step 2: Batch-fetch pricing for cache misses only ────────────
+        
+        start_time = time.time()
+        xotelo_success_count = 0
+        
+        if hotels_needing_xotelo:
+            self.logger.info(
+                f"🌐 Fetching {len(hotels_needing_xotelo)} hotels from Xotelo "
+                f"(~{len(hotels_needing_xotelo) * 2} API calls)"
+            )
+            
+            # Always create a fresh event loop to avoid double-execution.
+            # asyncio.run() can complete the batch then raise RuntimeError
+            # during cleanup in Python 3.12/Celery, causing the except block
+            # to re-run the entire batch (doubling API usage from ~66 to ~132).
+            loop = asyncio.new_event_loop()
+            try:
+                batch_results = loop.run_until_complete(
+                    self.xotelo.batch_get_prices(
+                        hotels=hotels_needing_xotelo,
+                        destination=destination,
+                        check_in_date=check_in_date,
+                        check_out_date=check_out_date,
+                        agent_logger=self.logger,
+                    )
+                )
+            finally:
+                loop.close()
+            
+            # ── Step 3: Store fresh results in Redis + merge into pricing_map ──
+            
+            cache_pipe = redis_client.pipeline() if redis_client else None
+            
+            for batch_idx, pricing in batch_results:
+                original_idx = xotelo_index_map[batch_idx]
+                pricing_map[original_idx] = pricing
+                
+                if pricing is not None:
+                    xotelo_success_count += 1
+                    
+                    # Cache successful Xotelo results
+                    if cache_pipe:
+                        try:
+                            hotel_name = google_hotels[original_idx].get('name', 'Unknown')
+                            key = self._xotelo_cache_key(
+                                hotel_name, destination,
+                                check_in_date, check_out_date
+                            )
+                            cache_pipe.setex(
+                                key,
+                                XOTELO_CACHE_TTL_SECONDS,
+                                json.dumps(pricing)
+                            )
+                        except Exception:
+                            pass  # Never fail enrichment over cache writes
+            
+            # Execute all cache writes in one Redis roundtrip
+            if cache_pipe:
+                try:
+                    cache_pipe.execute()
+                    if xotelo_success_count > 0:
+                        self.logger.info(
+                            f"💾 Cached {xotelo_success_count} Xotelo results "
+                            f"(TTL: {XOTELO_CACHE_TTL_SECONDS // 60}min)"
+                        )
+                except Exception as e:
+                    self.logger.warning(f"⚠️  Redis cache write failed: {e}")
+        else:
+            self.logger.info("✨ All hotels served from cache — 0 Xotelo API calls!")
+        
+        pricing_duration = time.time() - start_time
+        estimated_count = total_hotels - cache_hits - xotelo_success_count
+        
+        log_agent_raw(
+            f"⚡ Pricing complete in {pricing_duration:.2f}s: "
+            f"{cache_hits} cached, {xotelo_success_count} from Xotelo, "
+            f"{estimated_count} estimated",
+            agent_name="HotelAgent"
+        )
+        
+        self._update_status(
+            f"Pricing fetched in {pricing_duration:.1f}s — "
+            f"{cache_hits} cached, {xotelo_success_count} real, "
+            f"{estimated_count} estimated"
+        )
+        
+        # ── Step 4: Build Hotel objects ──────────────────────────────────
+        
+        enriched_hotels = []
+        
+        for idx, google_hotel in enumerate(google_hotels):
             hotel_name = google_hotel.get('name', 'Unknown')
             chain_tier = google_hotel.get('_chain_tier', '')
-            matched_chain = google_hotel.get('_matched_chain', '')
             
             tier_tag = ""
             if chain_tier == 'preferred':
@@ -1241,47 +1480,30 @@ CRITICAL RULES:
             elif chain_tier == 'interested':
                 tier_tag = " ☆[INTERESTED]"
             
-            log_agent_raw(f"🏨 Hotel {idx}/{total_hotels}: {hotel_name}{tier_tag}", 
-                        agent_name="HotelAgent")
+            # Get pricing (from cache, Xotelo, or estimate)
+            pricing = pricing_map.get(idx)
             
-            # v7: Per-hotel status update (every hotel for small pools, every 3rd for large)
-            if total_hotels <= 15 or idx % 3 == 1 or idx == total_hotels:
-                self._update_status(
-                    f"Retrieving pricing for {hotel_name} ({idx}/{total_hotels})..."
+            if pricing:
+                source_label = "cached" if idx in cached_indices else pricing.get('cheapest_provider', 'xotelo')
+                log_agent_raw(
+                    f"🏨 {idx+1}/{total_hotels}: {hotel_name}{tier_tag} → "
+                    f"${pricing['total_price']:.2f} via {source_label}",
+                    agent_name="HotelAgent"
                 )
-            
-            # Try Xotelo pricing
-            pricing = None
-            if self.xotelo:
-                try:
-                    pricing = self.xotelo.get_price_for_hotel(
-                        hotel_name=hotel_name,
-                        location=destination,
-                        check_in_date=check_in_date,
-                        check_out_date=check_out_date,
-                        agent_logger=self.logger
-                    )
-                    if pricing:
-                        xotelo_success_count += 1
-                        log_agent_raw(f"   ✓ Xotelo: ${pricing['total_price']:.2f} "
-                                    f"(${pricing['price_per_night']:.2f}/night) "
-                                    f"via {pricing.get('cheapest_provider', 'N/A')}", 
-                                    agent_name="HotelAgent")
-                except Exception as e:
-                    log_agent_raw(f"   ⚠️ Xotelo error: {str(e)}", agent_name="HotelAgent")
-            
-            # Fallback to estimation
-            if not pricing:
+            else:
+                # Fallback to estimation
                 pricing = self._estimate_price(
                     google_hotel.get('price_level', 2),
                     google_hotel.get('google_rating', 3.5),
                     num_nights
                 )
-                log_agent_raw(f"   ✓ Estimated: ${pricing['total_price']:.2f} "
-                            f"(${pricing['price_per_night']:.2f}/night)", 
-                            agent_name="HotelAgent")
+                log_agent_raw(
+                    f"🏨 {idx+1}/{total_hotels}: {hotel_name}{tier_tag} → "
+                    f"${pricing['total_price']:.2f} (estimated)",
+                    agent_name="HotelAgent"
+                )
             
-            # Generate ALL booking links
+            # Generate ALL booking links (fast, no HTTP)
             booking_links_raw = self.booking_links.generate_all_links(
                 hotel_name=hotel_name,
                 city=destination,
@@ -1292,10 +1514,7 @@ CRITICAL RULES:
                 longitude=google_hotel.get('longitude')
             )
             
-            log_agent_raw(f"   ✓ Generated {len(booking_links_raw)} booking links", 
-                        agent_name="HotelAgent")
-            
-            # v5: Flatten booking links to {provider_name: url} for frontend
+            # Flatten booking links to {provider_name: url}
             booking_links_flat = {}
             primary_booking_url = None
             for key, link_data in booking_links_raw.items():
@@ -1318,16 +1537,18 @@ CRITICAL RULES:
             
             enriched_hotels.append(hotel)
         
-        log_agent_raw(f"📊 Enrichment: {len(enriched_hotels)} hotels, "
-                    f"Xotelo: {xotelo_success_count}, "
-                    f"Estimated: {len(enriched_hotels) - xotelo_success_count}",
-                    agent_name="HotelAgent")
+        log_agent_raw(
+            f"📊 Enrichment complete: {len(enriched_hotels)} hotels, "
+            f"Cached: {cache_hits}, Xotelo: {xotelo_success_count}, "
+            f"Estimated: {estimated_count}, "
+            f"Total time: {pricing_duration:.2f}s",
+            agent_name="HotelAgent"
+        )
         
-        # v7: Status — enrichment complete
         self._update_status(
             f"Pricing complete: {len(enriched_hotels)} hotels "
-            f"({xotelo_success_count} real prices, "
-            f"{len(enriched_hotels) - xotelo_success_count} estimated)"
+            f"({cache_hits} cached, {xotelo_success_count} real, "
+            f"{estimated_count} estimated)"
         )
         
         return enriched_hotels
@@ -1369,6 +1590,8 @@ CRITICAL RULES:
         """
         Create Hotel object from Google Places + pricing + booking links.
         
+        v8: Maps pricing['all_providers'] → provider_prices for multi-OTA
+            price comparison in the frontend.
         v5: Now passes through ALL Google Places data that _parse_place_result
         extracts: reviews, website, phone_number, google_url, price_level,
         property_type. Also stores all OTA booking links and price metadata.
@@ -1394,6 +1617,22 @@ CRITICAL RULES:
             'hostel': 'Hostel',
         }
         property_type = property_type_map.get(primary_type, primary_type.replace('_', ' ').title() if primary_type else None)
+        
+        # ── v8: Build provider_prices from Xotelo all_providers ──────────
+        provider_prices = None
+        all_providers = pricing.get('all_providers')
+        if all_providers:
+            provider_prices = [
+                HotelProviderPrice(
+                    provider=p['provider'],
+                    price_per_night=p['price_per_night'],
+                    total_price=p['total_price'],
+                    rate_base=p.get('rate'),
+                    rate_tax=p.get('tax'),
+                    url=p.get('url'),
+                )
+                for p in sorted(all_providers, key=lambda x: x['total_price'])
+            ]
         
         return Hotel(
             id=google_data.get('place_id', str(time.time())),
@@ -1429,6 +1668,8 @@ CRITICAL RULES:
             # ── v5: Pricing metadata ─────────────────────────────────────
             is_estimated_price=pricing.get('is_estimated', True),
             cheapest_provider=pricing.get('cheapest_provider'),
+            # ── v8: All provider prices for comparison ───────────────────
+            provider_prices=provider_prices,
             # ── v5: All OTA booking links ────────────────────────────────
             booking_links=booking_links if booking_links else None,
             # Description — store price source for debugging

@@ -109,7 +109,7 @@ export const RestaurantCard: React.FC<RestaurantCardProps> = ({
     >
       {isAiRecommended && (
         <div className="bg-gradient-to-r from-amber-400 via-yellow-400 to-amber-400 px-3 py-1 flex items-center justify-center gap-1.5">
-          <span className="text-[12px] font-bold text-amber-900 tracking-wide">✨ AI Recommended</span>
+          <span className="text-[15px] font-bold text-amber-900 tracking-wide handwritten-subtitle">✨ AI Recommended</span>
         </div>
       )}
       <div className="flex gap-3 p-4">
