@@ -1,0 +1,30 @@
+{
+  "rules": [
+    {
+      "rulePriority": 1,
+      "description": "Keep only last 3 tagged images per branch prefix (main-*, dev-*)",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPrefixList": ["main-", "dev-"],
+        "countType": "imageCountMoreThan",
+        "countNumber": 6
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 2,
+      "description": "Remove untagged images older than 1 day",
+      "selection": {
+        "tagStatus": "untagged",
+        "countType": "sinceImagePushed",
+        "countUnit": "days",
+        "countNumber": 1
+      },
+      "action": {
+        "type": "expire"
+      }
+    }
+  ]
+}

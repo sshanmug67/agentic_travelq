@@ -1,8 +1,32 @@
+# .github/workflows/deploy-aws-ec2.yml
+# ============================================================
+# TravelQ CI/CD Pipeline — Dual Environment (Resume + Dev)
+# ============================================================
+#
+# Branch → Environment mapping:
+#   main → Prod EC2 (always on, fully featured)
+#   dev  → Dev EC2 (start/stop as needed)
+#
+# ECR tagging strategy (single repo, branch-prefixed tags):
+#   travelq-backend:main-latest    ← Prod EC2 pulls this
+#   travelq-backend:main-abc1234
+#   travelq-backend:dev-latest     ← Dev EC2 pulls this
+#   travelq-backend:dev-abc1234
+#
+# GitHub Secrets required:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   EC2_HOST_PROD    ← Prod EC2 public IP / Elastic IP
+#   EC2_HOST_DEV       ← Dev EC2 public IP / Elastic IP
+#   EC2_USER           ← ec2-user (shared)
+#   EC2_SSH_KEY        ← SSH private key (shared travelq-key)
+#   ECR_REGISTRY_URI   ← 589516862821.dkr.ecr.us-east-1.amazonaws.com
+# ============================================================
+
 name: Deploy TravelQ — AWS EC2
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 env:
@@ -36,14 +60,18 @@ jobs:
       - name: Build and push Backend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
+          SHORT_SHA=${SHA:0:7}
           cd backend
+          echo "Building backend for branch: $BRANCH (sha: $SHORT_SHA)"
           docker build --platform=linux/amd64 \
-            -t $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:latest .
-          docker push $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:latest
+            -t $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:${BRANCH}-latest \
+            -t $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:${BRANCH}-${SHORT_SHA} .
+          docker push $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:${BRANCH}-latest
+          docker push $ECR_REGISTRY/$ECR_BACKEND_REPOSITORY:${BRANCH}-${SHORT_SHA}
+          echo "✅ Pushed: ${BRANCH}-latest and ${BRANCH}-${SHORT_SHA}"
 
   # ============================================
   # Job 2: Build & Push Frontend Image to ECR
@@ -70,48 +98,78 @@ jobs:
       - name: Build and push Frontend image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
+          SHORT_SHA=${SHA:0:7}
           cd frontend
+          echo "Building frontend for branch: $BRANCH (sha: $SHORT_SHA)"
           docker build --platform=linux/amd64 \
             -f Dockerfile.prod \
             --build-arg VITE_API_URL=/api \
-            -t $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:latest .
-          docker push $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:latest
+            -t $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:${BRANCH}-latest \
+            -t $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:${BRANCH}-${SHORT_SHA} .
+          docker push $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:${BRANCH}-latest
+          docker push $ECR_REGISTRY/$ECR_FRONTEND_REPOSITORY:${BRANCH}-${SHORT_SHA}
+          echo "✅ Pushed: ${BRANCH}-latest and ${BRANCH}-${SHORT_SHA}"
 
   # ============================================
-  # Job 3: Deploy to EC2
+  # Job 3: Deploy to EC2 (branch-aware)
   # ============================================
   deploy-ec2:
     name: Deploy to EC2
     runs-on: ubuntu-latest
-    needs: [build-backend, build-frontend]  # waits for BOTH jobs
+    needs: [build-backend, build-frontend]
 
     steps:
+      - name: Set target EC2 host based on branch
+        run: |
+          if [ "${{ github.ref_name }}" = "main" ]; then
+            echo "EC2_HOST=${{ secrets.EC2_HOST_PROD }}" >> $GITHUB_ENV
+            echo "DEPLOY_ENV=prod" >> $GITHUB_ENV
+          else
+            echo "EC2_HOST=${{ secrets.EC2_HOST_DEV }}" >> $GITHUB_ENV
+            echo "DEPLOY_ENV=dev" >> $GITHUB_ENV
+          fi
+          echo "BRANCH=${{ github.ref_name }}" >> $GITHUB_ENV
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
-          host: ${{ secrets.EC2_HOST }}
+          host: ${{ env.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: BRANCH
           script: |
             set -e
+            echo "🚀 Deploying TravelQ (${{ env.DEPLOY_ENV }}) from branch: $BRANCH"
+
             cd ~/agentic_travelq
-            git pull origin main
+            git fetch origin $BRANCH
+            git checkout $BRANCH
+            git pull origin $BRANCH
 
             # Login to ECR
             aws ecr get-login-password --region us-east-1 | \
               docker login --username AWS --password-stdin \
               ${{ secrets.ECR_REGISTRY_URI }}
 
-            # Pull latest images for both backend and frontend
-            docker compose -f docker-compose.prod.yml pull backend
-            docker compose -f docker-compose.prod.yml pull nginx
+            # Set image tags for this branch
+            export BACKEND_TAG=${BRANCH}-latest
+            export FRONTEND_TAG=${BRANCH}-latest
 
-            # Restart all services
-            docker compose -f docker-compose.prod.yml up -d --build
+            # Pull branch-specific images
+            docker pull ${{ secrets.ECR_REGISTRY_URI }}/${{ env.ECR_BACKEND_REPOSITORY }}:${BACKEND_TAG}
+            docker pull ${{ secrets.ECR_REGISTRY_URI }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${FRONTEND_TAG}
+
+            # Tag as 'latest' so docker-compose.prod.yml can reference them
+            docker tag ${{ secrets.ECR_REGISTRY_URI }}/${{ env.ECR_BACKEND_REPOSITORY }}:${BACKEND_TAG} \
+                       ${{ secrets.ECR_REGISTRY_URI }}/${{ env.ECR_BACKEND_REPOSITORY }}:latest
+            docker tag ${{ secrets.ECR_REGISTRY_URI }}/${{ env.ECR_FRONTEND_REPOSITORY }}:${FRONTEND_TAG} \
+                       ${{ secrets.ECR_REGISTRY_URI }}/${{ env.ECR_FRONTEND_REPOSITORY }}:latest
+
+            # Restart services
+            docker compose -f docker-compose.prod.yml up -d
 
             # Cleanup old images
             docker image prune -f
@@ -119,9 +177,9 @@ jobs:
             # Verify health
             sleep 15
             if curl -sf http://localhost/api/trips/health > /dev/null; then
-              echo "Deployment successful! TravelQ is healthy."
+              echo "✅ Deployment successful! TravelQ (${{ env.DEPLOY_ENV }}) is healthy."
             else
-              echo "Health check failed!"
+              echo "❌ Health check failed!"
               docker compose -f docker-compose.prod.yml logs --tail=50
               exit 1
             fi
