@@ -1,7 +1,7 @@
 # ============================================================================
 # Agentic Travel Dashboard - Application Configuration
 # ============================================================================
-# Location: AGENTIC_TRAVELQ/app_config.yaml
+# Location: AGENTIC_TRAVELQ/config/app_config.yaml
 #
 # IMPORTANT: This file may contain secrets (API keys).
 #            Add to .gitignore: app_config.yaml
@@ -27,6 +27,23 @@ cors:
   origins:
     - "http://localhost:3000"
     - "http://localhost:5173"
+
+# --- Logging & Rotation ---
+# Controls RotatingFileHandler settings for all log files.
+# Python app writes to disk; CloudWatch Agent tails the active .log files.
+# Backup files (.log.1, .log.2, etc.) are local safety nets only.
+#
+# Disk budget formula:
+#   Root:   3 files × (max_bytes_mb × (1 + backup_count)) = 3 × 40 MB = 120 MB
+#   Agents: 7 agents × (max_bytes_mb × (1 + backup_count)) = 7 × 20 MB = 140 MB
+#   Total:  ~260 MB worst case
+logging:
+  root:
+    max_bytes_mb: 10            # Max size per root log file before rotation
+    backup_count: 3             # Number of rotated backups to keep
+  agents:
+    max_bytes_mb: 5             # Max size per agent log file before rotation
+    backup_count: 3             # Number of rotated backups to keep
 
 # --- Supabase ---
 supabase:

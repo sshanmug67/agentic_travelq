@@ -190,3 +190,33 @@ docker ps
 curl http://localhost/api/trips/health 
 
 http://localhost
+
+
+--------------------------------------------------------------------------------------
+# Docker Server check.
+
+# ssh to EC2
+ssh -i C:\Users\sures\AWS\Keys\travelq-key-fixed.pem -o IdentitiesOnly=yes ec2-user@44.214.231.173
+
+# Live tail of celery logs
+docker logs -f travelq-celery --tail 200
+
+# Or search for Xotelo-specific output
+docker logs travelq-celery 2>&1 | grep -i xotelo
+
+docker logs -f travelq-backend --tail 200
+
+# TO check the full log file.
+docker logs travelq-celery > /tmp/celery.log 2>&1
+nano /tmp/celery.log
+
+docker logs travelq-backend > /tmp/backend.log 2>&1
+nano /tmp/celery.log
+
+# Restart the All docker containers.
+docker compose -f docker-compose.prod.yml down
+docker compose -f docker-compose.prod.yml up -d
+
+# to Rebuild 4 containers from code in local
+docker compose down
+docker compose up -d --build

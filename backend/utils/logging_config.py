@@ -9,6 +9,11 @@ Provides:
 
 File location: backend/utils/logging_config.py
 Log directory: AGENTIC_TRAVELQ/logs/
+
+Rotation values flow from: app_config.yaml → settings.py → this file
+- Root log files: settings.logging_root_max_bytes / logging_root_backup_count
+- Agent log files: settings.logging_agent_max_bytes / logging_agent_backup_count
+- Defaults (if settings unavailable): 10 MB / 3 backups (root), 5 MB / 3 backups (agents)
 """
 import logging
 import os
@@ -17,6 +22,39 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 import json
 from datetime import datetime, date
+from logging.handlers import RotatingFileHandler
+
+
+# ============================================================================
+# ROTATION DEFAULTS (used if settings not yet loaded)
+# ============================================================================
+_DEFAULT_ROOT_MAX_BYTES = 10 * 1024 * 1024     # 10 MB
+_DEFAULT_ROOT_BACKUP_COUNT = 3
+_DEFAULT_AGENT_MAX_BYTES = 5 * 1024 * 1024     # 5 MB
+_DEFAULT_AGENT_BACKUP_COUNT = 3
+
+
+def _get_rotation_settings():
+    """
+    Get rotation settings from the global settings instance.
+    Falls back to module-level defaults if settings isn't loaded yet
+    (avoids circular import during early startup).
+    """
+    try:
+        from config.settings import settings
+        return {
+            "root_max_bytes": settings.logging_root_max_bytes,
+            "root_backup_count": settings.logging_root_backup_count,
+            "agent_max_bytes": settings.logging_agent_max_bytes,
+            "agent_backup_count": settings.logging_agent_backup_count,
+        }
+    except Exception:
+        return {
+            "root_max_bytes": _DEFAULT_ROOT_MAX_BYTES,
+            "root_backup_count": _DEFAULT_ROOT_BACKUP_COUNT,
+            "agent_max_bytes": _DEFAULT_AGENT_MAX_BYTES,
+            "agent_backup_count": _DEFAULT_AGENT_BACKUP_COUNT,
+        }
 
 
 class ConditionalFormatter(logging.Formatter):
@@ -54,7 +92,9 @@ def setup_logging(
     fresh_start: bool = False
 ):
     """
-    Setup logging with console and file handlers
+    Setup logging with console and file handlers.
+    
+    Rotation values are read from settings (app_config.yaml → settings.py).
     
     Args:
         log_file_name: Base name for log files
@@ -128,23 +168,51 @@ def setup_logging(
                 except Exception as e:
                     print(f"⚠️  Could not delete {log_file}: {e}")
     
-    # File handler 1 - all messages
-    all_handler = logging.FileHandler(all_file_name, encoding='utf-8')
+    # Get rotation values from settings (YAML → settings.py → here)
+    rot = _get_rotation_settings()
+    max_bytes = rot["root_max_bytes"]
+    backup_count = rot["root_backup_count"]
+    
+    # ── File handler 1 - all messages ──
+    all_handler = RotatingFileHandler(
+        all_file_name,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding='utf-8'
+    )
     all_handler.setLevel(logging.DEBUG)
     all_handler.setFormatter(formatter)
     root.addHandler(all_handler)
     
-    # File handler 2 - warnings only
-    warning_handler = logging.FileHandler(warning_file_name, encoding='utf-8')
+    # ── File handler 2 - warnings only ──
+    warning_handler = RotatingFileHandler(
+        warning_file_name,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding='utf-8'
+    )
     warning_handler.setLevel(logging.WARNING)
     warning_handler.setFormatter(formatter)
     root.addHandler(warning_handler)
     
-    # File handler 3 - errors only
-    error_handler = logging.FileHandler(error_file_name, encoding='utf-8')
+    # ── File handler 3 - errors only ──
+    error_handler = RotatingFileHandler(
+        error_file_name,
+        maxBytes=max_bytes,
+        backupCount=backup_count,
+        encoding='utf-8'
+    )
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(formatter)
     root.addHandler(error_handler)
+    
+    # Log effective rotation settings for verification
+    mb = max_bytes / (1024 * 1024)
+    total_mb = mb * (1 + backup_count)
+    logging.getLogger(__name__).info(
+        f"✅ Log rotation: root files = {mb:.0f} MB × {backup_count} backups "
+        f"({total_mb:.0f} MB max per file)"
+    )
 
 
 def shutdown_logging():
@@ -295,7 +363,9 @@ def setup_agent_logging(
     fresh_start: bool = False
 ):
     """
-    Setup dedicated logger for a specific agent
+    Setup dedicated logger for a specific agent.
+    
+    Rotation values are read from settings (app_config.yaml → settings.py → here).
     
     Args:
         agent_name: Name of the agent (e.g., "flight_agent", "weather_agent")
@@ -334,7 +404,15 @@ def setup_agent_logging(
         except Exception as e:
             print(f"⚠️  Could not delete agent log: {e}")
     
-    agent_handler = logging.FileHandler(agent_file, encoding='utf-8')
+    # Get rotation values from settings (YAML → settings.py → here)
+    rot = _get_rotation_settings()
+    
+    agent_handler = RotatingFileHandler(
+        agent_file,
+        maxBytes=rot["agent_max_bytes"],
+        backupCount=rot["agent_backup_count"],
+        encoding='utf-8'
+    )
     agent_handler.setLevel(logging.INFO)
     agent_handler.setFormatter(formatter)
     agent_logger.addHandler(agent_handler)

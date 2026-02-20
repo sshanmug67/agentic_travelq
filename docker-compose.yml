@@ -61,7 +61,7 @@ services:
       - APP_ENV=production
     volumes:
       - ./config:/config:ro
-      - backend-logs:/logs
+      - ./logs:/logs
     expose:
       - "8000"
     depends_on:
@@ -100,7 +100,7 @@ services:
       - APP_ENV=production
     volumes:
       - ./config:/config:ro
-      - backend-logs:/logs
+      - ./logs:/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -153,6 +153,4 @@ networks:
 
 volumes:
   redis-data:
-    driver: local
-  backend-logs:
     driver: local

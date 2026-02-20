@@ -48,6 +48,14 @@ class Settings:
         ]
         
         # =============================================================
+        # Logging & Rotation
+        # =============================================================
+        self.logging_root_max_bytes_mb: int = 10        # 10 MB per root log file
+        self.logging_root_backup_count: int = 3         # 3 backups per root log file
+        self.logging_agent_max_bytes_mb: int = 5        # 5 MB per agent log file
+        self.logging_agent_backup_count: int = 3        # 3 backups per agent log file
+        
+        # =============================================================
         # Redis (Async Pipeline)
         # =============================================================
         self.redis_url: str = "redis://localhost:6379/0"
@@ -207,6 +215,18 @@ class Settings:
                 cors = data["cors"]
                 self.cors_origins = cors.get("origins", self.cors_origins)
             
+            # --- Logging & Rotation ---
+            if "logging" in data:
+                log_conf = data["logging"]
+                if "root" in log_conf:
+                    root_conf = log_conf["root"]
+                    self.logging_root_max_bytes_mb = root_conf.get("max_bytes_mb", self.logging_root_max_bytes_mb)
+                    self.logging_root_backup_count = root_conf.get("backup_count", self.logging_root_backup_count)
+                if "agents" in log_conf:
+                    agent_conf = log_conf["agents"]
+                    self.logging_agent_max_bytes_mb = agent_conf.get("max_bytes_mb", self.logging_agent_max_bytes_mb)
+                    self.logging_agent_backup_count = agent_conf.get("backup_count", self.logging_agent_backup_count)
+            
             # --- Redis ---
             if "redis" in data:
                 redis_conf = data["redis"]
@@ -263,7 +283,6 @@ class Settings:
                 if "hotel" in agents:
                     hotel = agents["hotel"]
                     self.hotel_agent_enabled = hotel.get("enabled", self.hotel_agent_enabled)
-                    # FIX: was reading from `flight` dict — now correctly reads from `hotel`
                     self.hotel_agent_max_results = hotel.get("max_results", self.hotel_agent_max_results)
                 
                 if "weather" in agents:
@@ -398,6 +417,13 @@ class Settings:
         if not self.xotelo_rapidapi_key:
             warnings.append("XOTELO_RAPIDAPI_KEY not set - hotel pricing will use estimates only")
         
+        # Logging sanity checks
+        if self.logging_root_max_bytes_mb < 1:
+            warnings.append(f"logging.root.max_bytes_mb={self.logging_root_max_bytes_mb} is very small — risk of losing logs")
+        
+        if self.logging_agent_max_bytes_mb < 1:
+            warnings.append(f"logging.agents.max_bytes_mb={self.logging_agent_max_bytes_mb} is very small — risk of losing logs")
+        
         # Print errors
         if errors:
             logger.error("\n❌ Configuration Errors (Critical):")
@@ -447,10 +473,15 @@ class Settings:
         logger.info(f"   Model: {self.llm_model}")
         logger.info(f"   Embedding Model: {self.embedding_model}")
         
+        logger.info("\n📋 Log Rotation:")
+        root_total = self.logging_root_max_bytes_mb * (1 + self.logging_root_backup_count)
+        agent_total = self.logging_agent_max_bytes_mb * (1 + self.logging_agent_backup_count)
+        logger.info(f"   Root files:  {self.logging_root_max_bytes_mb} MB × {self.logging_root_backup_count} backups = {root_total} MB max per file")
+        logger.info(f"   Agent files: {self.logging_agent_max_bytes_mb} MB × {self.logging_agent_backup_count} backups = {agent_total} MB max per agent")
+        
         logger.info("\n📋 Agent Status:")
         agents_status = {
             "Flight":       (self.flight_agent_enabled,       f"max_results={self.flight_agent_max_results}"),
-            # FIX: was referencing flight_agent_max_results — now correctly uses hotel_agent_max_results
             "Hotel":        (self.hotel_agent_enabled,        f"max_results={self.hotel_agent_max_results}"),
             "Weather":      (self.weather_agent_enabled,      f"forecast_days={self.weather_agent_forecast_days}"),
             "Events":       (self.events_agent_enabled,       f"max_results={self.events_agent_max_results}"),
@@ -468,6 +499,20 @@ class Settings:
         logger.info(f"   Log Level: {self.log_level}")
         
         logger.info("\n" + "=" * 80)
+    
+    # =================================================================
+    # Computed Properties — Logging (bytes for RotatingFileHandler)
+    # =================================================================
+    
+    @property
+    def logging_root_max_bytes(self) -> int:
+        """Root log max_bytes in bytes (for RotatingFileHandler)"""
+        return self.logging_root_max_bytes_mb * 1024 * 1024
+    
+    @property
+    def logging_agent_max_bytes(self) -> int:
+        """Agent log max_bytes in bytes (for RotatingFileHandler)"""
+        return self.logging_agent_max_bytes_mb * 1024 * 1024
     
     # =================================================================
     # Properties

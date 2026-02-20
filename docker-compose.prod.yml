@@ -58,7 +58,7 @@ services:
       - ./config:/config:ro
       # Application log files (agent logs, etc.)
       # logging_config.py resolves log dir to /logs/ inside container
-      - backend-logs:/logs
+      - ./logs:/logs
     expose:
       - "8000"
     depends_on:
@@ -99,7 +99,7 @@ services:
       # Same config mount as backend
       - ./config:/config:ro
       # Shares same log volume as backend
-      - backend-logs:/logs
+      - ./logs:/logs
     depends_on:
       redis:
         condition: service_healthy
@@ -163,6 +163,4 @@ networks:
 # ==========================================
 volumes:
   redis-data:
-    driver: local
-  backend-logs:
     driver: local

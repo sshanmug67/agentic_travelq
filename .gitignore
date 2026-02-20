@@ -38,3 +38,6 @@ htmlcov/
 # Build outputs
 frontend/dist/
 backend/dist/
+
+# Log files — rotation backups and all logs
+logs/
