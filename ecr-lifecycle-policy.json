@@ -2,12 +2,12 @@
   "rules": [
     {
       "rulePriority": 1,
-      "description": "Keep only last 3 tagged images per branch prefix (main-*, dev-*)",
+      "description": "Keep only last 3 main-* images",
       "selection": {
         "tagStatus": "tagged",
-        "tagPrefixList": ["main-", "dev-"],
+        "tagPrefixList": ["main-"],
         "countType": "imageCountMoreThan",
-        "countNumber": 6
+        "countNumber": 3
       },
       "action": {
         "type": "expire"
@@ -15,6 +15,19 @@
     },
     {
       "rulePriority": 2,
+      "description": "Keep only last 3 dev-* images",
+      "selection": {
+        "tagStatus": "tagged",
+        "tagPrefixList": ["dev-"],
+        "countType": "imageCountMoreThan",
+        "countNumber": 3
+      },
+      "action": {
+        "type": "expire"
+      }
+    },
+    {
+      "rulePriority": 3,
       "description": "Remove untagged images older than 1 day",
       "selection": {
         "tagStatus": "untagged",

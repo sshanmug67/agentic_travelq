@@ -220,3 +220,8 @@ docker compose -f docker-compose.prod.yml up -d
 # to Rebuild 4 containers from code in local
 docker compose down
 docker compose up -d --build
+
+----------------------------------------------------------------------------------
+
+# To SSH to TravelQ-Dev server.
+ssh -o IdentitiesOnly=yes -i C:\Users\sures\AWS\Keys\travelq-key-fixed.pem ec2-user@3.226.2.116
