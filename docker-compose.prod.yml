@@ -24,7 +24,7 @@ services:
     image: 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-frontend:latest
     container_name: travelq-nginx
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
       backend:
         condition: service_healthy
@@ -59,8 +59,8 @@ services:
       # Application log files (agent logs, etc.)
       # logging_config.py resolves log dir to /logs/ inside container
       - ./logs:/logs
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"
     depends_on:
       redis:
         condition: service_healthy

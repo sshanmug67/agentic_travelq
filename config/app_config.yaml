@@ -25,6 +25,9 @@ api:
 # --- CORS ---
 cors:
   origins:
+    - "https://dev.d9akaerw4i65m.amplifyapp.com"
+    - "https://dev.agentic-travelq.com"
+    - "https://agentic-travelq.com"
     - "http://localhost:3000"
     - "http://localhost:5173"
 
