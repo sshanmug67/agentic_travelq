@@ -225,3 +225,6 @@ docker compose up -d --build
 
 # To SSH to TravelQ-Dev server.
 ssh -o IdentitiesOnly=yes -i C:\Users\sures\AWS\Keys\travelq-key-fixed.pem ec2-user@3.226.2.116
+
+# To SSH to TravelQ-Prod server.
+ssh -i C:\Users\sures\AWS\Keys\travelq-key-fixed.pem -o IdentitiesOnly=yes ec2-user@44.214.231.173
