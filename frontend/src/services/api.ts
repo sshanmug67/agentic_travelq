@@ -15,7 +15,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_URL || '/api',
   timeout: 30000, // v5: 30s is plenty — POST returns instantly, polling is fast
   headers: {
     'Content-Type': 'application/json',
