@@ -176,7 +176,7 @@ jobs:
 
             # Verify health
             sleep 15
-            if curl -sf http://localhost/api/trips/health > /dev/null; then
+            if curl -sf http://localhost:8000/api/trips/health > /dev/null; then
               echo "✅ Deployment successful! TravelQ (${{ env.DEPLOY_ENV }}) is healthy."
             else
               echo "❌ Health check failed!"
