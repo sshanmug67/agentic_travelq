@@ -129,8 +129,8 @@ services:
         --maxmemory-policy allkeys-lru
         --appendonly yes
         --appendfsync everysec
-    expose:
-      - "6379"
+    ports:
+      - "6379:6379"
     volumes:
       - redis-data:/data
     restart: always

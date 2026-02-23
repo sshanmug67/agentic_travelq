@@ -352,12 +352,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 f"Hotel search complete — {len(curated_hotels)} options ready"
             )
             
-            self.log_conversation_message(
-                message_type="OUTGOING",
-                content=recommendation_text,
-                sender="chat_manager",
-                truncate=1000
-            )
+            # self.log_conversation_message(
+            #     message_type="OUTGOING",
+            #     content=recommendation_text,
+            #     sender="chat_manager",
+            #     truncate=1000
+            # )
             
             return self.signal_completion(recommendation_text)
             
@@ -771,20 +771,20 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             - Respond with valid JSON only. No markdown, no backticks, no extra text.
             """
 
-        log_agent_raw(
-            f"🤖 Asking LLM to curate top {display_max} from {len(all_hotels)} hotels...",
-            agent_name="HotelAgent"
-        )
+        # log_agent_raw(
+        #     f"🤖 Asking LLM to curate top {display_max} from {len(all_hotels)} hotels...",
+        #     agent_name="HotelAgent"
+        # )
 
-        log_agent_raw(
-            f"Hotel LLM Prompt:\n",
-            agent_name="HotelAgent"
-        )
+        # log_agent_raw(
+        #     f"Hotel LLM Prompt:\n",
+        #     agent_name="HotelAgent"
+        # )
 
-        log_agent_raw(
-            f"\n\n{prompt}\n",
-            agent_name="HotelAgent"
-        )
+        # log_agent_raw(
+        #     f"\n\n{prompt}\n",
+        #     agent_name="HotelAgent"
+        # )
 
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
@@ -800,7 +800,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             )
             
             raw_response = response.choices[0].message.content.strip()
-            log_agent_raw(f"📥 LLM curation response: {raw_response}", agent_name="HotelAgent")
+            # log_agent_raw(f"📥 LLM curation response: {raw_response}", agent_name="HotelAgent")
             
             result = self._parse_llm_json(raw_response)
             if not result:
@@ -857,11 +857,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 key = f"{h.name} {tag}"
                 curated_chains[key] = f"${h.price_per_night:.0f}/night"
             
-            log_agent_json(
-                curated_chains,
-                label=f"LLM Curated Top {len(curated)} — Chain Diversity",
-                agent_name="HotelAgent"
-            )
+            # log_agent_json(
+            #     curated_chains,
+            #     label=f"LLM Curated Top {len(curated)} — Chain Diversity",
+            #     agent_name="HotelAgent"
+            # )
             
             # Store recommendation (v6: summary as reason for Top Picks display)
             tag = self._tag_hotel(recommended_hotel, preferred_chains, interested_chains)
@@ -1485,11 +1485,11 @@ CRITICAL RULES:
             
             if pricing:
                 source_label = "cached" if idx in cached_indices else pricing.get('cheapest_provider', 'xotelo')
-                log_agent_raw(
-                    f"🏨 {idx+1}/{total_hotels}: {hotel_name}{tier_tag} → "
-                    f"${pricing['total_price']:.2f} via {source_label}",
-                    agent_name="HotelAgent"
-                )
+                # log_agent_raw(
+                #     f"🏨 {idx+1}/{total_hotels}: {hotel_name}{tier_tag} → "
+                #     f"${pricing['total_price']:.2f} via {source_label}",
+                #     agent_name="HotelAgent"
+                # )
             else:
                 # Fallback to estimation
                 pricing = self._estimate_price(

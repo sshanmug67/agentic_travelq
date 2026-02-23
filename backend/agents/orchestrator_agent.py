@@ -2,6 +2,13 @@
 Smart Orchestrator Agent - Dynamic Agent Selection with Storage
 Location: backend/agents/orchestrator_agent.py
 
+Changes (v6 — Logging Cleanup):
+  - Removed separate orchestrator_messages.log / conversations/ directory
+  - log_group_conversation() now writes to OrchestratorAgent.log
+    via the existing log_agent_raw() infrastructure
+  - Removed get_log_dir and os imports (no longer needed)
+  - All orchestrator output lives in one place: logs/agents/OrchestratorAgent.log
+
 Changes (v5 — Async Pipeline):
   - orchestrate() accepts optional trip_id + trip_storage parameters
   - When called from Celery task, uses external Redis-backed storage
@@ -21,7 +28,6 @@ from services.storage.inmemory_storage import get_trip_storage
 from services.storage.storage_base import TripStorageInterface
 from utils.logging_config import log_agent_raw, log_agent_json
 from config.settings import settings
-import os
 from datetime import datetime
 from collections import Counter
 import openai
@@ -177,16 +183,17 @@ Instead, you delegate to specialized agents and coordinate their results.
     
     def log_group_conversation(self, groupchat, trip_id: str = None):
         """
-        Log the entire multi-agent conversation to a single file
+        Log the entire multi-agent conversation to OrchestratorAgent.log
+        
+        v6: No longer creates a separate file. Uses the existing
+        log_agent_raw() infrastructure so everything is in one place
+        under logs/agents/OrchestratorAgent.log.
         
         Args:
             groupchat: The GroupChat object with message history
-            trip_id: Optional trip ID for the log filename
+            trip_id: Optional trip ID for context
         """
-        conversations_dir = "logs/conversations"
-        os.makedirs(conversations_dir, exist_ok=True)
-        
-        log_filename = f"{conversations_dir}/orchestrator_messages.log"
+        agent = "OrchestratorAgent"
         messages = groupchat.messages
         
         # Collect statistics
@@ -195,49 +202,42 @@ Instead, you delegate to specialized agents and coordinate their results.
             speaker = msg.get('name', msg.get('role', 'Unknown'))
             speaker_counts[speaker] += 1
         
-        # Write to file
-        with open(log_filename, 'w', encoding='utf-8') as f:
-            # Header
-            f.write("=" * 100 + "\n")
-            f.write("MULTI-AGENT CONVERSATION LOG\n")
-            f.write("=" * 100 + "\n")
-            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            if trip_id:
-                f.write(f"Trip ID: {trip_id}\n")
-            f.write(f"Total Messages: {len(messages)}\n")
-            f.write("=" * 100 + "\n\n")
-            
-            # Statistics
-            f.write("CONVERSATION STATISTICS:\n")
-            f.write("-" * 100 + "\n")
-            for speaker, count in speaker_counts.most_common():
-                f.write(f"  {speaker}: {count} messages\n")
-            f.write("\n")
-            
-            # Full conversation
-            f.write("=" * 100 + "\n")
-            f.write("FULL CONVERSATION TRANSCRIPT\n")
-            f.write("=" * 100 + "\n\n")
-            
-            for i, message in enumerate(messages, 1):
-                sender = message.get('name', message.get('role', 'Unknown'))
-                content = message.get('content', '')
-                
-                f.write(f"\n{'=' * 100}\n")
-                f.write(f"[Message {i}/{len(messages)}] {sender}\n")
-                f.write(f"{'=' * 100}\n")
-                f.write(f"{content}\n")
-                f.write(f"{'-' * 100}\n")
-            
-            # Footer
-            f.write(f"\n{'=' * 100}\n")
-            f.write(f"END OF CONVERSATION\n")
-            f.write(f"Total Messages: {len(messages)}\n")
-            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-            f.write(f"{'=' * 100}\n")
+        # Header
+        log_agent_raw("=" * 100, agent_name=agent)
+        log_agent_raw("MULTI-AGENT CONVERSATION LOG", agent_name=agent)
+        log_agent_raw("=" * 100, agent_name=agent)
+        log_agent_raw(f"Timestamp: {datetime.now().isoformat()}", agent_name=agent)
+        if trip_id:
+            log_agent_raw(f"Trip ID: {trip_id}", agent_name=agent)
+        log_agent_raw(f"Total Messages: {len(messages)}", agent_name=agent)
+        log_agent_raw("=" * 100, agent_name=agent)
         
-        log_agent_raw(f"📝 Full conversation logged to: {log_filename}", agent_name="OrchestratorAgent")
-        return log_filename
+        # Statistics
+        log_agent_raw("CONVERSATION STATISTICS:", agent_name=agent)
+        log_agent_raw("-" * 100, agent_name=agent)
+        for speaker, count in speaker_counts.most_common():
+            log_agent_raw(f"  {speaker}: {count} messages", agent_name=agent)
+        
+        # Full conversation
+        log_agent_raw("=" * 100, agent_name=agent)
+        log_agent_raw("FULL CONVERSATION TRANSCRIPT", agent_name=agent)
+        log_agent_raw("=" * 100, agent_name=agent)
+        
+        for i, message in enumerate(messages, 1):
+            sender = message.get('name', message.get('role', 'Unknown'))
+            content = message.get('content', '')
+            
+            log_agent_raw(f"[Message {i}/{len(messages)}] {sender}", agent_name=agent)
+            log_agent_raw(f"{content}", agent_name=agent)
+            log_agent_raw("-" * 100, agent_name=agent)
+        
+        # Footer
+        log_agent_raw("=" * 100, agent_name=agent)
+        log_agent_raw(f"END OF CONVERSATION — {len(messages)} messages", agent_name=agent)
+        log_agent_raw(f"Timestamp: {datetime.now().isoformat()}", agent_name=agent)
+        log_agent_raw("=" * 100, agent_name=agent)
+        
+        log_agent_raw(f"📝 Conversation logged ({len(messages)} messages)", agent_name=agent)
 
 
     async def orchestrate(
@@ -325,8 +325,8 @@ Instead, you delegate to specialized agents and coordinate their results.
         # Initiate chat
         user_proxy.initiate_chat(manager, message=full_initial_message)
         
-        # Log conversation
-        log_file = self.log_group_conversation(groupchat=group_chat, trip_id=trip_id)
+        # Log conversation to OrchestratorAgent.log
+        self.log_group_conversation(groupchat=group_chat, trip_id=trip_id)
         
         # ✅ Step 5: Collect results from centralized storage
         all_options = trip_storage.get_all_options(trip_id)
@@ -337,11 +337,11 @@ Instead, you delegate to specialized agents and coordinate their results.
         # ✅ NEW: Collect AI recommendations from storage
         recommendations = trip_storage.get_recommendations(trip_id)
         
-        log_agent_json(
-            recommendations, 
-            label="⭐ AI Recommendations from Agents", 
-            agent_name="OrchestratorAgent"
-        )
+        # log_agent_json(
+        #     recommendations, 
+        #     label="⭐ AI Recommendations from Agents", 
+        #     agent_name="OrchestratorAgent"
+        # )
         
         # Extract conversation history
         conversation_history = []

@@ -14,6 +14,13 @@ Rotation values flow from: app_config.yaml → settings.py → this file
 - Root log files: settings.logging_root_max_bytes / logging_root_backup_count
 - Agent log files: settings.logging_agent_max_bytes / logging_agent_backup_count
 - Defaults (if settings unavailable): 10 MB / 3 backups (root), 5 MB / 3 backups (agents)
+
+Changes (v2 — Logging Cleanup):
+  - Moved third-party logger silencing to MODULE LEVEL so it runs on import
+    and covers ALL processes (FastAPI, Celery, scripts)
+  - Previously was only inside setup_logging(), which Celery's worker
+    process didn't always call before httpx started logging
+  - To debug HTTP calls: comment out entries in _NOISY_LOGGERS below
 """
 import logging
 import os
@@ -23,6 +30,33 @@ from typing import Optional, Dict, Any
 import json
 from datetime import datetime, date
 from logging.handlers import RotatingFileHandler
+
+
+# ============================================================================
+# SILENCE NOISY THIRD-PARTY LOGGERS
+# ============================================================================
+# Runs on import — covers ALL processes (FastAPI, Celery, scripts, tests).
+#
+# To debug a specific library, comment out its line and restart the process.
+# For example, to see httpx request/response logs:
+#   # 'httpx',                        # ← uncomment to see HTTP Request: GET ...
+#   # 'httpcore.http11',              # ← uncomment to see raw HTTP/1.1 traffic
+#
+_NOISY_LOGGERS = [
+    'urllib3',                         # Connection pool management noise
+    'urllib3.connectionpool',          # Per-connection debug messages
+    'httpcore.http11',                 # Raw HTTP/1.1 request/response lines
+    'httpcore.connection',             # Connection lifecycle events
+    'httpx',                           # "HTTP Request: GET/POST ..." per call
+    'asyncio',                         # Event loop debug messages
+    'uvicorn.access',                  # "GET /api/trips/health 200" per request
+    'multipart.multipart',            # Form data parsing noise
+    # 'openai',                        # ← uncomment to silence OpenAI SDK logs
+    # 'autogen',                       # ← uncomment to silence AutoGen framework logs
+]
+
+for _logger_name in _NOISY_LOGGERS:
+    logging.getLogger(_logger_name).setLevel(logging.WARNING)
 
 
 # ============================================================================
@@ -96,6 +130,10 @@ def setup_logging(
     
     Rotation values are read from settings (app_config.yaml → settings.py).
     
+    Note: Third-party logger silencing is handled at module level (above),
+    so it takes effect on import for ALL processes. The re-application here
+    is a safety net in case setup_logging() clears root handlers.
+    
     Args:
         log_file_name: Base name for log files
         log_dir: Directory for log files (defaults to project_root/logs/)
@@ -112,16 +150,8 @@ def setup_logging(
     # Master control
     root.setLevel(logging.INFO)
     
-    # === SILENCE NOISY THIRD-PARTY LOGGERS ===
-    noisy_loggers = [
-        'urllib3', 'urllib3.connectionpool',
-        'httpcore.http11', 'httpcore.connection',
-        'httpx',
-        'asyncio',
-        'uvicorn.access',  # Only show errors from uvicorn access logs
-        'multipart.multipart',
-    ]
-    for logger_name in noisy_loggers:
+    # Re-apply silencing (safety net after root.handlers.clear())
+    for logger_name in _NOISY_LOGGERS:
         logging.getLogger(logger_name).setLevel(logging.WARNING)
 
     # Use ConditionalFormatter for all handlers

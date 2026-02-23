@@ -221,12 +221,12 @@ class WeatherAgent(TravelQBaseAgent):
                 f"{min_temp:.0f}°F–{max_temp:.0f}°F"
             )
             
-            self.log_conversation_message(
-                message_type="OUTGOING",
-                content=recommendation,
-                sender="chat_manager",
-                truncate=1000
-            )
+            # self.log_conversation_message(
+            #     message_type="OUTGOING",
+            #     content=recommendation,
+            #     sender="chat_manager",
+            #     truncate=1000
+            # )
             
             return self.signal_completion(recommendation)
             

@@ -424,7 +424,7 @@ def plan_trip_task(self, trip_id: str):
             "preference_changes": redis_service.get_preference_changes(trip_id),
         }
 
-        _log_json(final_results.get("recommendations", {}), label="Final Recommendations")
+        # _log_json(final_results.get("recommendations", {}), label="Final Recommendations")
         _log_json(final_results.get("summary", {}), label="Final Summary")
 
         redis_service.store_final_results(trip_id, final_results)

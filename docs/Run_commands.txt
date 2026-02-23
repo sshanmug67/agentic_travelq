@@ -6,18 +6,25 @@ celery -A celery_app worker --loglevel=info --pool=solo
 Open Docker Desktop
 In Powershell
 
-docker run -d --name travelq-redis -p 6379:6379 redis:7-alpine
+docker run -d --rm --name travelq-redis -p 6379:6379 redis:7-alpine
 docker ps
 
-# to stop a container.
-docker stop <container_name_or_id>
-
-#To remove redis
+# to remove container.
+docker stop 6b9c5f95ea34
 docker rm travelq-redis
+
+docker rm 6b9c5f95ea34
+
+# To bring all containers down.
+docker compose down
+
+#To remove redis and prune any dangling images.
+docker rm travelq-redis
+docker image prune -f
+docker rmi 589516862821.dkr.ecr.us-east-1.amazonaws.com/travelq-frontend
 
 # TO restart
 docker restart 5e8fe12be6e7
-
 
 # backend 
 cd backend

@@ -463,27 +463,27 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                     new_pri = tag_priority[new_tag]
 
                     if new_pri < existing_pri:
-                        log_agent_raw(
-                            f"   🔄 Codeshare upgrade: {existing.airline} {existing_tag} → "
-                            f"{f.airline} {new_tag} (same route)",
-                            agent_name="FlightAgent"
-                        )
+                        # log_agent_raw(
+                        #     f"   🔄 Codeshare upgrade: {existing.airline} {existing_tag} → "
+                        #     f"{f.airline} {new_tag} (same route)",
+                        #     agent_name="FlightAgent"
+                        # )
                         seen_ids.add(f.id)
                         all_flights[existing_idx] = f
                     elif new_pri == existing_pri and f.price < existing.price:
-                        log_agent_raw(
-                            f"   🔄 Codeshare swap (cheaper): {existing.airline} ${existing.price:.2f} → "
-                            f"{f.airline} ${f.price:.2f}",
-                            agent_name="FlightAgent"
-                        )
+                        # log_agent_raw(
+                        #     f"   🔄 Codeshare swap (cheaper): {existing.airline} ${existing.price:.2f} → "
+                        #     f"{f.airline} ${f.price:.2f}",
+                        #     agent_name="FlightAgent"
+                        # )
                         seen_ids.add(f.id)
                         all_flights[existing_idx] = f
-                    else:
-                        log_agent_raw(
-                            f"   🔗 Codeshare skip: {f.airline} ({f.airline_code}) "
-                            f"= same route as {existing.airline} ({existing.airline_code})",
-                            agent_name="FlightAgent"
-                        )
+                    # else:
+                        # log_agent_raw(
+                        #     f"   🔗 Codeshare skip: {f.airline} ({f.airline_code}) "
+                        #     f"= same route as {existing.airline} ({existing.airline_code})",
+                        #     agent_name="FlightAgent"
+                        # )
                     codeshare_dupes += 1
                 else:
                     seen_ids.add(f.id)
@@ -505,16 +505,16 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 key = f"{f.airline} ({f.airline_code}) {tag}"
                 carrier_breakdown[key] = carrier_breakdown.get(key, 0) + 1
 
-            log_agent_json(
-                carrier_breakdown,
-                label="Deduped Flight Pool by Carrier",
-                agent_name="FlightAgent"
-            )
-            log_agent_raw(
-                f"✅ {len(raw_flights)} raw → {len(all_flights)} unique "
-                f"({codeshare_dupes} codeshare dupes removed) in {api_duration:.2f}s",
-                agent_name="FlightAgent"
-            )
+            # log_agent_json(
+            #     carrier_breakdown,
+            #     label="Deduped Flight Pool by Carrier",
+            #     agent_name="FlightAgent"
+            # )
+            # log_agent_raw(
+            #     f"✅ {len(raw_flights)} raw → {len(all_flights)} unique "
+            #     f"({codeshare_dupes} codeshare dupes removed) in {api_duration:.2f}s",
+            #     agent_name="FlightAgent"
+            # )
 
             # Step 3: LLM curates top N from the full deduped pool
             # v7: Status — LLM curation starting
@@ -578,12 +578,12 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             )
             
             # Log outgoing
-            self.log_conversation_message(
-                message_type="OUTGOING",
-                content=recommendation,
-                sender="chat_manager",
-                truncate=1000
-            )
+            # self.log_conversation_message(
+            #     message_type="OUTGOING",
+            #     content=recommendation,
+            #     sender="chat_manager",
+            #     truncate=1000
+            # )
             
             return self.signal_completion(recommendation) 
             
@@ -679,8 +679,8 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
 
             flights = []
             for offer in response.data:
-                log_agent_json(offer, label="\n\nFlight Details from Amadeus: ", 
-                      agent_name="FlightAgent")
+                # log_agent_json(offer, label="\n\nFlight Details from Amadeus: ", 
+                #       agent_name="FlightAgent")
 
                 flight = self._parse_amadeus_offer(offer)
                 if flight:
@@ -1149,12 +1149,12 @@ CRITICAL RULES:
             )
 
             raw_response = response.choices[0].message.content.strip()
-            log_agent_raw(f"📥 LLM curation response: {raw_response}", agent_name="FlightAgent")
+            # log_agent_raw(f"📥 LLM curation response: {raw_response}", agent_name="FlightAgent")
 
             result = self._parse_llm_json(raw_response)
 
             if not result or "selected_ids" not in result:
-                log_agent_raw("⚠️ Failed to parse curation JSON, using fallback", agent_name="FlightAgent")
+                # log_agent_raw("⚠️ Failed to parse curation JSON, using fallback", agent_name="FlightAgent")
                 self._update_status("AI curation parse failed — using smart fallback...")
                 return self._fallback_curate_and_recommend(
                     all_flights, preferences, preferred_codes, interested_codes, display_max
@@ -1169,7 +1169,7 @@ CRITICAL RULES:
             # Filter to valid IDs only
             valid_selected = [sid for sid in selected_ids if sid in valid_ids]
             if not valid_selected:
-                log_agent_raw("⚠️ No valid IDs in LLM selection, using fallback", agent_name="FlightAgent")
+                # log_agent_raw("⚠️ No valid IDs in LLM selection, using fallback", agent_name="FlightAgent")
                 self._update_status("AI returned invalid selections — using smart fallback...")
                 return self._fallback_curate_and_recommend(
                     all_flights, preferences, preferred_codes, interested_codes, display_max
@@ -1182,10 +1182,10 @@ CRITICAL RULES:
             # Validate recommended_id is in the curated set
             curated_ids = [str(f.id) for f in curated]
             if recommended_id not in curated_ids:
-                log_agent_raw(
-                    f"⚠️ recommended_id '{recommended_id}' not in curated set, using first",
-                    agent_name="FlightAgent"
-                )
+                # log_agent_raw(
+                #     f"⚠️ recommended_id '{recommended_id}' not in curated set, using first",
+                #     agent_name="FlightAgent"
+                # )
                 recommended_id = curated_ids[0]
                 reason = "Best option from curated selection"
 
@@ -1204,11 +1204,11 @@ CRITICAL RULES:
                 key = f"{f.airline} ({f.airline_code}) {tag}"
                 curated_carriers[key] = curated_carriers.get(key, 0) + 1
 
-            log_agent_json(
-                curated_carriers,
-                label=f"LLM Curated Top {len(curated)} — Carrier Diversity",
-                agent_name="FlightAgent"
-            )
+            # log_agent_json(
+            #     curated_carriers,
+            #     label=f"LLM Curated Top {len(curated)} — Carrier Diversity",
+            #     agent_name="FlightAgent"
+            # )
 
             # ── Store recommendation ─────────────────────────────────
             is_direct = self._is_direct_flight(recommended_flight)
@@ -1333,11 +1333,11 @@ CRITICAL RULES:
             }
         )
 
-        log_agent_raw(
-            f"⭐ Fallback curated {len(curated)} flights, picked #{pick.id} {tag} "
-            f"({pick.airline} ${pick.price:.2f})",
-            agent_name="FlightAgent"
-        )
+        # log_agent_raw(
+        #     f"⭐ Fallback curated {len(curated)} flights, picked #{pick.id} {tag} "
+        #     f"({pick.airline} ${pick.price:.2f})",
+        #     agent_name="FlightAgent"
+        # )
 
         # v7: Status
         self._update_status(

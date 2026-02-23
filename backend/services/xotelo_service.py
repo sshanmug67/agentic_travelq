@@ -43,11 +43,11 @@ logger = logging.getLogger(__name__)
 
 # Max concurrent requests (free tier has strict per-second rate limits)
 # 1 = sequential but reliable; 2 = light overlap, still safe
-MAX_CONCURRENT_REQUESTS = 2
+MAX_CONCURRENT_REQUESTS = 3
 
 # Delay between requests to avoid RapidAPI 429 rate limiting (seconds)
 # Free tier enforces per-second limits stricter than the 1,000/hour quota
-REQUEST_DELAY = 0.6
+REQUEST_DELAY = 0.4
 
 # Timeout per individual HTTP request (seconds)
 REQUEST_TIMEOUT = 10.0
@@ -133,7 +133,7 @@ class XoteloService:
         
         try:
             async with sem:
-                log.info(f"🔍 Searching Xotelo for: {query}")
+                # log.info(f"🔍 Searching Xotelo for: {query}")
                 
                 url = f"{self.BASE_URL}/search"
                 params = {'query': query}
@@ -147,24 +147,24 @@ class XoteloService:
                 raw_data = response.json()
                 
                 # Debug: log raw Xotelo response shape to diagnose parsing issues
-                if isinstance(raw_data, dict):
-                    log.info(
-                        f"🔬 Xotelo search response: "
-                        f"error={raw_data.get('error')!r}, "
-                        f"result_type={type(raw_data.get('result')).__name__}, "
-                        f"result_len={len(raw_data.get('result', [])) if isinstance(raw_data.get('result'), (list, dict)) else 'N/A'}"
-                    )
-                elif isinstance(raw_data, list) and raw_data:
-                    first_item = raw_data[0]
-                    item_info = (
-                        list(first_item.keys()) 
-                        if isinstance(first_item, dict) 
-                        else type(first_item).__name__
-                    )
-                    log.info(
-                        f"🔬 Xotelo search response is list[{len(raw_data)}], "
-                        f"first item: {item_info}"
-                    )
+                # if isinstance(raw_data, dict):
+                #     log.info(
+                #         f"🔬 Xotelo search response: "
+                #         f"error={raw_data.get('error')!r}, "
+                #         f"result_type={type(raw_data.get('result')).__name__}, "
+                #         f"result_len={len(raw_data.get('result', [])) if isinstance(raw_data.get('result'), (list, dict)) else 'N/A'}"
+                #     )
+                # elif isinstance(raw_data, list) and raw_data:
+                #     first_item = raw_data[0]
+                #     item_info = (
+                #         list(first_item.keys()) 
+                #         if isinstance(first_item, dict) 
+                #         else type(first_item).__name__
+                #     )
+                    # log.info(
+                    #     f"🔬 Xotelo search response is list[{len(raw_data)}], "
+                    #     f"first item: {item_info}"
+                    # )
                 
                 data = raw_data
                 
@@ -188,10 +188,10 @@ class XoteloService:
                 # Second-level unwrap: if 'result' was itself a dict (RapidAPI extra nesting)
                 if isinstance(data, dict):
                     types_preview = {k: type(v).__name__ for k, v in data.items()}
-                    log.info(
-                        f"🔬 Nested dict after first unwrap, keys={list(data.keys())}, "
-                        f"types={types_preview}"
-                    )
+                    # log.info(
+                    #     f"🔬 Nested dict after first unwrap, keys={list(data.keys())}, "
+                    #     f"types={types_preview}"
+                    # )
                     inner = (
                         data.get('result')
                         or data.get('results')
@@ -203,13 +203,13 @@ class XoteloService:
                         data = inner
                     elif 'hotel_key' in data or 'key' in data or 'name' in data:
                         # It's actually a single hotel object
-                        log.info(f"ℹ️  Single hotel result (dict), wrapping in list")
+                        # log.info(f"ℹ️  Single hotel result (dict), wrapping in list")
                         data = [data]
                     else:
                         dump_preview = {k: str(v)[:100] for k, v in data.items()}
-                        log.warning(
-                            f"⚠️  Unknown dict structure, dumping: {dump_preview}"
-                        )
+                        # log.warning(
+                        #     f"⚠️  Unknown dict structure, dumping: {dump_preview}"
+                        # )
                         data = []
                 
                 if not data:
@@ -224,7 +224,7 @@ class XoteloService:
                     log.warning(f"⚠️  Unexpected Xotelo response type: {type(data).__name__}")
                     return []
                 
-                log.info(f"✅ Found {len(data)} hotels in Xotelo")
+                # log.info(f"✅ Found {len(data)} hotels in Xotelo")
                 return data
                 
         except httpx.TimeoutException:
@@ -266,7 +266,7 @@ class XoteloService:
         
         try:
             async with sem:
-                log.info(f"💰 Getting rates for hotel_key: {hotel_key}")
+                # log.info(f"💰 Getting rates for hotel_key: {hotel_key}")
                 
                 url = f"{self.BASE_URL}/rates"
                 params = {
@@ -284,10 +284,10 @@ class XoteloService:
                 data = response.json()
                 
                 # Debug: log raw rates response shape
-                if isinstance(data, dict):
-                    log.info(
-                        f"🔬 Rates raw response keys: {list(data.keys())}"
-                    )
+                # if isinstance(data, dict):
+                #     log.info(
+                #         f"🔬 Rates raw response keys: {list(data.keys())}"
+                #     )
                 
                 # Xotelo wraps rates in {"error": ..., "result": {...}, "timestamp": ...}
                 if isinstance(data, dict) and 'result' in data:
@@ -297,36 +297,36 @@ class XoteloService:
                     data = data.get('result')
                 
                 # Debug: log unwrapped rates structure
-                if isinstance(data, dict):
-                    log.info(
-                        f"🔬 Rates after unwrap keys: {list(data.keys())}, "
-                        f"providers type: {type(data.get('providers')).__name__}"
-                    )
+                # if isinstance(data, dict):
+                #     log.info(
+                #         f"🔬 Rates after unwrap keys: {list(data.keys())}, "
+                #         f"providers type: {type(data.get('providers')).__name__}"
+                #     )
                     # ── DIAGNOSTIC: dump full rates response for first hotels ──
                     # This helps verify if rate/tax are per-night or total-stay
-                    import json as _json
-                    try:
-                        rates_preview = data.get('rates', [])
-                        if rates_preview and isinstance(rates_preview, list):
-                            log.info(
-                                f"🔬 DIAG full rates dump ({len(rates_preview)} providers): "
-                                f"{_json.dumps(rates_preview, indent=None)[:800]}"
-                            )
-                        log.info(
-                            f"🔬 DIAG response metadata: "
-                            f"chk_in={data.get('chk_in')}, "
-                            f"chk_out={data.get('chk_out')}, "
-                            f"currency={data.get('currency')}"
-                        )
-                    except Exception:
-                        pass
+                    # import json as _json
+                    # try:
+                    #     rates_preview = data.get('rates', [])
+                    #     if rates_preview and isinstance(rates_preview, list):
+                            # log.info(
+                            #     f"🔬 DIAG full rates dump ({len(rates_preview)} providers): "
+                            #     f"{_json.dumps(rates_preview, indent=None)[:800]}"
+                            # )
+                        # log.info(
+                        #     f"🔬 DIAG response metadata: "
+                        #     f"chk_in={data.get('chk_in')}, "
+                        #     f"chk_out={data.get('chk_out')}, "
+                        #     f"currency={data.get('currency')}"
+                        # )
+                    # except Exception:
+                    #     pass
                 
                 if not data:
                     log.warning(f"⚠️  No rates found for hotel_key: {hotel_key}")
                     return None
                 
                 rate_count = len(data.get('rates', data.get('providers', [])))
-                log.info(f"✅ Retrieved rates from {rate_count} OTAs")
+                # log.info(f"✅ Retrieved rates from {rate_count} OTAs")
                 return data
                 
         except httpx.TimeoutException:
@@ -388,7 +388,7 @@ class XoteloService:
         hotel = search_results[0]
         
         # Debug: log what keys the hotel dict actually has
-        log.info(f"🔬 Hotel result keys: {list(hotel.keys())}")
+        # log.info(f"🔬 Hotel result keys: {list(hotel.keys())}")
         
         # Try multiple possible key names (Xotelo direct vs RapidAPI may differ)
         hotel_key = (
@@ -407,7 +407,7 @@ class XoteloService:
             )
             return None
         
-        log.info(f"✓ Found hotel: {hotel.get('name', 'Unknown')} (key: {hotel_key})")
+        # log.info(f"✓ Found hotel: {hotel.get('name', 'Unknown')} (key: {hotel_key})")
         
         # Step 2: Get rates
         rates_data = await self.get_hotel_rates(
@@ -461,10 +461,10 @@ class XoteloService:
         # Reset semaphore for this event loop
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         
-        log.info(
-            f"🚀 Batch pricing: {len(hotels)} hotels, "
-            f"max {MAX_CONCURRENT_REQUESTS} concurrent"
-        )
+        # log.info(
+        #     f"🚀 Batch pricing: {len(hotels)} hotels, "
+        #     f"max {MAX_CONCURRENT_REQUESTS} concurrent"
+        # )
         
         async with httpx.AsyncClient(headers=self._get_headers()) as client:
             tasks = [
@@ -492,10 +492,10 @@ class XoteloService:
             else:
                 processed.append(result)
         
-        success_count = sum(1 for _, pricing in processed if pricing is not None)
-        log.info(
-            f"✅ Batch complete: {success_count}/{len(hotels)} hotels priced"
-        )
+        # success_count = sum(1 for _, pricing in processed if pricing is not None)
+        # log.info(
+        #     f"✅ Batch complete: {success_count}/{len(hotels)} hotels priced"
+        # )
         
         return processed
     
@@ -589,7 +589,7 @@ class XoteloService:
                 await asyncio.sleep(REQUEST_DELAY)
                 
                 data = response.json()
-                log.info("✅ Retrieved price heatmap")
+                # log.info("✅ Retrieved price heatmap")
                 return data
                 
         except Exception as e:
@@ -640,26 +640,26 @@ class XoteloService:
             api_chk_in = data.get('chk_in', 'N/A')
             api_chk_out = data.get('chk_out', 'N/A')
             dates_match = (api_chk_in == check_in and api_chk_out == check_out)
-            log.info(
-                f"🔬 DIAG dates: requested={check_in}→{check_out} ({num_nights}n), "
-                f"API returned={api_chk_in}→{api_chk_out}, match={dates_match}"
-            )
+            # log.info(
+            #     f"🔬 DIAG dates: requested={check_in}→{check_out} ({num_nights}n), "
+            #     f"API returned={api_chk_in}→{api_chk_out}, match={dates_match}"
+            # )
             
             # RapidAPI format: "rates" is a list of provider dicts
             rates = data.get('rates', [])
             
             # ── DIAGNOSTIC: dump raw rate/tax for first 3 providers ──
-            if rates and isinstance(rates, list):
-                preview_count = min(10, len(rates))
-                for i in range(preview_count):
-                    r = rates[i]
-                    if isinstance(r, dict):
-                        log.info(
-                            f"🔬 DIAG provider[{i}]: name={r.get('name')}, "
-                            f"rate={r.get('rate')}, tax={r.get('tax')}, "
-                            f"code={r.get('code')}, "
-                            f"all_keys={list(r.keys())}"
-                        )
+            # if rates and isinstance(rates, list):
+            #     preview_count = min(10, len(rates))
+            #     for i in range(preview_count):
+            #         r = rates[i]
+                    # if isinstance(r, dict):
+                        # log.info(
+                        #     f"🔬 DIAG provider[{i}]: name={r.get('name')}, "
+                        #     f"rate={r.get('rate')}, tax={r.get('tax')}, "
+                        #     f"code={r.get('code')}, "
+                        #     f"all_keys={list(r.keys())}"
+                        # )
             
             # Legacy fallback: old Xotelo direct format used "providers" dict
             providers = data.get('providers', {})
@@ -710,21 +710,21 @@ class XoteloService:
             cheapest_provider = min(provider_list, key=lambda x: x['total_price'])
             
             # ── DIAGNOSTIC: show price math for cheapest provider ──
-            log.info(
-                f"🔬 DIAG cheapest: provider={cheapest_provider['provider']}, "
-                f"rate={cheapest_provider.get('rate', 'N/A')}, "
-                f"tax={cheapest_provider.get('tax', 'N/A')}, "
-                f"rate+tax={best_price:.2f}, "
-                f"÷{num_nights}nights=${best_price/num_nights:.2f}/night"
-            )
-            # ── DIAGNOSTIC: show price range across all providers ──
-            max_price = max(all_prices)
-            log.info(
-                f"🔬 DIAG range: cheapest=${best_price:.2f}, "
-                f"most_expensive=${max_price:.2f}, "
-                f"avg=${avg_price:.2f}, "
-                f"providers={len(all_prices)}"
-            )
+            # log.info(
+            #     f"🔬 DIAG cheapest: provider={cheapest_provider['provider']}, "
+            #     f"rate={cheapest_provider.get('rate', 'N/A')}, "
+            #     f"tax={cheapest_provider.get('tax', 'N/A')}, "
+            #     f"rate+tax={best_price:.2f}, "
+            #     f"÷{num_nights}nights=${best_price/num_nights:.2f}/night"
+            # )
+            # # ── DIAGNOSTIC: show price range across all providers ──
+            # max_price = max(all_prices)
+            # log.info(
+            #     f"🔬 DIAG range: cheapest=${best_price:.2f}, "
+            #     f"most_expensive=${max_price:.2f}, "
+            #     f"avg=${avg_price:.2f}, "
+            #     f"providers={len(all_prices)}"
+            # )
             
             pricing = {
                 'total_price': round(best_price, 2),
@@ -740,11 +740,11 @@ class XoteloService:
                 'all_providers': provider_list
             }
             
-            log.info(
-                f"✅ Parsed pricing: ${pricing['total_price']:.2f} total "
-                f"(${pricing['price_per_night']:.2f}/night) "
-                f"from {pricing['cheapest_provider']}"
-            )
+            # log.info(
+            #     f"✅ Parsed pricing: ${pricing['total_price']:.2f} total "
+            #     f"(${pricing['price_per_night']:.2f}/night) "
+            #     f"from {pricing['cheapest_provider']}"
+            # )
             
             return pricing
             
