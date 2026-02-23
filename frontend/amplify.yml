@@ -6,7 +6,12 @@ applications:
             - npm ci
         build:
           commands:
-            - echo "VITE_API_URL=$VITE_API_URL" >> .env.production
+            - |
+              if [ "$AWS_BRANCH" = "main" ]; then
+                echo "VITE_API_URL=https://api.agentic-travelq.com/api" >> .env.production
+              else
+                echo "VITE_API_URL=https://api-dev.agentic-travelq.com/api" >> .env.production
+              fi
             - npm run build
       artifacts:
         baseDirectory: dist
