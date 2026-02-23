@@ -2,6 +2,11 @@
 Trip Planning Celery Task
 Location: backend/tasks/celery_trip_task.py
 
+v8: Thread-safe _RedisBackedTripStorage for parallel agent execution.
+    - Added threading.Lock to protect in-memory state (agents write concurrently)
+    - Logs execution_mode and agent_timings from orchestrator v7
+    - Updated docstring for parallel context
+
 v7: Added before/after TravelPreferences comparison logging in Step 2
     for testing NL preprocessing. Shows only changed fields side-by-side.
 
@@ -17,6 +22,7 @@ Start worker:
 """
 import asyncio
 import json
+import threading
 import traceback
 from datetime import datetime
 
@@ -76,14 +82,20 @@ class _RedisBackedTripStorage:
     add_activities(), etc. This adapter writes to Redis AND updates agent
     status, so the frontend can see progress in real-time via polling.
 
-    v6 FIX: Added add_restaurants() and add_activities() — these are what
-    PlacesAgent actually calls (not add_places()). The previous version only
-    had add_places(category, places) which PlacesAgent never calls.
+    v8: Thread-safe — uses threading.Lock to protect in-memory state.
+    With parallel execution (orchestrator v7), FlightAgent, HotelAgent,
+    and PlacesAgent all write concurrently from different threads.
+    Each agent writes to different fields so there's no logical contention,
+    but the lock prevents any edge-case corruption on shared dicts.
+
+    Redis itself is thread-safe (redis-py uses connection pooling), so
+    the lock only protects the in-memory caches (_flights, _hotels, etc.).
     """
 
     def __init__(self, trip_id: str, redis_service):
         self.trip_id = trip_id
         self.redis = redis_service
+        self._lock = threading.Lock()
         self._preferences = None
         self._recommendations = {}
         self._flights = []
@@ -92,35 +104,40 @@ class _RedisBackedTripStorage:
         self._restaurants = []
         self._activities = []
         self._places = {}
-        _log(f"📦 _RedisBackedTripStorage created for {trip_id}")
+        _log(f"📦 _RedisBackedTripStorage created for {trip_id} (thread-safe)")
 
     # ── Preferences ───────────────────────────────────────────────────
 
     def store_preferences(self, trip_id: str, preferences):
-        self._preferences = preferences
+        with self._lock:
+            self._preferences = preferences
         _log(f"📦 store_preferences({trip_id})")
 
     def get_preferences(self, trip_id: str):
-        return self._preferences
+        with self._lock:
+            return self._preferences
 
     # ── Agent data (writes to Redis immediately) ──────────────────────
 
     def add_flights(self, trip_id: str, flights, metadata=None):
-        self._flights = flights
+        with self._lock:
+            self._flights = flights
         _log(f"✈️  add_flights({trip_id}) — {len(flights)} flights")
         self.redis.store_agent_results(trip_id, "flight", {"flights": flights, "metadata": metadata})
         self.redis.set_agent_status(trip_id, "flight", AGENT_STATUS_COMPLETED)
         _log(f"✈️  Flight: Redis → results stored + status → completed")
 
     def add_hotels(self, trip_id: str, hotels, metadata=None):
-        self._hotels = hotels
+        with self._lock:
+            self._hotels = hotels
         _log(f"🏨 add_hotels({trip_id}) — {len(hotels)} hotels")
         self.redis.store_agent_results(trip_id, "hotel", {"hotels": hotels, "metadata": metadata})
         self.redis.set_agent_status(trip_id, "hotel", AGENT_STATUS_COMPLETED)
         _log(f"🏨 Hotel: Redis → results stored + status → completed")
 
     def add_weather(self, trip_id: str, weather, metadata=None):
-        self._weather = weather
+        with self._lock:
+            self._weather = weather
         _log(f"🌤️  add_weather({trip_id}) — {len(weather)} forecasts")
         self.redis.store_agent_results(trip_id, "weather", {"weather": weather, "metadata": metadata})
         self.redis.set_agent_status(trip_id, "weather", AGENT_STATUS_COMPLETED)
@@ -128,8 +145,9 @@ class _RedisBackedTripStorage:
 
     def add_restaurants(self, trip_id: str, restaurants, metadata=None):
         """Store restaurant results from PlacesAgent."""
-        self._restaurants = restaurants
-        self._places["restaurants"] = restaurants
+        with self._lock:
+            self._restaurants = restaurants
+            self._places["restaurants"] = restaurants
         _log(f"🍽️  add_restaurants({trip_id}) — {len(restaurants)} restaurants")
         self.redis.store_agent_results(
             trip_id, "restaurant",
@@ -140,8 +158,9 @@ class _RedisBackedTripStorage:
 
     def add_activities(self, trip_id: str, activities, metadata=None):
         """Store activity results from PlacesAgent."""
-        self._activities = activities
-        self._places["activities"] = activities
+        with self._lock:
+            self._activities = activities
+            self._places["activities"] = activities
         _log(f"🎭 add_activities({trip_id}) — {len(activities)} activities")
         self.redis.store_agent_results(
             trip_id, "places",
@@ -152,7 +171,8 @@ class _RedisBackedTripStorage:
 
     def add_places(self, trip_id: str, category: str, places, metadata=None):
         """Generic add_places (kept for backward compat)."""
-        self._places[category] = places
+        with self._lock:
+            self._places[category] = places
         agent_name = "restaurant" if category == "restaurants" else "places"
         _log(f"📍 add_places({trip_id}, {category}) — {len(places)} places")
         self.redis.store_agent_results(
@@ -166,27 +186,30 @@ class _RedisBackedTripStorage:
 
     def store_recommendation(self, trip_id: str, category: str, recommended_id: str,
                              reason: str = "", metadata: dict = None):
-        self._recommendations[category] = {
-            "recommended_id": recommended_id,
-            "reason": reason,
-            "metadata": metadata or {},
-            "stored_at": datetime.now().isoformat(),
-        }
+        with self._lock:
+            self._recommendations[category] = {
+                "recommended_id": recommended_id,
+                "reason": reason,
+                "metadata": metadata or {},
+                "stored_at": datetime.now().isoformat(),
+            }
         _log(f"⭐ store_recommendation({trip_id}, {category}) — id={recommended_id}")
 
     def get_recommendations(self, trip_id: str):
-        return self._recommendations
+        with self._lock:
+            return dict(self._recommendations)
 
     # ── Aggregation (called by orchestrator at end) ───────────────────
 
     def get_all_options(self, trip_id: str):
-        return {
-            "flights": self._flights,
-            "hotels": self._hotels,
-            "weather": self._weather,
-            "restaurants": self._restaurants or self._places.get("restaurants", []),
-            "activities": self._activities or self._places.get("activities", []),
-        }
+        with self._lock:
+            return {
+                "flights": list(self._flights),
+                "hotels": list(self._hotels),
+                "weather": list(self._weather),
+                "restaurants": list(self._restaurants) or list(self._places.get("restaurants", [])),
+                "activities": list(self._activities) or list(self._places.get("activities", [])),
+            }
 
     def get_summary(self, trip_id: str):
         opts = self.get_all_options(trip_id)
@@ -224,6 +247,9 @@ class _RedisBackedTripStorage:
 def plan_trip_task(self, trip_id: str):
     """
     Async trip planning task. Runs in Celery worker process.
+
+    v8: Orchestrator now runs agents in parallel via ThreadPoolExecutor.
+    Storage is thread-safe. Expected ~36s vs ~87s sequential.
     """
     _log("=" * 80)
     _log(f"🚀 CELERY TASK STARTED: plan_trip({trip_id})")
@@ -257,8 +283,6 @@ def plan_trip_task(self, trip_id: str):
         _log(f"   User text: \"{user_text[:200] if user_text else '(none)'}\"")
         _log_json(preferences_dict, label="📨 Original Travel Preferences:")
 
-        
-
         # ── 2. Preprocessing (if user text exists) ─────────────────────
         _log("─" * 40)
         _log("STEP 2: Preprocessing")
@@ -270,8 +294,6 @@ def plan_trip_task(self, trip_id: str):
 
             # ── v7: Capture original preferences BEFORE preprocessing ──
             original_prefs_dict = travel_preferences.model_dump()
-
-            # _log_json(preferences_dict, label="📨 Original Travel Preferences:")
 
             preproc_storage = _RedisBackedTripStorage(trip_id, redis_service)
             preprocessor = PreprocessorAgent(
@@ -335,16 +357,16 @@ def plan_trip_task(self, trip_id: str):
         else:
             _log("   ℹ️  No user text — skipping preprocessing")
 
-        # ── 3. Orchestrate ─────────────────────────────────────────────
+        # ── 3. Orchestrate (PARALLEL) ──────────────────────────────────
         _log("─" * 40)
-        _log("STEP 3: Orchestration")
+        _log("STEP 3: Orchestration (parallel execution)")
         _log("─" * 40)
 
         redis_service.set_trip_status(trip_id, TRIP_STATUS_IN_PROGRESS)
 
         trip_storage = _RedisBackedTripStorage(trip_id, redis_service)
         trip_storage.store_preferences(trip_id, travel_preferences)
-        _log("   ✅ Created _RedisBackedTripStorage (v6: with add_restaurants + add_activities)")
+        _log("   ✅ Created _RedisBackedTripStorage (v8: thread-safe for parallel)")
 
         # Mark search agents as in_progress
         for agent_name in ["flight", "hotel", "weather", "places", "restaurant"]:
@@ -360,6 +382,7 @@ def plan_trip_task(self, trip_id: str):
         orchestrator = TravelOrchestratorAgent()
 
         _log(f"   🎯 orchestrate(user_proxy, trip_id={trip_id}, trip_storage=_RedisBackedTripStorage)")
+        _log(f"   ⚡ Execution mode: PARALLEL (FlightAgent + HotelAgent + PlacesAgent)")
         orch_start = datetime.now()
 
         loop = asyncio.new_event_loop()
@@ -378,6 +401,18 @@ def plan_trip_task(self, trip_id: str):
         orch_duration = (datetime.now() - orch_start).total_seconds()
         _log(f"   ✅ Orchestration completed in {orch_duration:.2f}s")
         _log(f"   Agents used: {result.get('agents_used', [])}")
+        _log(f"   Execution mode: {result.get('execution_mode', 'unknown')}")
+
+        # v8: Log parallel timing breakdown
+        agent_timings = result.get("agent_timings", {})
+        if agent_timings:
+            _log("   ⏱️  Agent timings (parallel):")
+            for agent_name, duration in sorted(agent_timings.items(), key=lambda x: x[1], reverse=True):
+                _log(f"      {agent_name}: {duration:.1f}s")
+            sequential_total = sum(agent_timings.values())
+            _log(f"   ⚡ Wall-clock: {orch_duration:.1f}s | Sequential would be: {sequential_total:.1f}s")
+            if orch_duration > 0:
+                _log(f"   ⚡ Speedup: {sequential_total / orch_duration:.1f}x")
 
         # ── 3b: Verify Redis agent statuses ────────────────────────────
         _log("─" * 40)
@@ -422,9 +457,10 @@ def plan_trip_task(self, trip_id: str):
             "processing_time": processing_time,
             "agents_used": result.get("agents_used", []),
             "preference_changes": redis_service.get_preference_changes(trip_id),
+            "execution_mode": result.get("execution_mode", "parallel"),
+            "agent_timings": result.get("agent_timings", {}),
         }
 
-        # _log_json(final_results.get("recommendations", {}), label="Final Recommendations")
         _log_json(final_results.get("summary", {}), label="Final Summary")
 
         redis_service.store_final_results(trip_id, final_results)
@@ -432,6 +468,7 @@ def plan_trip_task(self, trip_id: str):
         _log("=" * 80)
         _log(f"✅ CELERY TASK COMPLETED: {trip_id}")
         _log(f"   Total: {processing_time:.2f}s | Preproc: {preproc_duration:.2f}s | Orch: {orch_duration:.2f}s")
+        _log(f"   Mode: parallel | Agents: {list(agent_timings.keys())}")
         _log("=" * 80)
 
         return {"status": "completed", "trip_id": trip_id}
