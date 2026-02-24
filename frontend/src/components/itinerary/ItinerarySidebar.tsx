@@ -213,7 +213,7 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
                 >×</button>
               </div>
               <p style={{ fontSize: 11, color: '#1E40AF', margin: '3px 0 0', opacity: 0.8 }}>
-                {hotel.chain && `${hotel.chain} · `}⭐ {hotel.google_rating} · {hotel.num_nights} night{hotel.num_nights !== 1 ? 's' : ''}
+                {(hotel as any).chain && `${(hotel as any).chain} · `}⭐ {hotel.google_rating} · {hotel.num_nights} night{hotel.num_nights !== 1 ? 's' : ''}
               </p>
               <div style={{ fontFamily: FONT, fontSize: 16, fontWeight: 800, color: '#1E40AF', marginTop: 5, display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                 <span>${hotel.total_price}</span>
@@ -274,7 +274,7 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 20, marginBottom: 1 }}>{getRestaurantEmoji(r)}</div>
                       <div style={{ fontSize: 10.5, fontWeight: 700, color: '#1E293B', lineHeight: 1.2 }} className="truncate">{r.name}</div>
-                      <div style={{ fontSize: 9.5, color: '#94A3B8' }}>⭐ {r.rating || r.google_rating}</div>
+                      <div style={{ fontSize: 9.5, color: '#94A3B8' }}>⭐ {r.rating || (r as any).google_rating}</div>
                     </div>
                     {/* Photo thumbnail */}
                     {photo ? (
@@ -346,7 +346,7 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 20, marginBottom: 1 }}>{getActivityEmoji(a)}</div>
                       <div style={{ fontSize: 10.5, fontWeight: 700, color: '#1E293B', lineHeight: 1.2 }} className="truncate">{a.name}</div>
-                      <div style={{ fontSize: 9.5, color: '#94A3B8' }}>⭐ {a.rating || a.google_rating}</div>
+                      <div style={{ fontSize: 9.5, color: '#94A3B8' }}>⭐ {a.rating || (a as any).google_rating}</div>
                     </div>
                     {/* Photo thumbnail */}
                     {photo ? (
