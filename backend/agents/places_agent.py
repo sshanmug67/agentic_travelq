@@ -1,38 +1,35 @@
 """
-Places Agent v8 — Four-Persona Parallel Agent
+Structured Daily Plan — PlacesAgent v9.3 (Three-Phase LLM Pipeline)
 Location: backend/agents/places_agent.py
 
-Proxies as FOUR frontend agents:
-  🌤️  Weather Agent      — fetches Open-Meteo forecast
-  🍽️  Restaurant Agent   — searches Google Places for cuisine matches
-  🎭  Activities Agent   — searches Google Places for interest matches
-  📋  Travel Planner     — LLM curates day-by-day itinerary
+Changes (v9.3 — Three-Phase Pipeline):
+  - Phase 2 now has 3 LLM calls instead of 1:
+    Call 1: PLANNER — assigns venues to day/slot (~400 tokens, ~4s)
+    Call 2a: WRITER A — writes Days 1-3 narratives (parallel, streaming)
+    Call 2b: WRITER B — writes Days 4-5 narratives (parallel, streaming)
+  - Planner sees ALL venues + ALL weather → perfect global coordination
+  - Writers only write narratives for pre-assigned venues → fast + focused
+  - Nuggets split: Writer A gets 3 nuggets, Writer B gets 2 nuggets
+  - No more nuggets fallback needed (each writer has plenty of token budget)
+  - Expected: 37s → 22s LLM time, Day 1 visible at ~10s
 
-Changes (v8 — Parallel Four-Persona):
-  - Integrated weather fetching directly (no separate WeatherAgent needed)
-  - Phase 1: asyncio.gather runs weather + restaurant + activity searches in parallel
-  - Phase 2: Single LLM call produces comprehensive travel plan including:
-      * Day-by-day itinerary with weather-aware scheduling
-      * Packing tips and weather cautions
-      * Cuisine preference rationale
-      * Activity selection rationale
-      * Seasonal festivals / local events (best-effort via Google Places)
-  - Dynamic result counts: 3× trip days for restaurants and activities
-  - Updates four separate frontend status rows via _update_*_status() helpers
-  - Stores weather data + weather recommendation (preserves frontend weather card)
+Changes (v9.2.1):
+  - Streaming tool calls, per-day agent feed messages, nugget fallback
 
-Changes (v7 — Granular Status Messages):
-  - Added _update_status() helper for real-time progress to Redis
-  - Status messages sent to BOTH "restaurant" and "places" agent rows
+Changes (v9.1):
+  - Compact narratives (1-2 sentences), max_tokens=2500
 
-Changes (v6 — enriched Place data):
-  - _google_dict_to_place: passes through reviews, phone_number, google_url
+Changes (v9):
+  - Structured JSON daily plan with enrichment and icon resolution
 """
 import time
 import json
+import re
 import asyncio
+import textwrap
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 
 from agents.base_agent import TravelQBaseAgent
 from services.storage.storage_base import TripStorageInterface
@@ -44,19 +41,89 @@ from utils.logging_config import log_agent_raw, log_agent_json
 from config.settings import settings
 import openai
 
+from utils.icon_mapper import get_cuisine_icon, get_activity_icon, get_weather_icon
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TOOL DEFINITIONS — used by Writer calls (streaming)
+# ═══════════════════════════════════════════════════════════════════════════
+
+EMIT_DAY_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "emit_day",
+        "description": (
+            "Store one completed day of the travel plan. "
+            "Call this exactly once per day, in sequential order. "
+            "Each call must contain exactly 4 time slots: morning, lunch, afternoon, dinner."
+        ),
+        "parameters": {
+            "type": "object",
+            "required": ["day", "date", "title", "intro", "slots"],
+            "properties": {
+                "day": {"type": "integer", "description": "Day number (1, 2, 3...)"},
+                "date": {"type": "string", "description": "Date in YYYY-MM-DD format"},
+                "title": {"type": "string", "description": "Creative, evocative title for the day"},
+                "intro": {"type": "string", "description": "1-2 engaging sentences addressing the traveler. Reference the weather and set expectations for the day ahead. Second person voice."},
+                "slots": {
+                    "type": "array",
+                    "description": "Exactly 4 time slots: morning, lunch, afternoon, dinner",
+                    "minItems": 4,
+                    "maxItems": 4,
+                    "items": {
+                        "type": "object",
+                        "required": ["time", "venue_name", "type", "category", "narrative"],
+                        "properties": {
+                            "time": {"type": "string", "enum": ["morning", "lunch", "afternoon", "dinner"]},
+                            "venue_name": {"type": "string", "description": "EXACT venue name from assignments"},
+                            "type": {"type": "string", "enum": ["activity", "restaurant"]},
+                            "category": {"type": "string", "description": "Venue category or cuisine type"},
+                            "narrative": {"type": "string", "description": "Exactly 2 engaging sentences. Sentence 1: what makes THIS specific venue unique or famous (signature dish, famous exhibit, architectural feature). Sentence 2: why it's a great match for this traveler's interests. Second person voice (you/your)."},
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
+EMIT_NUGGETS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "emit_nuggets",
+        "description": "Store travel info nuggets. Call ONCE, after all days are emitted.",
+        "parameters": {
+            "type": "object",
+            "required": ["nuggets"],
+            "properties": {
+                "nuggets": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "title", "content", "color"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "content": {"type": "string", "description": "1-2 concise sentences"},
+                            "color": {"type": "string", "enum": ["sky", "purple", "orange", "green", "emerald"]},
+                        },
+                    },
+                },
+            },
+        },
+    },
+}
+
 
 class PlacesAgent(TravelQBaseAgent):
     """
-    Places Agent v8 — Four-Persona Parallel Agent.
+    Places Agent v9.3 — Three-Phase LLM Pipeline.
 
-    Externally appears as four agents on the frontend:
-      - Weather Agent:    fetches forecast, updates "weather" status row
-      - Restaurant Agent: searches cuisines, updates "restaurant" status row
-      - Activities Agent: searches interests, updates "places" status row
-      - Travel Planner:   LLM curates daily plan, updates all rows "Done"
-
-    Internally runs Phase 1 (three API streams in parallel via asyncio.gather)
-    then Phase 2 (single LLM call with all data).
+    Phase 1: Parallel API fetches (weather + restaurants + activities)
+    Phase 2: Three-phase LLM pipeline:
+      - Planner: assigns venues to slots for ALL days (~4s)
+      - Writer A: writes Day 1-3 narratives (streaming, parallel)
+      - Writer B: writes Day 4-5 narratives (streaming, parallel)
     """
 
     CATEGORY_TYPES = {
@@ -67,7 +134,6 @@ class PlacesAgent(TravelQBaseAgent):
         "culture": ["museum", "art_gallery", "performing_arts_theater"],
         "entertainment": ["movie_theater", "amusement_park", "casino"],
     }
-
     INDOOR_TYPES = {
         "museum", "art_gallery", "performing_arts_theater", "movie_theater",
         "shopping_mall", "department_store", "casino", "spa", "aquarium",
@@ -80,20 +146,8 @@ class PlacesAgent(TravelQBaseAgent):
     }
 
     def __init__(self, trip_id: str, trip_storage: TripStorageInterface, **kwargs):
-        system_message = """
-You are a Travel Planning Expert who creates comprehensive, weather-aware
-day-by-day itineraries. You combine weather forecasts, restaurant options,
-activities, and local events into a practical and exciting travel plan.
-
-Your expertise covers:
-1. Weather-smart scheduling (indoor activities on rainy days, outdoor on clear)
-2. Cuisine diversity and preference matching
-3. Activity planning aligned with traveler interests
-4. Practical packing and preparation advice
-5. Local festivals, seasonal events, and cultural happenings
-
-Be enthusiastic, knowledgeable, and specific!
-"""
+        system_message = """You are a Travel Planning Expert who creates comprehensive, weather-aware
+day-by-day itineraries combining weather, restaurants, activities, and local events."""
 
         super().__init__(
             name="PlacesAgent",
@@ -103,82 +157,53 @@ Be enthusiastic, knowledgeable, and specific!
             description="Finds restaurants, attractions, and points of interest",
             **kwargs,
         )
-
         self.trip_id = trip_id
         self.trip_storage = trip_storage
         self.google_places = get_google_places_service()
         self.weather_service = get_weather_service()
-
-        log_agent_raw(
-            "Places Agent v8 initialized (four-persona parallel)",
-            agent_name="PlacesAgent",
-        )
+        log_agent_raw("Places Agent v9.3 initialized (three-phase LLM pipeline)", agent_name="PlacesAgent")
 
     # ─────────────────────────────────────────────────────────────────────
-    # STATUS HELPERS — each targets a different frontend row
+    # STATUS HELPERS
     # ─────────────────────────────────────────────────────────────────────
 
     def _update_status(self, message: str, agent_name: str = "places"):
-        """Send a granular status message to Redis for the frontend."""
         try:
-            self.trip_storage.update_agent_status_message(
-                self.trip_id, agent_name, message
-            )
+            self.trip_storage.update_agent_status_message(self.trip_id, agent_name, message)
         except Exception as e:
-            log_agent_raw(
-                f"Status update failed ({agent_name}): {e}",
-                agent_name="PlacesAgent",
-            )
+            log_agent_raw(f"Status update failed ({agent_name}): {e}", agent_name="PlacesAgent")
 
-    def _update_weather_status(self, message: str):
-        self._update_status(message, agent_name="weather")
-
-    def _update_restaurant_status(self, message: str):
-        self._update_status(message, agent_name="restaurant")
-
-    def _update_activity_status(self, message: str):
-        self._update_status(message, agent_name="places")
-
-    def _update_planner_status(self, message: str):
-        """Update all rows with a planner-phase message."""
-        self._update_status(message, agent_name="restaurant")
-        self._update_status(message, agent_name="places")
+    def _update_weather_status(self, msg): self._update_status(msg, "weather")
+    def _update_restaurant_status(self, msg): self._update_status(msg, "restaurant")
+    def _update_activity_status(self, msg): self._update_status(msg, "places")
+    def _update_planner_status(self, msg):
+        self._update_status(msg, "restaurant")
+        self._update_status(msg, "places")
 
     # ─────────────────────────────────────────────────────────────────────
     # HELPERS
     # ─────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _get_all_interests(preferences) -> List[str]:
-        return (
-            preferences.activity_prefs.preferred_interests
-            + preferences.activity_prefs.interested_interests
-        )
+    def _get_all_interests(prefs) -> List[str]:
+        return prefs.activity_prefs.preferred_interests + prefs.activity_prefs.interested_interests
 
     @staticmethod
-    def _get_all_cuisines(preferences) -> List[str]:
-        return (
-            preferences.restaurant_prefs.preferred_cuisines
-            + preferences.restaurant_prefs.interested_cuisines
-        )
+    def _get_all_cuisines(prefs) -> List[str]:
+        return prefs.restaurant_prefs.preferred_cuisines + prefs.restaurant_prefs.interested_cuisines
 
-    def _calculate_trip_days(self, preferences) -> int:
-        """Return number of days in the trip."""
+    def _calculate_trip_days(self, prefs) -> int:
         try:
-            dep = datetime.strptime(preferences.departure_date, "%Y-%m-%d")
-            ret = datetime.strptime(preferences.return_date, "%Y-%m-%d")
-            return max((ret - dep).days, 1)
+            return max((datetime.strptime(prefs.return_date, "%Y-%m-%d") - datetime.strptime(prefs.departure_date, "%Y-%m-%d")).days, 1)
         except (ValueError, AttributeError):
-            return 5  # sensible default
+            return 5
 
     # ─────────────────────────────────────────────────────────────────────
     # MAIN ENTRY POINT
     # ─────────────────────────────────────────────────────────────────────
 
     def generate_reply(self, messages=None, sender=None, config=None) -> str:
-        log_agent_raw("PlacesAgent v8 processing request...", agent_name="PlacesAgent")
-
-        # Initialize all four status rows
+        log_agent_raw("PlacesAgent v9.3 processing request...", agent_name="PlacesAgent")
         self._update_weather_status("Initializing weather forecast...")
         self._update_restaurant_status("Initializing restaurant search...")
         self._update_activity_status("Initializing activity search...")
@@ -186,52 +211,29 @@ Be enthusiastic, knowledgeable, and specific!
         if messages and len(messages) > 0:
             last_message = messages[-1].get("content", "")
             sender_name = sender.name if sender and hasattr(sender, "name") else "Unknown"
-            self.log_conversation_message(
-                message_type="INCOMING", content=last_message,
-                sender=sender_name, truncate=500,
-            )
+            self.log_conversation_message(message_type="INCOMING", content=last_message, sender=sender_name, truncate=500)
 
-        # Load preferences
         preferences = self.trip_storage.get_preferences(self.trip_id)
         if not preferences:
-            msg = f"Error: Could not find preferences for trip {self.trip_id}"
+            self._update_planner_status("Error: preferences not found")
             self._update_weather_status("Error: preferences not found")
-            self._update_restaurant_status("Error: preferences not found")
-            self._update_activity_status("Error: preferences not found")
-            return self.signal_completion(msg)
+            return self.signal_completion(f"Error: Could not find preferences for trip {self.trip_id}")
 
         num_days = self._calculate_trip_days(preferences)
-        log_agent_raw(
-            f"Trip: {preferences.destination}, {num_days} days, "
-            f"dynamic targets: {num_days * 3} restaurants, {num_days * 3} activities",
-            agent_name="PlacesAgent",
-        )
+        log_agent_raw(f"Trip: {preferences.destination}, {num_days} days, targets: {num_days*3} restaurants, {num_days*3} activities", agent_name="PlacesAgent")
 
         try:
             start_time = time.time()
 
             # ══════════════════════════════════════════════════════════════
-            # PHASE 1: Parallel API calls — Weather + Restaurants + Activities
+            # PHASE 1: Parallel API calls
             # ══════════════════════════════════════════════════════════════
-            log_agent_raw(
-                "🚀 Phase 1: Parallel fetch (weather + restaurants + activities)",
-                agent_name="PlacesAgent",
-            )
-
-            weather_forecasts, cuisine_restaurants, interest_activities = (
-                self._run_parallel_fetches(preferences, num_days)
-            )
-
+            log_agent_raw("🚀 Phase 1: Parallel fetch (weather + restaurants + activities)", agent_name="PlacesAgent")
+            weather_forecasts, cuisine_restaurants, interest_activities = self._run_parallel_fetches(preferences, num_days)
             api_duration = time.time() - start_time
-            log_agent_raw(
-                f"✅ Phase 1 complete in {api_duration:.1f}s — "
-                f"weather={len(weather_forecasts)}, "
-                f"restaurants={len(cuisine_restaurants)}, "
-                f"activities={len(interest_activities)}",
-                agent_name="PlacesAgent",
-            )
+            log_agent_raw(f"✅ Phase 1 complete in {api_duration:.1f}s — weather={len(weather_forecasts)}, restaurants={len(cuisine_restaurants)}, activities={len(interest_activities)}", agent_name="PlacesAgent")
 
-            # ── Process weather ───────────────────────────────────────────
+            # Process weather
             weather_by_date = {}
             weather_dicts = []
             for f in weather_forecasts:
@@ -239,88 +241,46 @@ Be enthusiastic, knowledgeable, and specific!
                 weather_dicts.append(d)
                 if d.get("date"):
                     weather_by_date[d["date"]] = d
-
             trip_days = self._compute_trip_days(preferences, weather_by_date)
-
-            # Store weather data (preserves frontend weather card)
             self._store_weather(weather_dicts, preferences)
 
-            # ── Process restaurants & activities ──────────────────────────
-            self._update_restaurant_status(
-                f"Processing {len(cuisine_restaurants)} restaurant results..."
-            )
-            self._update_activity_status(
-                f"Processing {len(interest_activities)} activity results..."
-            )
-
-            restaurants, activities = self._segregate_and_enrich(
-                cuisine_restaurants, interest_activities, preferences
-            )
-
-            self._update_restaurant_status(
-                f"Found {len(restaurants)} restaurants matching your tastes"
-            )
-            self._update_activity_status(
-                f"Found {len(activities)} activities matching your interests"
-            )
+            # Process restaurants & activities
+            self._update_restaurant_status(f"Processing {len(cuisine_restaurants)} restaurant results...")
+            self._update_activity_status(f"Processing {len(interest_activities)} activity results...")
+            restaurants, activities = self._segregate_and_enrich(cuisine_restaurants, interest_activities, preferences)
+            self._update_restaurant_status(f"Found {len(restaurants)} restaurants matching your tastes")
+            self._update_activity_status(f"Found {len(activities)} activities matching your interests")
 
             if not restaurants and not activities:
                 self._update_planner_status("No matching places found")
-                return self.signal_completion(
-                    "I couldn't find any places matching your interests."
-                )
+                return self.signal_completion("I couldn't find any places matching your interests.")
 
-            # Store restaurant + activity results
             self._store_results(restaurants, activities, preferences, api_duration)
 
             # ══════════════════════════════════════════════════════════════
-            # PHASE 2: Single LLM call — comprehensive travel plan
+            # PHASE 2: Three-phase LLM pipeline (v9.3)
             # ══════════════════════════════════════════════════════════════
-            log_agent_raw(
-                "🧠 Phase 2: LLM generating comprehensive travel plan",
-                agent_name="PlacesAgent",
-            )
-
-            self._update_planner_status(
-                f"AI planning {len(trip_days)}-day itinerary with "
-                f"{len(restaurants)} restaurants and {len(activities)} activities..."
-            )
+            log_agent_raw("🧠 Phase 2: Three-phase LLM pipeline (planner + 2 parallel writers)", agent_name="PlacesAgent")
+            self._update_planner_status(f"AI planning {len(trip_days)}-day itinerary...")
 
             recommendation = self._generate_travel_plan(
                 weather_forecasts, restaurants, activities,
                 trip_days, preferences, num_days,
             )
 
-            # ── Final status on all four rows ─────────────────────────────
+            # Final status
             if weather_forecasts:
-                temps = [f.temperature for f in weather_forecasts]
                 min_t = min(f.temp_min for f in weather_forecasts)
                 max_t = max(f.temp_max for f in weather_forecasts)
-                self._update_weather_status(
-                    f"Weather forecast complete — {len(weather_forecasts)} days, "
-                    f"{min_t:.0f}°F–{max_t:.0f}°F"
-                )
+                self._update_weather_status(f"Weather forecast complete — {len(weather_forecasts)} days, {min_t:.0f}°F–{max_t:.0f}°F")
             else:
                 self._update_weather_status("Weather forecast complete — no data available")
-
-            self._update_restaurant_status(
-                f"Restaurant search complete — {len(restaurants)} options ready"
-            )
-            self._update_activity_status(
-                f"Activity search complete — {len(activities)} options ready"
-            )
+            self._update_restaurant_status(f"Restaurant search complete — {len(restaurants)} options ready")
+            self._update_activity_status(f"Activity search complete — {len(activities)} options ready")
 
             total_duration = time.time() - start_time
-            log_agent_raw(
-                f"✅ PlacesAgent v8 complete in {total_duration:.1f}s "
-                f"(API: {api_duration:.1f}s, LLM: {total_duration - api_duration:.1f}s)",
-                agent_name="PlacesAgent",
-            )
-
-            self.log_conversation_message(
-                message_type="OUTGOING", content=recommendation,
-                sender="chat_manager", truncate=1000,
-            )
+            log_agent_raw(f"✅ PlacesAgent v9.3 complete in {total_duration:.1f}s (API: {api_duration:.1f}s, LLM: {total_duration - api_duration:.1f}s)", agent_name="PlacesAgent")
+            self.log_conversation_message(message_type="OUTGOING", content=recommendation, sender="chat_manager", truncate=1000)
             return self.signal_completion(recommendation)
 
         except Exception as e:
@@ -330,23 +290,14 @@ Be enthusiastic, knowledgeable, and specific!
             self._update_weather_status(f"Error: {str(e)[:80]}")
             self._update_restaurant_status(f"Error: {str(e)[:80]}")
             self._update_activity_status(f"Error: {str(e)[:80]}")
-            return self.signal_completion(
-                f"I encountered an error: {str(e)}. Please try again."
-            )
+            return self.signal_completion(f"I encountered an error: {str(e)}. Please try again.")
 
     # ─────────────────────────────────────────────────────────────────────
     # PHASE 1: PARALLEL API FETCHES
     # ─────────────────────────────────────────────────────────────────────
 
-    def _run_parallel_fetches(
-        self, preferences, num_days: int
-    ) -> Tuple[List[Weather], List[Dict], List[Dict]]:
-        """
-        Run weather, restaurant, and activity searches in parallel
-        using asyncio.gather. Returns (weather_forecasts, restaurants, activities).
-        """
+    def _run_parallel_fetches(self, preferences, num_days):
         import nest_asyncio
-
         async def _gather_all():
             return await asyncio.gather(
                 self._fetch_weather_async(preferences),
@@ -354,8 +305,6 @@ Be enthusiastic, knowledgeable, and specific!
                 self._fetch_activities_async(preferences, num_days),
                 return_exceptions=True,
             )
-
-        # Handle event loop: Celery may or may not have one running
         try:
             loop = asyncio.get_running_loop()
             nest_asyncio.apply()
@@ -368,101 +317,52 @@ Be enthusiastic, knowledgeable, and specific!
             finally:
                 loop.close()
 
-        # Unpack with error safety
         weather = results[0] if not isinstance(results[0], Exception) else []
         restaurants = results[1] if not isinstance(results[1], Exception) else []
         activities = results[2] if not isinstance(results[2], Exception) else []
-
-        if isinstance(results[0], Exception):
-            log_agent_raw(f"⚠️ Weather fetch failed: {results[0]}", agent_name="PlacesAgent")
-        if isinstance(results[1], Exception):
-            log_agent_raw(f"⚠️ Restaurant fetch failed: {results[1]}", agent_name="PlacesAgent")
-        if isinstance(results[2], Exception):
-            log_agent_raw(f"⚠️ Activity fetch failed: {results[2]}", agent_name="PlacesAgent")
-
+        for i, label in enumerate(["Weather", "Restaurant", "Activity"]):
+            if isinstance(results[i], Exception):
+                log_agent_raw(f"⚠️ {label} fetch failed: {results[i]}", agent_name="PlacesAgent")
         return weather, restaurants, activities
 
-    # ── Weather fetch ─────────────────────────────────────────────────
-
-    async def _fetch_weather_async(self, preferences) -> List[Weather]:
-        """Fetch weather forecast from Open-Meteo API."""
-        self._update_weather_status(
-            f"Fetching forecast for {preferences.destination}..."
-        )
-
+    async def _fetch_weather_async(self, preferences):
+        self._update_weather_status(f"Fetching forecast for {preferences.destination}...")
         try:
             weather_data = await self.weather_service.get_forecast(
-                location=preferences.destination,
-                start_date=preferences.departure_date,
-                end_date=preferences.return_date,
-            )
-
+                location=preferences.destination, start_date=preferences.departure_date, end_date=preferences.return_date)
             forecasts = []
-            for forecast_dict in weather_data:
-                forecast = self._parse_weather_data(forecast_dict)
-                if forecast:
-                    forecasts.append(forecast)
-
+            for fd in weather_data:
+                f = self._parse_weather_data(fd)
+                if f: forecasts.append(f)
             if forecasts:
-                min_t = min(f.temp_min for f in forecasts)
-                max_t = max(f.temp_max for f in forecasts)
-                rainy = sum(
-                    1 for f in forecasts
-                    if (f.precipitation_probability or 0) > 50
-                )
-                self._update_weather_status(
-                    f"Forecast received — {len(forecasts)} days, "
-                    f"{min_t:.0f}°F–{max_t:.0f}°F, "
-                    f"{rainy} rainy day{'s' if rainy != 1 else ''}"
-                )
+                min_t, max_t = min(f.temp_min for f in forecasts), max(f.temp_max for f in forecasts)
+                rainy = sum(1 for f in forecasts if (f.precipitation_probability or 0) > 50)
+                self._update_weather_status(f"Forecast received — {len(forecasts)} days, {min_t:.0f}°F–{max_t:.0f}°F, {rainy} rainy day{'s' if rainy != 1 else ''}")
             else:
                 self._update_weather_status("No forecast data available")
-
-            log_agent_raw(
-                f"✅ Weather: {len(forecasts)} day forecast received",
-                agent_name="PlacesAgent",
-            )
+            log_agent_raw(f"✅ Weather: {len(forecasts)} day forecast received", agent_name="PlacesAgent")
             return forecasts
-
         except Exception as e:
             log_agent_raw(f"❌ Weather fetch failed: {e}", agent_name="PlacesAgent")
             self._update_weather_status(f"Weather unavailable: {str(e)[:60]}")
             return []
 
-    def _parse_weather_data(self, data: Dict) -> Optional[Weather]:
+    def _parse_weather_data(self, data):
         try:
-            return Weather(
-                date=data["date"],
-                temperature=data.get("temperature", 0),
-                feels_like=data.get("feels_like", 0),
-                temp_min=data.get("temp_min", 0),
-                temp_max=data.get("temp_max", 0),
-                description=data.get("description", ""),
-                icon=data.get("icon"),
-                humidity=data.get("humidity"),
-                wind_speed=data.get("wind_speed"),
-                precipitation_probability=data.get("precipitation_probability"),
-                conditions=data.get("condition"),
-            )
+            return Weather(date=data["date"], temperature=data.get("temperature", 0), feels_like=data.get("feels_like", 0),
+                temp_min=data.get("temp_min", 0), temp_max=data.get("temp_max", 0), description=data.get("description", ""),
+                icon=data.get("icon"), humidity=data.get("humidity"), wind_speed=data.get("wind_speed"),
+                precipitation_probability=data.get("precipitation_probability"), conditions=data.get("condition"))
         except Exception as e:
             log_agent_raw(f"⚠️ Weather parse error: {e}", agent_name="PlacesAgent")
             return None
 
-    # ── Restaurant fetch ──────────────────────────────────────────────
-
-    async def _fetch_restaurants_async(
-        self, preferences, num_days: int
-    ) -> List[Dict]:
-        """Search Google Places for restaurants matching cuisine preferences.
-        Target count: 3× trip days (gives LLM enough variety to curate).
-        """
+    async def _fetch_restaurants_async(self, preferences, num_days):
         destination = preferences.destination
         preferred = preferences.restaurant_prefs.preferred_cuisines
         interested = preferences.restaurant_prefs.interested_cuisines
         target_count = num_days * 3
-
-        all_results: List[Dict] = []
-        seen_ids: set = set()
+        all_results, seen_ids = [], set()
 
         def _add(places, cuisine):
             for place in places:
@@ -473,87 +373,38 @@ Be enthusiastic, knowledgeable, and specific!
                     all_results.append(place)
 
         if not self.google_places or not self.google_places.client:
-            self._update_restaurant_status(
-                "Google Places not configured — using sample data"
-            )
+            self._update_restaurant_status("Google Places not configured")
             return []
 
-        # Preferred cuisines: more results per cuisine
         preferred_per = max(3, target_count // max(len(preferred) + len(interested), 1))
-        if preferred:
-            self._update_restaurant_status(
-                f"Searching preferred cuisines: {', '.join(preferred)}..."
-            )
         for cuisine in preferred:
-            self._update_restaurant_status(
-                f"Searching {cuisine} restaurants in {destination}..."
-            )
-            results = self.google_places.search_places_by_text(
-                query=f"{cuisine} restaurant in {destination}",
-                location=destination, included_type="restaurant",
-                min_rating=3.5, max_results=preferred_per,
-                agent_logger=self.logger,
-            )
+            self._update_restaurant_status(f"Searching {cuisine} restaurants in {destination}...")
+            results = self.google_places.search_places_by_text(query=f"{cuisine} restaurant in {destination}", location=destination, included_type="restaurant", min_rating=3.5, max_results=preferred_per, agent_logger=self.logger)
             _add(results, cuisine)
 
-        # Interested cuisines: fewer results per cuisine
         interested_per = max(2, preferred_per // 2)
-        if interested:
-            self._update_restaurant_status(
-                f"Searching interested cuisines: {', '.join(interested)}..."
-            )
         for cuisine in interested:
-            self._update_restaurant_status(
-                f"Searching {cuisine} restaurants in {destination}..."
-            )
-            results = self.google_places.search_places_by_text(
-                query=f"{cuisine} restaurant in {destination}",
-                location=destination, included_type="restaurant",
-                min_rating=3.5, max_results=interested_per,
-                agent_logger=self.logger,
-            )
+            self._update_restaurant_status(f"Searching {cuisine} restaurants in {destination}...")
+            results = self.google_places.search_places_by_text(query=f"{cuisine} restaurant in {destination}", location=destination, included_type="restaurant", min_rating=3.5, max_results=interested_per, agent_logger=self.logger)
             _add(results, cuisine)
 
-        # Fill up if under target
         if len(all_results) < target_count:
             shortfall = target_count - len(all_results)
-            self._update_restaurant_status(
-                f"Finding {shortfall} more top-rated restaurants..."
-            )
-            results = self.google_places.search_places_by_text(
-                query=f"best restaurant in {destination}",
-                location=destination, included_type="restaurant",
-                min_rating=4.0, max_results=shortfall,
-                agent_logger=self.logger,
-            )
+            self._update_restaurant_status(f"Finding {shortfall} more top-rated restaurants...")
+            results = self.google_places.search_places_by_text(query=f"best restaurant in {destination}", location=destination, included_type="restaurant", min_rating=4.0, max_results=shortfall, agent_logger=self.logger)
             _add(results, "General")
 
         final = all_results[:target_count]
-        self._update_restaurant_status(
-            f"Restaurant search done — {len(final)} candidates found"
-        )
-        log_agent_raw(
-            f"✅ Restaurants: {len(final)} found (target: {target_count})",
-            agent_name="PlacesAgent",
-        )
+        self._update_restaurant_status(f"Restaurant search done — {len(final)} candidates found")
+        log_agent_raw(f"✅ Restaurants: {len(final)} found (target: {target_count})", agent_name="PlacesAgent")
         return final
 
-    # ── Activity fetch ────────────────────────────────────────────────
-
-    async def _fetch_activities_async(
-        self, preferences, num_days: int
-    ) -> List[Dict]:
-        """Search Google Places for activities matching interest preferences.
-        Target count: 3× trip days.
-        Also searches for seasonal festivals/events (best-effort).
-        """
+    async def _fetch_activities_async(self, preferences, num_days):
         destination = preferences.destination
         preferred = preferences.activity_prefs.preferred_interests
         interested = preferences.activity_prefs.interested_interests
         target_count = num_days * 3
-
-        all_results: List[Dict] = []
-        seen_ids: set = set()
+        all_results, seen_ids = [], set()
 
         def _add(places, tag):
             for place in places:
@@ -564,86 +415,39 @@ Be enthusiastic, knowledgeable, and specific!
                     all_results.append(place)
 
         if not self.google_places or not self.google_places.client:
-            self._update_activity_status(
-                "Google Places not configured — using sample data"
-            )
+            self._update_activity_status("Google Places not configured")
             return []
 
-        # Preferred interests: more results
         preferred_per = max(3, target_count // max(len(preferred) + len(interested), 1))
-        if preferred:
-            self._update_activity_status(
-                f"Searching preferred interests: {', '.join(preferred)}..."
-            )
         for interest in preferred:
-            self._update_activity_status(
-                f"Searching {interest} in {destination}..."
-            )
-            results = self.google_places.search_places_by_text(
-                query=f"{interest} in {destination}",
-                location=destination, min_rating=3.5,
-                max_results=preferred_per, agent_logger=self.logger,
-            )
+            self._update_activity_status(f"Searching {interest} in {destination}...")
+            results = self.google_places.search_places_by_text(query=f"{interest} in {destination}", location=destination, min_rating=3.5, max_results=preferred_per, agent_logger=self.logger)
             _add(results, interest)
 
-        # Interested interests: fewer results
         interested_per = max(2, preferred_per // 2)
-        if interested:
-            self._update_activity_status(
-                f"Searching interested topics: {', '.join(interested)}..."
-            )
         for interest in interested:
-            self._update_activity_status(
-                f"Searching {interest} in {destination}..."
-            )
-            results = self.google_places.search_places_by_text(
-                query=f"{interest} in {destination}",
-                location=destination, min_rating=3.5,
-                max_results=interested_per, agent_logger=self.logger,
-            )
+            self._update_activity_status(f"Searching {interest} in {destination}...")
+            results = self.google_places.search_places_by_text(query=f"{interest} in {destination}", location=destination, min_rating=3.5, max_results=interested_per, agent_logger=self.logger)
             _add(results, interest)
 
-        # ── Seasonal festivals / local events (best-effort) ──────────
         try:
-            trip_month = datetime.strptime(
-                preferences.departure_date, "%Y-%m-%d"
-            ).strftime("%B")  # e.g. "March"
+            trip_month = datetime.strptime(preferences.departure_date, "%Y-%m-%d").strftime("%B")
         except (ValueError, AttributeError):
             trip_month = ""
 
         if trip_month:
-            self._update_activity_status(
-                f"Searching {trip_month} festivals & events in {destination}..."
-            )
-            festival_results = self.google_places.search_places_by_text(
-                query=f"{trip_month} festival event in {destination}",
-                location=destination, min_rating=3.5,
-                max_results=3, agent_logger=self.logger,
-            )
+            self._update_activity_status(f"Searching {trip_month} festivals & events in {destination}...")
+            festival_results = self.google_places.search_places_by_text(query=f"{trip_month} festival event in {destination}", location=destination, min_rating=3.5, max_results=3, agent_logger=self.logger)
             _add(festival_results, f"{trip_month} Festival/Event")
-
             if festival_results:
-                log_agent_raw(
-                    f"🎉 Found {len(festival_results)} seasonal events for {trip_month}",
-                    agent_name="PlacesAgent",
-                )
+                log_agent_raw(f"🎉 Found {len(festival_results)} seasonal events for {trip_month}", agent_name="PlacesAgent")
 
-        # ── Category-based nearby search for variety ──────────────────
         categories = self._determine_categories(preferences)
         non_restaurant = [c for c in categories if c != "restaurants"]
         if non_restaurant and len(all_results) < target_count:
-            self._update_activity_status(
-                f"Searching nearby {', '.join(non_restaurant)} within 5km..."
-            )
-            place_types = list(set(
-                t for cat in non_restaurant
-                for t in self.CATEGORY_TYPES.get(cat, [])
-            ))
-            nearby = self.google_places.search_places(
-                location=destination, radius=5000,
-                place_types=place_types, min_rating=3.5,
-                max_results=8, agent_logger=self.logger,
-            )
+            self._update_activity_status(f"Searching nearby {', '.join(non_restaurant)} within 5km...")
+            place_types = list(set(t for cat in non_restaurant for t in self.CATEGORY_TYPES.get(cat, [])))
+            nearby = self.google_places.search_places(location=destination, radius=5000, place_types=place_types, min_rating=3.5, max_results=8, agent_logger=self.logger)
             for ptype, places in nearby.items():
                 for pd in places:
                     pid = pd.get("place_id")
@@ -653,56 +457,38 @@ Be enthusiastic, knowledgeable, and specific!
                         all_results.append(pd)
 
         final = all_results[:target_count]
-        self._update_activity_status(
-            f"Activity search done — {len(final)} candidates found"
-        )
-        log_agent_raw(
-            f"✅ Activities: {len(final)} found (target: {target_count})",
-            agent_name="PlacesAgent",
-        )
+        self._update_activity_status(f"Activity search done — {len(final)} candidates found")
+        log_agent_raw(f"✅ Activities: {len(final)} found (target: {target_count})", agent_name="PlacesAgent")
         return final
 
     # ─────────────────────────────────────────────────────────────────────
-    # DATA PROCESSING (unchanged from v7)
+    # DATA PROCESSING
     # ─────────────────────────────────────────────────────────────────────
 
-    def _determine_categories(self, preferences) -> List[str]:
+    def _determine_categories(self, preferences):
         all_interests = self._get_all_interests(preferences)
         categories = []
-        interest_map = {
-            "food": ["restaurants"], "dining": ["restaurants"],
-            "culture": ["culture", "attractions"], "art": ["culture"],
-            "history": ["attractions", "culture"], "museum": ["culture"],
-            "sightseeing": ["attractions"], "shopping": ["shopping"],
-            "nature": ["nature"], "outdoor": ["nature"], "park": ["nature"],
-            "entertainment": ["entertainment"], "nightlife": ["entertainment"],
-            "theater": ["entertainment", "culture"],
-        }
+        interest_map = {"food": ["restaurants"], "dining": ["restaurants"], "culture": ["culture", "attractions"], "art": ["culture"],
+            "history": ["attractions", "culture"], "museum": ["culture"], "sightseeing": ["attractions"], "shopping": ["shopping"],
+            "nature": ["nature"], "outdoor": ["nature"], "park": ["nature"], "entertainment": ["entertainment"],
+            "nightlife": ["entertainment"], "theater": ["entertainment", "culture"]}
         for interest in all_interests:
             il = interest.lower()
             for key, cats in interest_map.items():
-                if key in il:
-                    categories.extend(cats)
+                if key in il: categories.extend(cats)
         categories = list(set(categories))[:4]
         return categories if categories else ["attractions", "culture"]
 
     @staticmethod
-    def _classify_day_weather(weather_dict: Optional[Dict]) -> str:
-        if not weather_dict:
-            return "either"
+    def _classify_day_weather(weather_dict):
+        if not weather_dict: return "either"
         rain_prob = weather_dict.get("precipitation_probability", 0) or 0
-        description = (weather_dict.get("description") or "").lower()
-        conditions = (weather_dict.get("conditions") or "").lower()
+        desc = (weather_dict.get("description") or "").lower()
+        cond = (weather_dict.get("conditions") or "").lower()
         indoor_kw = ["rain", "storm", "thunder", "snow", "sleet", "drizzle", "heavy"]
-        if rain_prob > 60 or any(kw in description for kw in indoor_kw) or any(kw in conditions for kw in indoor_kw):
-            return "indoor"
+        if rain_prob > 60 or any(kw in desc for kw in indoor_kw) or any(kw in cond for kw in indoor_kw): return "indoor"
         outdoor_kw = ["clear", "sunny", "fair", "fine"]
-        if rain_prob <= 30 and (
-            any(kw in description for kw in outdoor_kw)
-            or any(kw in conditions for kw in outdoor_kw)
-            or rain_prob == 0
-        ):
-            return "outdoor"
+        if rain_prob <= 30 and (any(kw in desc for kw in outdoor_kw) or any(kw in cond for kw in outdoor_kw) or rain_prob == 0): return "outdoor"
         return "either"
 
     def _compute_trip_days(self, preferences, weather_by_date):
@@ -710,117 +496,69 @@ Be enthusiastic, knowledgeable, and specific!
             start = datetime.strptime(preferences.departure_date, "%Y-%m-%d")
             end = datetime.strptime(preferences.return_date, "%Y-%m-%d")
         except (ValueError, AttributeError):
-            return [
-                {"day": i + 1, "date": "", "weather_class": "either",
-                 "weather_summary": "N/A"}
-                for i in range(5)
-            ]
-        days = []
-        current = start
-        day_num = 1
+            return [{"day": i+1, "date": "", "weather_class": "either", "weather_summary": "N/A"} for i in range(5)]
+        days, current, day_num = [], start, 1
         while current < end:
             date_str = current.strftime("%Y-%m-%d")
             weather = weather_by_date.get(date_str)
-            weather_class = self._classify_day_weather(weather)
-            if weather:
-                summary = (
-                    f"{weather.get('description', 'N/A')}, "
-                    f"{weather.get('temp_min', '?')}–{weather.get('temp_max', '?')}°F, "
-                    f"{(weather.get('precipitation_probability', 0) or 0):.0f}% rain"
-                )
-            else:
-                summary = "No forecast available"
-            days.append({
-                "day": day_num, "date": date_str,
-                "weather_class": weather_class, "weather_summary": summary,
-            })
+            wc = self._classify_day_weather(weather)
+            ws = f"{weather.get('description', 'N/A')}, {weather.get('temp_min', '?')}–{weather.get('temp_max', '?')}°F, {(weather.get('precipitation_probability', 0) or 0):.0f}% rain" if weather else "No forecast"
+            days.append({"day": day_num, "date": date_str, "weather_class": wc, "weather_summary": ws})
             current += timedelta(days=1)
             day_num += 1
         return days
 
-    def _classify_venue_type(self, place_dict: Dict) -> str:
+    def _classify_venue_type(self, place_dict):
         primary = (place_dict.get("primary_type") or "").lower()
         types_list = [t.lower() for t in (place_dict.get("types") or [])]
         all_types = {primary} | set(types_list)
-        if all_types & self.INDOOR_TYPES:
-            return "indoor"
-        if all_types & self.OUTDOOR_TYPES:
-            return "outdoor"
+        if all_types & self.INDOOR_TYPES: return "indoor"
+        if all_types & self.OUTDOOR_TYPES: return "outdoor"
         return "either"
 
     def _segregate_and_enrich(self, cuisine_restaurants, interest_activities, preferences):
         EXCLUDED = {"hotel", "lodging", "motel", "hostel", "resort", "resort_hotel"}
         RESTAURANT_KW = {"restaurant", "cafe", "bar", "bakery", "food"}
-
         restaurants = []
         for r in cuisine_restaurants:
-            if (r.get("primary_type") or "").lower() in EXCLUDED:
-                continue
+            if (r.get("primary_type") or "").lower() in EXCLUDED: continue
             place = self._google_dict_to_place(r)
             if place:
                 d = place.model_dump(mode="json")
                 d["cuisine_tag"] = r.get("cuisine_tag", "")
                 d["venue_type"] = "indoor"
                 restaurants.append(d)
-
         activities = []
         for a in interest_activities:
             primary = (a.get("primary_type") or "").lower()
-            if primary in EXCLUDED or primary in RESTAURANT_KW:
-                continue
+            if primary in EXCLUDED or primary in RESTAURANT_KW: continue
             place = self._google_dict_to_place(a)
             if place:
                 d = place.model_dump(mode="json")
                 d["interest_tag"] = a.get("interest_tag", "")
                 d["venue_type"] = self._classify_venue_type(a)
                 activities.append(d)
-
         return restaurants, activities
 
-    def _google_dict_to_place(self, google_data: Dict) -> Optional[Place]:
-        """Create Place from Google Places dict (v6: enriched data)."""
+    def _google_dict_to_place(self, google_data):
         try:
             opening_hours = None
             if google_data.get("currentOpeningHours"):
-                opening_hours = {
-                    "open_now": google_data["currentOpeningHours"].get("openNow"),
-                    "weekday_text": google_data["currentOpeningHours"].get(
-                        "weekdayDescriptions", []
-                    ),
-                }
-
+                opening_hours = {"open_now": google_data["currentOpeningHours"].get("openNow"), "weekday_text": google_data["currentOpeningHours"].get("weekdayDescriptions", [])}
             reviews = None
             raw_reviews = google_data.get("reviews")
             if raw_reviews:
                 from models.trip import HotelReview
                 reviews = []
                 for r in raw_reviews[:5]:
-                    try:
-                        reviews.append(HotelReview(**r))
-                    except Exception:
-                        continue
-
-            return Place(
-                id=google_data.get("place_id", str(time.time())),
-                name=google_data.get("name", "Unknown Place"),
-                address=google_data.get("address", ""),
-                latitude=google_data.get("latitude"),
-                longitude=google_data.get("longitude"),
-                rating=google_data.get("google_rating"),
-                user_ratings_total=google_data.get("user_ratings_total"),
-                category=google_data.get("primary_type", "other"),
-                description=(
-                    f"Rated {google_data.get('google_rating', 0)}/5 "
-                    f"by {google_data.get('user_ratings_total', 0)} reviewers"
-                ),
-                photos=google_data.get("photos", [])[:5],
-                opening_hours=opening_hours,
-                price_level=google_data.get("price_level"),
-                website=google_data.get("website"),
-                reviews=reviews,
-                phone_number=google_data.get("phone_number"),
-                google_url=google_data.get("google_url"),
-            )
+                    try: reviews.append(HotelReview(**r))
+                    except: continue
+            return Place(id=google_data.get("place_id", str(time.time())), name=google_data.get("name", "Unknown Place"),
+                address=google_data.get("address", ""), latitude=google_data.get("latitude"), longitude=google_data.get("longitude"),
+                rating=google_data.get("google_rating"), user_ratings_total=google_data.get("user_ratings_total"),
+                category=google_data.get("primary_type", "other"), description=f"Rated {google_data.get('google_rating', 0)}/5 by {google_data.get('user_ratings_total', 0)} reviewers",
+                photos=google_data.get("photos", [])[:5], opening_hours=opening_hours, price_level=google_data.get("price_level"),
+                website=google_data.get("website"), reviews=reviews, phone_number=google_data.get("phone_number"), google_url=google_data.get("google_url"))
         except Exception as e:
             log_agent_raw(f"Failed to create place: {e}", agent_name="PlacesAgent")
             return None
@@ -829,380 +567,882 @@ Be enthusiastic, knowledgeable, and specific!
     # STORAGE
     # ─────────────────────────────────────────────────────────────────────
 
-    def _store_weather(self, weather_dicts: List[Dict], preferences):
-        """Store weather data and recommendation (preserves frontend weather card)."""
-        if not weather_dicts:
-            return
-
-        self.trip_storage.add_weather(
-            trip_id=self.trip_id,
-            weather=weather_dicts,
-            metadata={
-                "destination": preferences.destination,
-                "start_date": preferences.departure_date,
-                "end_date": preferences.return_date,
-                "search_time": datetime.now().isoformat(),
-                "total_days": len(weather_dicts),
-            },
-        )
-
-        # Store weather recommendation (consumed by frontend weather card)
+    def _store_weather(self, weather_dicts, preferences):
+        if not weather_dicts: return
+        self.trip_storage.add_weather(trip_id=self.trip_id, weather=weather_dicts,
+            metadata={"destination": preferences.destination, "start_date": preferences.departure_date, "end_date": preferences.return_date, "search_time": datetime.now().isoformat(), "total_days": len(weather_dicts)})
         try:
-            temps = [d.get("temperature", 0) for d in weather_dicts]
             min_t = min(d.get("temp_min", 0) for d in weather_dicts)
             max_t = max(d.get("temp_max", 0) for d in weather_dicts)
-            rainy = sum(
-                1 for d in weather_dicts
-                if (d.get("precipitation_probability", 0) or 0) > 50
-            )
-            self.trip_storage.store_recommendation(
-                trip_id=self.trip_id,
-                category="weather",
-                recommended_id="weather_forecast",
-                reason=(
-                    f"Weather in {preferences.destination}: "
-                    f"{min_t:.0f}°F–{max_t:.0f}°F over {len(weather_dicts)} days. "
-                    f"{rainy} day{'s' if rainy != 1 else ''} with rain expected."
-                ),
-                metadata={
-                    "destination": preferences.destination,
-                    "num_days": len(weather_dicts),
-                    "temp_min": round(min_t, 1),
-                    "temp_max": round(max_t, 1),
-                    "avg_temp": round(sum(temps) / len(temps), 1) if temps else 0,
-                    "rainy_days": rainy,
-                },
-            )
+            temps = [d.get("temperature", 0) for d in weather_dicts]
+            rainy = sum(1 for d in weather_dicts if (d.get("precipitation_probability", 0) or 0) > 50)
+            self.trip_storage.store_recommendation(trip_id=self.trip_id, category="weather", recommended_id="weather_forecast",
+                reason=f"Weather in {preferences.destination}: {min_t:.0f}°F–{max_t:.0f}°F over {len(weather_dicts)} days. {rainy} day{'s' if rainy != 1 else ''} with rain expected.",
+                metadata={"destination": preferences.destination, "num_days": len(weather_dicts), "temp_min": round(min_t, 1), "temp_max": round(max_t, 1), "avg_temp": round(sum(temps)/len(temps), 1) if temps else 0, "rainy_days": rainy})
         except Exception as e:
-            log_agent_raw(
-                f"⚠️ Weather recommendation storage failed: {e}",
-                agent_name="PlacesAgent",
-            )
-
-        log_agent_raw(
-            f"💾 Stored {len(weather_dicts)} weather forecasts",
-            agent_name="PlacesAgent",
-        )
+            log_agent_raw(f"⚠️ Weather recommendation storage failed: {e}", agent_name="PlacesAgent")
+        log_agent_raw(f"💾 Stored {len(weather_dicts)} weather forecasts", agent_name="PlacesAgent")
 
     def _store_results(self, restaurants, activities, preferences, api_duration):
-        meta = {
-            "destination": preferences.destination,
-            "search_time": datetime.now().isoformat(),
-            "api_duration": api_duration,
-        }
-        if restaurants:
-            self.trip_storage.add_restaurants(
-                trip_id=self.trip_id, restaurants=restaurants,
-                metadata={**meta, "total_results": len(restaurants)},
-            )
-        if activities:
-            self.trip_storage.add_activities(
-                trip_id=self.trip_id, activities=activities,
-                metadata={**meta, "total_results": len(activities)},
-            )
-        self.trip_storage.log_api_call(
-            trip_id=self.trip_id, agent_name="PlacesAgent",
-            api_name="GooglePlaces", duration=api_duration,
-        )
+        meta = {"destination": preferences.destination, "search_time": datetime.now().isoformat(), "api_duration": api_duration}
+        if restaurants: self.trip_storage.add_restaurants(trip_id=self.trip_id, restaurants=restaurants, metadata={**meta, "total_results": len(restaurants)})
+        if activities: self.trip_storage.add_activities(trip_id=self.trip_id, activities=activities, metadata={**meta, "total_results": len(activities)})
+        self.trip_storage.log_api_call(trip_id=self.trip_id, agent_name="PlacesAgent", api_name="GooglePlaces", duration=api_duration)
 
-    def _weather_to_dict(self, weather: Weather) -> Dict:
-        return weather.model_dump(mode="json")
+    def _weather_to_dict(self, weather): return weather.model_dump(mode="json")
 
-    # ─────────────────────────────────────────────────────────────────────
-    # PHASE 2: COMPREHENSIVE TRAVEL PLAN (single LLM call)
-    # ─────────────────────────────────────────────────────────────────────
+    # ═══════════════════════════════════════════════════════════════════════
+    # PHASE 2: THREE-PHASE LLM PIPELINE (v9.3)
+    # ═══════════════════════════════════════════════════════════════════════
 
-    def _generate_travel_plan(
-        self,
-        weather_forecasts: List[Weather],
-        restaurants: List[Dict],
-        activities: List[Dict],
-        trip_days: List[Dict],
-        preferences,
-        num_days: int,
-    ) -> str:
-        """
-        Single LLM call that produces the complete travel plan:
-          - Day-by-day itinerary (weather-aware)
-          - Packing tips and weather cautions
-          - Cuisine preference rationale
-          - Activity selection rationale
-          - Seasonal festivals / local events
-        """
+    def _generate_travel_plan(self, weather_forecasts, restaurants, activities, trip_days, preferences, num_days):
         if not restaurants and not activities:
             return "No places found matching your interests."
 
-        # ── Build context blocks for the prompt ──────────────────────────
+        restaurant_lookup = self._build_venue_lookup(restaurants)
+        activity_lookup = self._build_venue_lookup(activities)
+        weather_by_date = {}
+        for f in weather_forecasts:
+            date_key = f.date if hasattr(f, 'date') else f.get('date', '')
+            if date_key: weather_by_date[date_key] = f
 
-        # Weather block
-        if weather_forecasts:
-            min_t = min(f.temp_min for f in weather_forecasts)
-            max_t = max(f.temp_max for f in weather_forecasts)
-            rainy = sum(
-                1 for f in weather_forecasts
-                if (f.precipitation_probability or 0) > 50
-            )
-            weather_summary = (
-                f"Temperature range: {min_t:.0f}°F–{max_t:.0f}°F\n"
-                f"Rainy days (>50% chance): {rainy}/{len(weather_forecasts)}"
-            )
-        else:
-            weather_summary = "No forecast available — plan for variable conditions."
+        self._current_destination = preferences.destination
 
-        day_lines = [
-            f"  Day {d['day']} ({d['date']}): {d['weather_summary']} "
-            f"→ recommend {d['weather_class']} activities"
-            for d in trip_days
-        ]
-        weather_block = "\n".join(day_lines) if day_lines else "  (no weather data)"
-
-        # Restaurant block
-        rest_lines = [
-            f"  - {r.get('name', '?')} ({r.get('cuisine_tag', '?')}) "
-            f"— {(r.get('rating') or 0):.1f} stars"
-            for r in restaurants[:num_days * 3]
-        ]
-        restaurant_block = "\n".join(rest_lines) if rest_lines else "  (none found)"
-
-        # Activity block
-        act_lines = [
-            f"  - {a.get('name', '?')} [{a.get('venue_type', 'either')}] "
-            f"({a.get('interest_tag', '?')}) — {(a.get('rating') or 0):.1f} stars"
-            for a in activities[:num_days * 3]
-        ]
-        activity_block = "\n".join(act_lines) if act_lines else "  (none found)"
-
-        # Preferences
-        pref_cuisines = preferences.restaurant_prefs.preferred_cuisines
-        int_cuisines = preferences.restaurant_prefs.interested_cuisines
-        pref_interests = preferences.activity_prefs.preferred_interests
-        int_interests = preferences.activity_prefs.interested_interests
-        meals = preferences.restaurant_prefs.meals
-
-        # Seasonal context
+        # ── Try three-phase pipeline ──────────────────────────────────
         try:
-            trip_month = datetime.strptime(
-                preferences.departure_date, "%Y-%m-%d"
-            ).strftime("%B %Y")
-        except (ValueError, AttributeError):
-            trip_month = "the travel period"
+            result = self._three_phase_pipeline(
+                weather_forecasts, restaurants, activities,
+                trip_days, preferences, num_days,
+                restaurant_lookup, activity_lookup, weather_by_date,
+            )
+            if result: return result
+            log_agent_raw("⚠️ Three-phase pipeline returned no results — falling back", agent_name="PlacesAgent")
+        except Exception as e:
+            log_agent_raw(f"⚠️ Three-phase pipeline failed: {e} — falling back", agent_name="PlacesAgent")
+            import traceback
+            log_agent_raw(traceback.format_exc(), agent_name="PlacesAgent")
 
-        # Festival entries (tagged with "Festival/Event" interest_tag)
-        festival_entries = [
-            a for a in activities
-            if "festival" in (a.get("interest_tag") or "").lower()
-            or "event" in (a.get("interest_tag") or "").lower()
+        # ── Fallback: single streaming call (v9.2 behavior) ──────────
+        return self._fallback_single_stream(
+            weather_forecasts, restaurants, activities, trip_days,
+            preferences, num_days, restaurant_lookup, activity_lookup, weather_by_date,
+        )
+
+    def _three_phase_pipeline(self, weather_forecasts, restaurants, activities,
+                              trip_days, preferences, num_days,
+                              restaurant_lookup, activity_lookup, weather_by_date):
+        """
+        v9.3 Three-phase pipeline:
+          Phase 2a: Planner — assign venues to all day/slots (~4s)
+          Phase 2b: Two parallel Writers — write narratives (streaming)
+        """
+        pipeline_start = time.time()
+
+        # ══════════════════════════════════════════════════════════════
+        # PHASE 2a: PLANNER — assign venues to slots
+        # ══════════════════════════════════════════════════════════════
+        self._update_planner_status("AI assigning venues to days...")
+        log_agent_raw("📋 Phase 2a: Planner — assigning venues to day/slots", agent_name="PlacesAgent")
+        planner_start = time.time()
+
+        assignments = self._run_planner(
+            weather_forecasts, restaurants, activities, trip_days, preferences, num_days
+        )
+        planner_duration = time.time() - planner_start
+
+        if not assignments or not assignments.get("assignments"):
+            log_agent_raw(f"⚠️ Planner failed after {planner_duration:.1f}s", agent_name="PlacesAgent")
+            return None
+
+        assigned_days = assignments["assignments"]
+        log_agent_raw(
+            f"✅ Planner complete in {planner_duration:.1f}s — {len(assigned_days)} days assigned",
+            agent_name="PlacesAgent",
+        )
+
+        # Log the assignments for debugging
+        for ad in assigned_days:
+            venues = [ad.get(t, {}).get("venue_name", "?") for t in ["morning", "lunch", "afternoon", "dinner"]]
+            log_agent_raw(f"   Day {ad.get('day')}: {', '.join(venues)}", agent_name="PlacesAgent")
+
+        # ══════════════════════════════════════════════════════════════
+        # PHASE 2b: TWO PARALLEL WRITERS — write narratives
+        # ══════════════════════════════════════════════════════════════
+        # Split: Writer A = first half, Writer B = second half
+        split_point = (num_days + 1) // 2  # 3 for 5 days, 2 for 3 days
+        days_a = [d for d in assigned_days if d.get("day", 0) <= split_point]
+        days_b = [d for d in assigned_days if d.get("day", 0) > split_point]
+
+        # Trip days metadata for weather context
+        trip_days_a = [td for td in trip_days if td.get("day", 0) <= split_point]
+        trip_days_b = [td for td in trip_days if td.get("day", 0) > split_point]
+
+        # Nugget assignments
+        nuggets_a = [
+            {"id": "packing_tips", "color": "sky", "desc": "specific packing advice based on weather data"},
+            {"id": "cuisine_rationale", "color": "orange", "desc": "why these restaurants were chosen"},
+            {"id": "seasonal_tip", "color": "emerald", "desc": "practical travel advice for this time of year"},
         ]
-        festival_block = ""
-        if festival_entries:
-            fest_lines = [
-                f"  - {f.get('name', '?')} — {(f.get('rating') or 0):.1f} stars"
-                for f in festival_entries
-            ]
-            festival_block = (
-                f"\nSEASONAL FESTIVALS / LOCAL EVENTS ({trip_month}):\n"
-                + "\n".join(fest_lines)
+        nuggets_b = [
+            {"id": "local_events", "color": "purple", "desc": "seasonal events or festivals"},
+            {"id": "activity_rationale", "color": "green", "desc": "why these activities, weather-aware scheduling"},
+        ]
+
+        self._update_planner_status(f"AI writing {num_days}-day travel journal...")
+        log_agent_raw(
+            f"✍️ Phase 2b: Two parallel Writers — A({len(days_a)} days), B({len(days_b)} days)",
+            agent_name="PlacesAgent",
+        )
+        writer_start = time.time()
+
+        # ── Run both writers in parallel threads ──────────────────────
+        partial_plan = {"daily_schedule": [], "nuggets": []}
+
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="writer") as executor:
+            future_a = executor.submit(
+                self._run_writer,
+                writer_label="A",
+                assigned_days=days_a,
+                trip_days_meta=trip_days_a,
+                nugget_assignments=nuggets_a,
+                preferences=preferences,
+                num_days=num_days,
+                restaurant_lookup=restaurant_lookup,
+                activity_lookup=activity_lookup,
+                weather_by_date=weather_by_date,
+                partial_plan=partial_plan,
+            )
+            future_b = executor.submit(
+                self._run_writer,
+                writer_label="B",
+                assigned_days=days_b,
+                trip_days_meta=trip_days_b,
+                nugget_assignments=nuggets_b,
+                preferences=preferences,
+                num_days=num_days,
+                restaurant_lookup=restaurant_lookup,
+                activity_lookup=activity_lookup,
+                weather_by_date=weather_by_date,
+                partial_plan=partial_plan,
             )
 
-        # ── The comprehensive prompt ─────────────────────────────────────
+            result_a = future_a.result()
+            result_b = future_b.result()
 
-        prompt = f"""You are creating a COMPREHENSIVE travel plan for {preferences.destination}
-for {num_days} days ({preferences.departure_date} to {preferences.return_date}).
+        writer_duration = time.time() - writer_start
+        total_duration = time.time() - pipeline_start
 
-═══════════════════════════════════════════════════════════════════
-WEATHER OVERVIEW
-═══════════════════════════════════════════════════════════════════
-{weather_summary}
+        # ── Merge results ─────────────────────────────────────────────
+        # Sort daily_schedule by day number (writers may complete out of order)
+        partial_plan["daily_schedule"].sort(key=lambda d: d.get("day", 0))
 
-DAILY FORECAST:
-{weather_block}
+        days_count = len(partial_plan["daily_schedule"])
+        nuggets_count = len(partial_plan["nuggets"])
 
-═══════════════════════════════════════════════════════════════════
-RESTAURANTS FOUND ({len(restaurants)} options, with cuisine tags)
-═══════════════════════════════════════════════════════════════════
-{restaurant_block}
+        log_agent_raw(
+            f"✅ Writers complete in {writer_duration:.1f}s — "
+            f"A: {result_a.get('days', 0)} days/{result_a.get('nuggets', 0)} nuggets in {result_a.get('duration', 0):.1f}s, "
+            f"B: {result_b.get('days', 0)} days/{result_b.get('nuggets', 0)} nuggets in {result_b.get('duration', 0):.1f}s",
+            agent_name="PlacesAgent",
+        )
+        log_agent_raw(
+            f"✅ Three-phase pipeline complete in {total_duration:.1f}s "
+            f"(planner: {planner_duration:.1f}s, writers: {writer_duration:.1f}s) — "
+            f"{days_count} days, {nuggets_count} nuggets",
+            agent_name="PlacesAgent",
+        )
 
-═══════════════════════════════════════════════════════════════════
-ACTIVITIES FOUND ({len(activities)} options, [indoor/outdoor/either])
-═══════════════════════════════════════════════════════════════════
-{activity_block}
-{festival_block}
+        if days_count == 0:
+            return None
 
-═══════════════════════════════════════════════════════════════════
-TRAVELER PREFERENCES
-═══════════════════════════════════════════════════════════════════
-Preferred cuisines: {', '.join(pref_cuisines) if pref_cuisines else 'None specified'}
-Interested cuisines: {', '.join(int_cuisines) if int_cuisines else 'None specified'}
-Preferred activities: {', '.join(pref_interests) if pref_interests else 'None specified'}
-Interested activities: {', '.join(int_interests) if int_interests else 'None specified'}
-Meals to plan: {', '.join(meals)}
-Pace: {preferences.activity_prefs.pace}
-Entertainment hours/day: {preferences.activity_prefs.entertainment_hours_per_day}
+        # ── Nuggets fallback if writers didn't produce them (v9.3.1) ──
+        if nuggets_count == 0 and days_count > 0:
+            log_agent_raw("⚠️ No nuggets from writers — generating separately", agent_name="PlacesAgent")
+            self._update_planner_status("Generating travel tips...")
+            try:
+                nuggets = self._generate_nuggets_fallback(partial_plan, preferences)
+                if nuggets:
+                    partial_plan["nuggets"] = nuggets
+                    nuggets_count = len(nuggets)
+                    log_agent_raw(f"💡 Fallback generated {nuggets_count} nuggets", agent_name="PlacesAgent")
+            except Exception as e:
+                log_agent_raw(f"⚠️ Nugget fallback failed: {e}", agent_name="PlacesAgent")
 
-═══════════════════════════════════════════════════════════════════
-YOUR RESPONSE MUST INCLUDE ALL OF THE FOLLOWING SECTIONS:
-═══════════════════════════════════════════════════════════════════
+        # ── Store final plan ──────────────────────────────────────────
+        try:
+            self.trip_storage.store_recommendation(
+                trip_id=self.trip_id, category="daily_plan", recommended_id="daily_plan",
+                reason=json.dumps(partial_plan),
+                metadata={"destination": preferences.destination, "num_days": num_days, "format": "structured_v1",
+                    "structured_data": partial_plan, "streaming": False, "days_complete": days_count, "days_total": num_days})
+        except Exception as e:
+            log_agent_raw(f"⚠️ Final plan storage failed: {e}", agent_name="PlacesAgent")
 
-### 🌤️ Weather Advisory & Packing Tips
-- Summarize the overall weather pattern for the trip
-- Flag any concerning weather days (heavy rain, extreme temps, fog)
-- Provide a SPECIFIC packing list: clothing layers, rain gear, footwear,
-  sun protection, and any destination-specific items
-- Example: "Pack a compact umbrella and waterproof jacket for Days 2 and 4"
+        summary_text = self._structured_plan_to_text(partial_plan, preferences)
+        try:
+            self._store_place_recommendations(
+                summary_text,
+                [v for v in restaurant_lookup.values() if isinstance(v, dict) and "name" in v],
+                [v for v in activity_lookup.values() if isinstance(v, dict) and "name" in v],
+            )
+        except Exception:
+            pass
 
-### 🍽️ Why These Restaurants
-- Briefly explain how restaurants were selected based on the traveler's
-  preferred and interested cuisines
-- Highlight any standout picks and why they match the traveler's taste
+        self._update_planner_status("Travel plan complete")
+        return summary_text
 
-### 🎭 Why These Activities
-- Explain how activities were matched to the traveler's interests
-- Note which activities were scheduled on specific days due to weather
-  (e.g., "British Museum on Day 2 since rain is expected")
+    # ─────────────────────────────────────────────────────────────────────
+    # PHASE 2a: PLANNER — assign venues to slots
+    # ─────────────────────────────────────────────────────────────────────
 
-### 📅 Day-by-Day Itinerary
-For EACH day, write one enthusiastic paragraph (4-6 sentences) covering:
-- Morning activity (matched to weather and interests)
-- Lunch restaurant (with cuisine tag and rating)
-- Afternoon activity
-- Dinner restaurant (with cuisine tag and rating)
+    def _run_planner(self, weather_forecasts, restaurants, activities, trip_days, preferences, num_days):
+        """
+        Fast LLM call that assigns venues to day/time slots.
+        Output: flat venue names only — Python enriches with type/category.
+        ~200 output tokens, ~3-5 seconds.
+        """
+        # Build compact venue lists
+        rest_lines = [f"  {r.get('name', '?')} [{r.get('cuisine_tag', '?')}]" for r in restaurants]
+        act_lines = [f"  {a.get('name', '?')} [{a.get('interest_tag', '?')}, {a.get('venue_type', 'either')}]" for a in activities]
+        day_lines = [f"  Day {d['day']} ({d['date']}): {d['weather_class']}" for d in trip_days]
 
-RULES for the itinerary:
-1. On "indoor" days → schedule indoor activities; on "outdoor" days → outdoor
-2. Assign a restaurant for EACH meal slot EACH day
-3. ROTATE cuisines: never repeat the same cuisine for consecutive meals
-4. Preferred cuisines appear MORE often than interested ones
-5. Preferred activities on the BEST weather days
-6. Use EXACT restaurant and activity names as listed above — do not rename them
-7. Mention ratings in parentheses, e.g., "(4.7 stars)"
+        prompt = textwrap.dedent(f"""\
+Assign venues for a {num_days}-day trip to {preferences.destination}.
 
-### 🎉 Local Events & Seasonal Tips
-- Mention any seasonal festivals or events found (if any)
-- If none were found, suggest what kinds of seasonal events are typical
-  for {preferences.destination} in {trip_month}
-- Include any local tips (public holidays, closures, tourist seasons)
+WEATHER: {chr(10).join(day_lines)}
 
-Keep the overall tone conversational, enthusiastic, and practical.
-Total response should be 400-800 words."""
+RESTAURANTS: {chr(10).join(rest_lines)}
+
+ACTIVITIES: {chr(10).join(act_lines)}
+
+RULES: 4 slots/day: morning=activity, lunch=restaurant, afternoon=activity, dinner=restaurant.
+EXACT names only. Rotate cuisines. Indoor activities on indoor days. No repeats.
+Preferred: {', '.join(preferences.restaurant_prefs.preferred_cuisines)} cuisines, {', '.join(preferences.activity_prefs.preferred_interests)} activities.
+
+Return JSON: {{"days":[{{"day":1,"date":"YYYY-MM-DD","morning":"venue","lunch":"venue","afternoon":"venue","dinner":"venue"}}]}}""")
 
         try:
             client = openai.OpenAI(api_key=settings.openai_api_key)
             response = client.chat.completions.create(
                 model=settings.llm_model,
                 messages=[
-                    {"role": "system", "content": self.system_message},
+                    {"role": "system", "content": "Output ONLY a JSON object. No text, no markdown."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.8,
-                max_tokens=1500,
+                temperature=0.3,
+                max_tokens=1200,
+                response_format={"type": "json_object"},
             )
-            plan_text = response.choices[0].message.content.strip()
-            self._update_planner_status("Travel plan generated")
+
+            # Log token usage
+            usage = response.usage
+            if usage:
+                log_agent_raw(
+                    f"📊 Planner tokens — prompt: {usage.prompt_tokens}, "
+                    f"completion: {usage.completion_tokens}, total: {usage.total_tokens}",
+                    agent_name="PlacesAgent",
+                )
+
+            finish_reason = response.choices[0].finish_reason
+            raw = response.choices[0].message.content.strip()
+            log_agent_raw(f"📋 Planner output: {len(raw)} chars, finish_reason={finish_reason}", agent_name="PlacesAgent")
+
+            if finish_reason == "length":
+                log_agent_raw("⚠️ Planner truncated — increase max_tokens", agent_name="PlacesAgent")
+
+            # Repair trailing commas
+            raw = re.sub(r',\s*([}\]])', r'\1', raw)
+            parsed = json.loads(raw)
+
+            # Accept either {"assignments": [...]} or {"days": [...]}
+            flat_days = parsed.get("days") or parsed.get("assignments") or []
+            if not flat_days:
+                log_agent_raw("⚠️ Planner returned no days", agent_name="PlacesAgent")
+                return None
+
+            # Build lookup maps for enrichment
+            rest_map = {}
+            for r in restaurants:
+                name = r.get("name", "")
+                if name:
+                    rest_map[name.lower()] = {"cuisine_tag": r.get("cuisine_tag", ""), "type": "restaurant"}
+
+            act_map = {}
+            for a in activities:
+                name = a.get("name", "")
+                if name:
+                    act_map[name.lower()] = {"interest_tag": a.get("interest_tag", ""), "type": "activity"}
+
+            # Enrich flat venue names → nested slot objects
+            enriched_days = []
+            for fd in flat_days:
+                day = {"day": fd.get("day"), "date": fd.get("date", "")}
+                for slot_time, expected_type in [("morning", "activity"), ("lunch", "restaurant"), ("afternoon", "activity"), ("dinner", "restaurant")]:
+                    venue_name = fd.get(slot_time, "")
+                    if isinstance(venue_name, dict):
+                        # Already nested (model ignored our flat format)
+                        day[slot_time] = venue_name
+                        continue
+
+                    # Look up type/category from venue lists
+                    vn_lower = venue_name.lower() if venue_name else ""
+                    if expected_type == "restaurant" and vn_lower in rest_map:
+                        day[slot_time] = {"venue_name": venue_name, "type": "restaurant", "category": rest_map[vn_lower]["cuisine_tag"]}
+                    elif expected_type == "activity" and vn_lower in act_map:
+                        day[slot_time] = {"venue_name": venue_name, "type": "activity", "category": act_map[vn_lower]["interest_tag"]}
+                    else:
+                        # Fuzzy match: try partial name match
+                        matched = False
+                        lookup = rest_map if expected_type == "restaurant" else act_map
+                        for key, info in lookup.items():
+                            if key in vn_lower or vn_lower in key:
+                                cat_key = "cuisine_tag" if expected_type == "restaurant" else "interest_tag"
+                                day[slot_time] = {"venue_name": venue_name, "type": expected_type, "category": info[cat_key]}
+                                matched = True
+                                break
+                        if not matched:
+                            day[slot_time] = {"venue_name": venue_name, "type": expected_type, "category": "General"}
+
+                enriched_days.append(day)
+
+            return {"assignments": enriched_days}
+
         except Exception as e:
-            log_agent_raw(f"⚠️ LLM plan generation failed: {e}", agent_name="PlacesAgent")
-            plan_text = (
-                f"I found {len(restaurants)} restaurants and {len(activities)} "
-                f"activities in {preferences.destination}! Check the options below."
-            )
-            self._update_planner_status("AI planning fallback — using summary")
-
-        # Store recommendations
-        try:
-            self._store_place_recommendations(plan_text, restaurants, activities)
-        except Exception:
-            pass
-
-        try:
-            self.trip_storage.store_recommendation(
-                trip_id=self.trip_id,
-                category="daily_plan",
-                recommended_id="daily_plan",
-                reason=plan_text,
-                metadata={
-                    "destination": preferences.destination,
-                    "num_days": num_days,
-                    "num_restaurants": len(restaurants),
-                    "num_activities": len(activities),
-                },
-            )
-        except Exception:
-            pass
-
-        return plan_text
+            log_agent_raw(f"⚠️ Planner LLM failed: {e}", agent_name="PlacesAgent")
+            return None
 
     # ─────────────────────────────────────────────────────────────────────
-    # RECOMMENDATION EXTRACTION (unchanged from v7)
+    # PHASE 2b: WRITER — write narratives for assigned days (streaming)
     # ─────────────────────────────────────────────────────────────────────
+
+    def _run_writer(self, writer_label, assigned_days, trip_days_meta,
+                    nugget_assignments, preferences, num_days,
+                    restaurant_lookup, activity_lookup, weather_by_date,
+                    partial_plan):
+        """
+        Streaming tool-call Writer. Writes vivid narratives for pre-assigned days.
+        Called in a thread — writes directly to shared partial_plan (thread-safe
+        via list.append) and stores each day to Redis immediately.
+        """
+        writer_start = time.time()
+        day_nums = [d.get("day") for d in assigned_days]
+        log_agent_raw(f"✍️ Writer {writer_label} starting — Days {day_nums}", agent_name="PlacesAgent")
+
+        # Build writer prompt with assignments + weather
+        day_blocks = []
+        for ad in assigned_days:
+            day_num = ad.get("day", "?")
+            date = ad.get("date", "")
+            # Find weather for this day
+            td = next((t for t in trip_days_meta if t.get("day") == day_num), {})
+            weather_info = td.get("weather_summary", "N/A")
+
+            slots_desc = []
+            for slot_time in ["morning", "lunch", "afternoon", "dinner"]:
+                slot = ad.get(slot_time, {})
+                name = slot.get("venue_name", "?")
+                stype = slot.get("type", "?")
+                cat = slot.get("category", "?")
+                # Add rating + description from lookup for richer narratives
+                if stype == "restaurant":
+                    match = self._find_venue_match(name, restaurant_lookup)
+                else:
+                    match = self._find_venue_match(name, activity_lookup)
+                rating = f" {match.get('rating', 0):.1f}★" if match else ""
+                # Extract venue details for the writer
+                details = ""
+                if match:
+                    desc = match.get("description", "")
+                    addr = match.get("address", "")
+                    reviews_total = match.get("user_ratings_total", 0)
+                    if addr:
+                        details += f" | {addr}"
+                    if reviews_total:
+                        details += f" | {reviews_total} reviews"
+                slots_desc.append(f"    {slot_time}: {name} ({stype}, {cat}){rating}{details}")
+
+            day_blocks.append(f"  Day {day_num} ({date}) — Weather: {weather_info}\n" + "\n".join(slots_desc))
+
+        # Nugget instructions
+        nugget_lines = [f"    - id=\"{n['id']}\", color=\"{n['color']}\" — {n['desc']}" for n in nugget_assignments]
+
+        try:
+            trip_month = datetime.strptime(preferences.departure_date, "%Y-%m-%d").strftime("%B %Y")
+        except (ValueError, AttributeError):
+            trip_month = "the travel period"
+
+        prompt = textwrap.dedent(f"""\
+Write engaging tour-guide descriptions for these pre-assigned days in {preferences.destination}.
+
+TRAVELER PROFILE:
+- Preferred cuisines: {', '.join(preferences.restaurant_prefs.preferred_cuisines) or 'None'}
+- Interested cuisines: {', '.join(preferences.restaurant_prefs.interested_cuisines) or 'None'}
+- Preferred activities: {', '.join(preferences.activity_prefs.preferred_interests) or 'None'}
+- Interested activities: {', '.join(preferences.activity_prefs.interested_interests) or 'None'}
+- Pace: {preferences.activity_prefs.pace}
+
+DAILY ASSIGNMENTS:
+{chr(10).join(day_blocks)}
+
+INSTRUCTIONS:
+1. Call emit_day for EACH day above (in order). Use the EXACT venue names given.
+2. After ALL days, call emit_nuggets with {len(nugget_assignments)} nuggets:
+{chr(10).join(nugget_lines)}
+
+STYLE RULES:
+- You are an enthusiastic, knowledgeable tour guide addressing the traveler directly
+- Use second person ("you'll discover", "don't miss the") — NEVER first person ("I visited")
+- Each day: creative evocative title + 1-2 sentence intro referencing the weather
+- Each slot narrative: EXACTLY 2 sentences that are SPECIFIC to this venue:
+  * Sentence 1: What makes THIS place unique — mention a specific feature, famous item,
+    signature dish, architectural detail, or what it's known for
+  * Sentence 2: Why it's perfect for this traveler or a practical tip
+- Be warm, enthusiastic, and paint a picture — make the traveler excited to visit
+- GOOD examples:
+  "The British Museum houses over 8 million works including the Rosetta Stone and Elgin Marbles — you could spend days here and still discover something new. As a museum enthusiast, head straight to the Egyptian galleries on the upper floor for the best experience."
+  "Rules, established in 1798, is London's oldest restaurant and serves legendary game pies and classic roasts in a setting dripping with Victorian charm. It's the perfect introduction to traditional British dining — try the venison if it's on the menu."
+  "Colonel Saab near Trafalgar Square elevates Indian cuisine with dishes inspired by the travels of an Indian colonel, featuring bold tandoori and biryanis. The grand dining room with its military-inspired decor makes it an unforgettable lunch spot."
+- BAD (too generic): "Relish authentic Indian cuisine served in a beautiful venue."
+- BAD (too generic): "Experience a vibrant arts festival featuring innovative performances."
+- Nugget content: 2 concise sentences each
+
+TOKEN BUDGET IS LIMITED — exactly 2 sentences per slot, no more.""")
+
+        # ── Streaming LLM call with tool calls ────────────────────────
+        try:
+            client = openai.OpenAI(api_key=settings.openai_api_key)
+            response = client.chat.completions.create(
+                model=settings.llm_model,
+                messages=[
+                    {"role": "system", "content": (
+                        "You are an enthusiastic expert tour guide writing venue descriptions for a travel itinerary. "
+                        "Every narrative MUST mention something SPECIFIC to that venue — a signature dish, famous exhibit, "
+                        "architectural feature, or what it's renowned for. NEVER write generic descriptions that could apply "
+                        "to any similar venue. Use second person (you/your). NEVER first person. "
+                        "Exactly 2 sentences per slot. Use the provided tools."
+                    )},
+                    {"role": "user", "content": prompt},
+                ],
+                tools=[EMIT_DAY_TOOL, EMIT_NUGGETS_TOOL],
+                tool_choice="required",
+                parallel_tool_calls=True,
+                temperature=0.7,
+                max_tokens=2500,
+                stream=True,
+            )
+        except Exception as e:
+            log_agent_raw(f"⚠️ Writer {writer_label} LLM call failed: {e}", agent_name="PlacesAgent")
+            return {"days": 0, "nuggets": 0, "duration": time.time() - writer_start}
+
+        # ── Accumulate and dispatch tool calls ────────────────────────
+        tool_buffers = {}
+        current_index = -1
+        days_emitted = 0
+        nuggets_emitted = 0
+
+        for chunk in response:
+            choice = chunk.choices[0] if chunk.choices else None
+            if not choice or not choice.delta: continue
+            delta = choice.delta
+
+            if delta.tool_calls:
+                for tc in delta.tool_calls:
+                    idx = tc.index
+
+                    # New tool call — flush previous
+                    if idx is not None and idx != current_index:
+                        if current_index >= 0 and current_index in tool_buffers:
+                            d, n = self._flush_writer_tool_call(
+                                tool_buffers[current_index], writer_label,
+                                partial_plan, num_days, preferences,
+                                restaurant_lookup, activity_lookup, weather_by_date,
+                            )
+                            days_emitted += d
+                            nuggets_emitted += n
+                        current_index = idx
+                        if idx not in tool_buffers:
+                            tool_buffers[idx] = {"name": "", "arguments": ""}
+
+                    target_idx = idx if idx is not None else current_index
+                    if target_idx >= 0 and target_idx in tool_buffers:
+                        if tc.function:
+                            if tc.function.name: tool_buffers[target_idx]["name"] += tc.function.name
+                            if tc.function.arguments: tool_buffers[target_idx]["arguments"] += tc.function.arguments
+
+        # Flush last tool call
+        if current_index >= 0 and current_index in tool_buffers:
+            d, n = self._flush_writer_tool_call(
+                tool_buffers[current_index], writer_label,
+                partial_plan, num_days, preferences,
+                restaurant_lookup, activity_lookup, weather_by_date,
+            )
+            days_emitted += d
+            nuggets_emitted += n
+
+        duration = time.time() - writer_start
+        log_agent_raw(
+            f"✅ Writer {writer_label} complete in {duration:.1f}s — "
+            f"{days_emitted} days, {nuggets_emitted} nuggets",
+            agent_name="PlacesAgent",
+        )
+        return {"days": days_emitted, "nuggets": nuggets_emitted, "duration": duration}
+
+    def _flush_writer_tool_call(self, tool_call, writer_label, partial_plan, num_days,
+                                preferences, restaurant_lookup, activity_lookup, weather_by_date):
+        """Flush a completed tool call from a writer. Returns (days_added, nuggets_added)."""
+        name = tool_call.get("name", "")
+        raw_args = tool_call.get("arguments", "")
+        if not name or not raw_args: return (0, 0)
+
+        try:
+            args = json.loads(raw_args)
+        except json.JSONDecodeError as e:
+            log_agent_raw(f"⚠️ Writer {writer_label} '{name}' JSON failed: {e}", agent_name="PlacesAgent")
+            return (0, 0)
+
+        if name == "emit_day":
+            self._enrich_single_day(args, restaurant_lookup, activity_lookup, weather_by_date)
+            partial_plan["daily_schedule"].append(args)
+            days_done = len(partial_plan["daily_schedule"])
+            day_num = args.get("day", "?")
+
+            # Per-day feed messages
+            activity_names = [s.get("venue_name", "") for s in args.get("slots", []) if s.get("type") == "activity"]
+            restaurant_names = [s.get("venue_name", "") for s in args.get("slots", []) if s.get("type") == "restaurant"]
+            if activity_names: self._update_activity_status(f"📅 Day {day_num}: {', '.join(activity_names[:2])}")
+            if restaurant_names: self._update_restaurant_status(f"📅 Day {day_num}: {', '.join(restaurant_names[:2])}")
+            weather_info = args.get("weather", {})
+            if weather_info:
+                self._update_weather_status(f"📅 Day {day_num}: {weather_info.get('icon', '')} {weather_info.get('temp_high', '')}°F {weather_info.get('description', '')}")
+
+            # Store partial plan for progressive rendering
+            try:
+                # Sort before storing so frontend sees days in order
+                sorted_schedule = sorted(partial_plan["daily_schedule"], key=lambda d: d.get("day", 0))
+                self.trip_storage.store_recommendation(
+                    trip_id=self.trip_id, category="daily_plan", recommended_id="daily_plan",
+                    reason=json.dumps({"daily_schedule": sorted_schedule, "nuggets": partial_plan["nuggets"]}),
+                    metadata={"destination": getattr(self, '_current_destination', ''), "num_days": num_days,
+                        "format": "structured_v1", "structured_data": {"daily_schedule": sorted_schedule, "nuggets": partial_plan["nuggets"]},
+                        "streaming": True, "days_complete": days_done, "days_total": num_days})
+            except Exception as e:
+                log_agent_raw(f"⚠️ Partial plan store failed: {e}", agent_name="PlacesAgent")
+
+            log_agent_raw(f"📅 Writer {writer_label}: Day {day_num}/{num_days} emitted", agent_name="PlacesAgent")
+            return (1, 0)
+
+        elif name == "emit_nuggets":
+            new_nuggets = args.get("nuggets", [])
+            partial_plan["nuggets"].extend(new_nuggets)
+
+            # Store updated plan
+            try:
+                sorted_schedule = sorted(partial_plan["daily_schedule"], key=lambda d: d.get("day", 0))
+                all_days_done = len(sorted_schedule) >= num_days
+                self.trip_storage.store_recommendation(
+                    trip_id=self.trip_id, category="daily_plan", recommended_id="daily_plan",
+                    reason=json.dumps({"daily_schedule": sorted_schedule, "nuggets": partial_plan["nuggets"]}),
+                    metadata={"num_days": num_days, "format": "structured_v1",
+                        "structured_data": {"daily_schedule": sorted_schedule, "nuggets": partial_plan["nuggets"]},
+                        "streaming": not all_days_done, "days_complete": len(sorted_schedule), "days_total": num_days})
+            except Exception as e:
+                log_agent_raw(f"⚠️ Nuggets store failed: {e}", agent_name="PlacesAgent")
+
+            log_agent_raw(f"💡 Writer {writer_label}: {len(new_nuggets)} nuggets emitted", agent_name="PlacesAgent")
+            return (0, len(new_nuggets))
+
+        return (0, 0)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # ENRICH A SINGLE DAY
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _enrich_single_day(self, day_data, restaurant_lookup, activity_lookup, weather_by_date):
+        date_str = day_data.get("date", "")
+        weather = weather_by_date.get(date_str)
+        if weather:
+            _desc = weather.description if hasattr(weather, 'description') else weather.get('description', '')
+            _precip = weather.precipitation_probability if hasattr(weather, 'precipitation_probability') else weather.get('precipitation_probability', 0)
+            _temp_max = weather.temp_max if hasattr(weather, 'temp_max') else weather.get('temp_max', 0)
+            _temp_min = weather.temp_min if hasattr(weather, 'temp_min') else weather.get('temp_min', 0)
+            day_data["weather"] = {"icon": get_weather_icon(_desc or "", _precip or 0), "temp_high": round(_temp_max, 0),
+                "temp_low": round(_temp_min, 0), "description": _desc or "", "precipitation_prob": _precip or 0}
+
+        for slot in day_data.get("slots", []):
+            venue_name, slot_type, category = slot.get("venue_name", ""), slot.get("type", ""), slot.get("category", "")
+            if slot_type == "restaurant":
+                match = self._find_venue_match(venue_name, restaurant_lookup)
+                if match:
+                    slot.update({"rating": match.get("rating"), "place_id": match.get("id"), "address": match.get("address", ""),
+                        "photos": match.get("photos", [])[:2], "google_url": match.get("google_url", ""), "cuisine_tag": match.get("cuisine_tag", category)})
+                slot["icon"] = get_cuisine_icon(slot.get("cuisine_tag", category))
+            elif slot_type == "activity":
+                match = self._find_venue_match(venue_name, activity_lookup)
+                if match:
+                    slot.update({"rating": match.get("rating"), "place_id": match.get("id"), "address": match.get("address", ""),
+                        "photos": match.get("photos", [])[:2], "google_url": match.get("google_url", ""),
+                        "interest_tag": match.get("interest_tag", category), "venue_type": match.get("venue_type", "either")})
+                slot["icon"] = get_activity_icon(slot.get("interest_tag", category))
+
+    # ─────────────────────────────────────────────────────────────────────
+    # NUGGETS FALLBACK (v9.3.1)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _generate_nuggets_fallback(self, plan, preferences):
+        """Quick LLM call (~200 tokens, ~2-3s) to generate nuggets when writers skipped them."""
+        day_summaries = []
+        for day in plan.get("daily_schedule", []):
+            venues = [s.get("venue_name", "") for s in day.get("slots", [])]
+            weather = day.get("weather", {})
+            w_desc = weather.get("description", "N/A") if weather else "N/A"
+            day_summaries.append(f"Day {day.get('day')}: {', '.join(venues)} ({w_desc})")
+        try:
+            trip_month = datetime.strptime(preferences.departure_date, "%Y-%m-%d").strftime("%B %Y")
+        except (ValueError, AttributeError):
+            trip_month = "the travel period"
+        prompt = textwrap.dedent(f"""\
+Based on this travel plan for {preferences.destination}:
+{chr(10).join(day_summaries)}
+
+Generate exactly 5 nuggets as a JSON object with a "nuggets" array.
+Each: {{"id": "...", "title": "...", "content": "1-2 sentences", "color": "..."}}
+Required: packing_tips(sky), local_events(purple), cuisine_rationale(orange), activity_rationale(green), seasonal_tip(emerald)
+Return ONLY JSON — no markdown.""")
+
+        client = openai.OpenAI(api_key=settings.openai_api_key)
+        response = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[{"role": "system", "content": "JSON only."}, {"role": "user", "content": prompt}],
+            temperature=0.7, max_tokens=500, response_format={"type": "json_object"})
+        parsed = json.loads(response.choices[0].message.content.strip())
+        if isinstance(parsed, list): return parsed
+        if isinstance(parsed, dict) and "nuggets" in parsed: return parsed["nuggets"]
+        return None
+
+    # ─────────────────────────────────────────────────────────────────────
+    # VENUE LOOKUP
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _build_venue_lookup(self, places):
+        lookup = {}
+        for place in places:
+            name = place.get("name", "")
+            if name:
+                lookup[name.lower()] = place
+                for w in name.lower().split():
+                    if len(w) >= 3 and w not in {"the", "and", "for", "with", "near"}:
+                        key = f"_partial_{w}"
+                        if key not in lookup: lookup[key] = place
+        return lookup
+
+    def _find_venue_match(self, venue_name, lookup):
+        if not venue_name: return None
+        nl = venue_name.lower()
+        if nl in lookup: return lookup[nl]
+        for key, place in lookup.items():
+            if key.startswith("_partial_"): continue
+            if key in nl or nl in key: return place
+        for w in nl.split():
+            if len(w) >= 3 and w not in {"the", "and", "for"}:
+                pk = f"_partial_{w}"
+                if pk in lookup: return lookup[pk]
+        return None
+
+    # ─────────────────────────────────────────────────────────────────────
+    # FALLBACK: Single streaming call (v9.2.1 behavior)
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _fallback_single_stream(self, weather_forecasts, restaurants, activities,
+                                trip_days, preferences, num_days,
+                                restaurant_lookup, activity_lookup, weather_by_date):
+        """Fallback: single streaming tool-call, then json_object if that fails too."""
+        log_agent_raw("🔄 Fallback: single streaming tool-call", agent_name="PlacesAgent")
+        self._update_planner_status("Generating travel plan (fallback)...")
+
+        prompt = self._build_fallback_prompt(weather_forecasts, restaurants, activities, trip_days, preferences, num_days)
+
+        # Try streaming tool calls first
+        try:
+            result = self._run_single_stream(prompt, num_days, preferences, restaurant_lookup, activity_lookup, weather_by_date)
+            if result: return result
+        except Exception as e:
+            log_agent_raw(f"⚠️ Single stream failed: {e}", agent_name="PlacesAgent")
+
+        # Last resort: json_object mode
+        return self._fallback_json_plan(prompt, num_days, preferences, restaurants, activities, restaurant_lookup, activity_lookup, weather_by_date)
+
+    def _run_single_stream(self, prompt, num_days, preferences, restaurant_lookup, activity_lookup, weather_by_date):
+        """Single streaming tool-call (v9.2.1 behavior)."""
+        client = openai.OpenAI(api_key=settings.openai_api_key)
+        response = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=[
+                {"role": "system", "content": (
+                    "You are an enthusiastic expert tour guide. Every narrative MUST mention something SPECIFIC to that venue — "
+                    "a signature dish, famous exhibit, or what it's known for. NEVER generic descriptions. "
+                    "Second person (you/your), NEVER first person. 2 sentences per narrative. Use the provided tools."
+                )},
+                {"role": "user", "content": prompt},
+            ],
+            tools=[EMIT_DAY_TOOL, EMIT_NUGGETS_TOOL], tool_choice="required", parallel_tool_calls=True,
+            temperature=0.8, max_tokens=3000, stream=True,
+        )
+
+        partial_plan = {"daily_schedule": [], "nuggets": []}
+        tool_buffers, current_index = {}, -1
+
+        for chunk in response:
+            choice = chunk.choices[0] if chunk.choices else None
+            if not choice or not choice.delta: continue
+            if choice.delta.tool_calls:
+                for tc in choice.delta.tool_calls:
+                    idx = tc.index
+                    if idx is not None and idx != current_index:
+                        if current_index >= 0 and current_index in tool_buffers:
+                            self._flush_writer_tool_call(tool_buffers[current_index], "FB", partial_plan, num_days, preferences, restaurant_lookup, activity_lookup, weather_by_date)
+                        current_index = idx
+                        if idx not in tool_buffers: tool_buffers[idx] = {"name": "", "arguments": ""}
+                    target_idx = idx if idx is not None else current_index
+                    if target_idx >= 0 and target_idx in tool_buffers:
+                        if tc.function:
+                            if tc.function.name: tool_buffers[target_idx]["name"] += tc.function.name
+                            if tc.function.arguments: tool_buffers[target_idx]["arguments"] += tc.function.arguments
+
+        if current_index >= 0 and current_index in tool_buffers:
+            self._flush_writer_tool_call(tool_buffers[current_index], "FB", partial_plan, num_days, preferences, restaurant_lookup, activity_lookup, weather_by_date)
+
+        if not partial_plan["daily_schedule"]: return None
+
+        # Store final
+        self.trip_storage.store_recommendation(trip_id=self.trip_id, category="daily_plan", recommended_id="daily_plan",
+            reason=json.dumps(partial_plan), metadata={"destination": preferences.destination, "num_days": num_days,
+                "format": "structured_v1", "structured_data": partial_plan, "streaming": False,
+                "days_complete": len(partial_plan["daily_schedule"]), "days_total": num_days})
+
+        summary = self._structured_plan_to_text(partial_plan, preferences)
+        try:
+            self._store_place_recommendations(summary,
+                [v for v in restaurant_lookup.values() if isinstance(v, dict) and "name" in v],
+                [v for v in activity_lookup.values() if isinstance(v, dict) and "name" in v])
+        except: pass
+        self._update_planner_status("Travel plan complete")
+        return summary
+
+    def _build_fallback_prompt(self, weather_forecasts, restaurants, activities, trip_days, preferences, num_days):
+        """Build the full prompt for single-call fallback."""
+        weather_summary = "No forecast available."
+        if weather_forecasts:
+            min_t, max_t = min(f.temp_min for f in weather_forecasts), max(f.temp_max for f in weather_forecasts)
+            rainy = sum(1 for f in weather_forecasts if (f.precipitation_probability or 0) > 50)
+            weather_summary = f"Temperature: {min_t:.0f}°F–{max_t:.0f}°F, {rainy} rainy days"
+
+        day_lines = [f"  Day {d['day']} ({d['date']}): {d['weather_summary']} → {d['weather_class']}" for d in trip_days]
+        rest_lines = [f"  - {r.get('name', '?')} ({r.get('cuisine_tag', '?')}) {(r.get('rating') or 0):.1f}★" for r in restaurants]
+        act_lines = [f"  - {a.get('name', '?')} [{a.get('venue_type', 'either')}] ({a.get('interest_tag', '?')}) {(a.get('rating') or 0):.1f}★" for a in activities]
+
+        try: trip_month = datetime.strptime(preferences.departure_date, "%Y-%m-%d").strftime("%B %Y")
+        except: trip_month = "the travel period"
+
+        self._current_destination = preferences.destination
+        return textwrap.dedent(f"""\
+Create a {num_days}-day travel plan for {preferences.destination} ({preferences.departure_date} to {preferences.return_date}).
+
+WEATHER: {weather_summary}
+{chr(10).join(day_lines)}
+
+RESTAURANTS ({len(restaurants)}):
+{chr(10).join(rest_lines)}
+
+ACTIVITIES ({len(activities)}):
+{chr(10).join(act_lines)}
+
+PREFERENCES:
+Preferred cuisines: {', '.join(preferences.restaurant_prefs.preferred_cuisines) or 'None'}
+Interested cuisines: {', '.join(preferences.restaurant_prefs.interested_cuisines) or 'None'}
+Preferred activities: {', '.join(preferences.activity_prefs.preferred_interests) or 'None'}
+Interested activities: {', '.join(preferences.activity_prefs.interested_interests) or 'None'}
+Pace: {preferences.activity_prefs.pace}
+
+Call emit_day once per day (in order), then emit_nuggets once with 5 nuggets.
+RULES: Use EXACT venue names. Rotate cuisines. 4 slots per day.
+Each narrative: exactly 2 sentences — mention something SPECIFIC to that venue (signature dish, famous exhibit, what it's known for), then why it suits this traveler.
+Nuggets: packing_tips(sky), local_events(purple), cuisine_rationale(orange), activity_rationale(green), seasonal_tip(emerald)""")
+
+    def _fallback_json_plan(self, prompt, num_days, preferences, restaurants, activities, restaurant_lookup, activity_lookup, weather_by_date):
+        """Last resort: json_object mode."""
+        log_agent_raw("🔄 Last resort: json_object mode", agent_name="PlacesAgent")
+        json_prompt = prompt + '\n\nRespond with JSON: {"daily_schedule": [...], "nuggets": [...]}'
+        try:
+            client = openai.OpenAI(api_key=settings.openai_api_key)
+            response = client.chat.completions.create(model=settings.llm_model,
+                messages=[{"role": "system", "content": "Respond with valid JSON only."}, {"role": "user", "content": json_prompt}],
+                temperature=0.8, max_tokens=3000, response_format={"type": "json_object"})
+            raw = response.choices[0].message.content.strip()
+            if raw.startswith("```"): raw = re.sub(r"^```(?:json)?\s*", "", raw); raw = re.sub(r"\s*```$", "", raw)
+            plan = json.loads(raw)
+        except Exception as e:
+            log_agent_raw(f"⚠️ JSON fallback failed: {e}", agent_name="PlacesAgent")
+            return f"I found {len(restaurants)} restaurants and {len(activities)} activities in {preferences.destination}."
+
+        for day in plan.get("daily_schedule", []):
+            self._enrich_single_day(day, restaurant_lookup, activity_lookup, weather_by_date)
+        try:
+            self.trip_storage.store_recommendation(trip_id=self.trip_id, category="daily_plan", recommended_id="daily_plan",
+                reason=json.dumps(plan), metadata={"destination": preferences.destination, "num_days": num_days,
+                    "format": "structured_v1", "structured_data": plan, "streaming": False,
+                    "days_complete": len(plan.get("daily_schedule", [])), "days_total": num_days})
+        except: pass
+        self._update_planner_status("Travel plan complete")
+        return self._structured_plan_to_text(plan, preferences)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TEXT CONVERSION & STORAGE HELPERS
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _structured_plan_to_text(self, plan, preferences):
+        lines = []
+        for nugget in plan.get("nuggets", []):
+            t, c = nugget.get("title", ""), nugget.get("content", "")
+            if t and c: lines.extend([f"### {t}", c, ""])
+        lines.extend(["### 📅 Day-by-Day Itinerary", ""])
+        for day in plan.get("daily_schedule", []):
+            lines.append(f"**Day {day.get('day', '?')} ({day.get('date', '')}): {day.get('title', '')}**")
+            if day.get("intro"): lines.append(day["intro"])
+            for slot in day.get("slots", []):
+                r = slot.get("rating")
+                rs = f" ({r} stars)" if r else ""
+                lines.append(f"{slot.get('time', '').capitalize()}: **{slot.get('venue_name', '')}**{rs} — {slot.get('narrative', '')}")
+            lines.append("")
+        return "\n".join(lines)
 
     def _extract_mentioned_ids(self, plan_text, places, label):
         mentioned, seen = [], set()
-        sorted_places = sorted(
-            places, key=lambda p: len(p.get("name", "")), reverse=True
-        )
-        for place in sorted_places:
+        for place in sorted(places, key=lambda p: len(p.get("name", "")), reverse=True):
             name, pid = place.get("name", ""), place.get("id", "")
             if name and pid and name in plan_text and pid not in seen:
-                seen.add(pid)
-                mentioned.append(pid)
+                seen.add(pid); mentioned.append(pid)
         return mentioned
 
     def _store_place_recommendations(self, plan_text, restaurants, activities):
-        rec_restaurant_ids = self._extract_mentioned_ids(
-            plan_text, restaurants, "restaurants"
-        )
-        if rec_restaurant_ids:
-            primary_id = rec_restaurant_ids[0]
-            primary = next(
-                (r for r in restaurants if r.get("id") == primary_id), None
-            )
-            self.trip_storage.store_recommendation(
-                trip_id=self.trip_id,
-                category="restaurant",
-                recommended_id=primary_id,
-                reason=(
-                    f"Top dining pick — {primary.get('cuisine_tag', '')} cuisine, "
-                    f"{primary.get('rating', 0):.1f} stars"
-                    if primary
-                    else f"Top dining pick from {len(restaurants)} options"
-                ),
-                metadata={
-                    "name": primary.get("name", "") if primary else "",
-                    "all_recommended_ids": rec_restaurant_ids,
-                    "total_options_reviewed": len(restaurants),
-                },
-            )
-
-        rec_activity_ids = self._extract_mentioned_ids(
-            plan_text, activities, "activities"
-        )
-        if rec_activity_ids:
-            primary_id = rec_activity_ids[0]
-            primary = next(
-                (a for a in activities if a.get("id") == primary_id), None
-            )
-            self.trip_storage.store_recommendation(
-                trip_id=self.trip_id,
-                category="activity",
-                recommended_id=primary_id,
-                reason=(
-                    f"Top activity — {primary.get('interest_tag', '')}, "
-                    f"{primary.get('rating', 0):.1f} stars"
-                    if primary
-                    else f"Top activity from {len(activities)} options"
-                ),
-                metadata={
-                    "name": primary.get("name", "") if primary else "",
-                    "all_recommended_ids": rec_activity_ids,
-                    "total_options_reviewed": len(activities),
-                },
-            )
+        rec_rest = self._extract_mentioned_ids(plan_text, restaurants, "restaurants")
+        if rec_rest:
+            pid = rec_rest[0]
+            p = next((r for r in restaurants if r.get("id") == pid), None)
+            self.trip_storage.store_recommendation(trip_id=self.trip_id, category="restaurant", recommended_id=pid,
+                reason=f"Top dining pick — {p.get('cuisine_tag', '')} cuisine, {p.get('rating', 0):.1f} stars" if p else "Top dining pick",
+                metadata={"name": p.get("name", "") if p else "", "all_recommended_ids": rec_rest, "total_options_reviewed": len(restaurants)})
+        rec_act = self._extract_mentioned_ids(plan_text, activities, "activities")
+        if rec_act:
+            pid = rec_act[0]
+            p = next((a for a in activities if a.get("id") == pid), None)
+            self.trip_storage.store_recommendation(trip_id=self.trip_id, category="activity", recommended_id=pid,
+                reason=f"Top activity — {p.get('interest_tag', '')}, {p.get('rating', 0):.1f} stars" if p else "Top activity",
+                metadata={"name": p.get("name", "") if p else "", "all_recommended_ids": rec_act, "total_options_reviewed": len(activities)})
 
 
 # ============================================================================
 # FACTORY
 # ============================================================================
 
-def create_places_agent(
-    trip_id: str, trip_storage: TripStorageInterface, **kwargs
-) -> PlacesAgent:
+def create_places_agent(trip_id, trip_storage, **kwargs):
     return PlacesAgent(trip_id=trip_id, trip_storage=trip_storage, **kwargs)

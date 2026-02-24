@@ -726,124 +726,42 @@ Instead, you delegate to specialized agents and coordinate their results.
         preferences: Any,
         recommendations: Dict[str, Any] = None,
     ) -> str:
-        """Generate comprehensive final recommendation using LLM."""
-
-        # Extract agent recommendations from conversation
-        agent_recs = []
-        for msg in conversation_history:
-            if msg["speaker"] not in ["APIUser", "TravelOrchestrator"]:
-                content = msg["message"].replace(self.TASK_COMPLETED, "").strip()
-                agent_recs.append(f"**{msg['speaker']}**: {content}")
-
+        """
+        Generate final recommendation summary.
+        
+        v7.1: No LLM call — agents already wrote their summaries.
+        The frontend renders structured data directly from Redis,
+        so this is just a text fallback that's rarely displayed.
+        """
         flights = all_options.get("flights", [])
         hotels = all_options.get("hotels", [])
-        events = all_options.get("events", [])
-        weather = all_options.get("weather", [])
         restaurants = all_options.get("restaurants", [])
         activities = all_options.get("activities", [])
+        weather = all_options.get("weather", [])
 
-        # Structured picks
-        structured_picks = ""
+        lines = [f"### Your {preferences.destination} Trip Summary\n"]
+
+        if flights:
+            lines.append(f"✅ **Flights**: {len(flights)} options reviewed")
+        if hotels:
+            lines.append(f"✅ **Hotels**: {len(hotels)} options reviewed")
+        if restaurants:
+            lines.append(f"✅ **Restaurants**: {len(restaurants)} options reviewed")
+        if activities:
+            lines.append(f"✅ **Activities**: {len(activities)} options reviewed")
+        if weather:
+            lines.append(f"✅ **Weather**: {len(weather)} day forecast")
+
         if recommendations:
-            structured_picks = "\nSTRUCTURED AGENT PICKS:\n"
+            lines.append("\n**Top Picks:**")
             for category, rec in recommendations.items():
-                structured_picks += (
-                    f"- {category.upper()}: ID={rec['recommended_id']}, "
-                    f"Reason: {rec.get('reason', 'N/A')}\n"
-                )
+                reason = rec.get("reason", "")
+                if reason:
+                    lines.append(f"- **{category.capitalize()}**: {reason[:150]}")
 
-        prompt = f"""
-            Create a comprehensive trip itinerary based ONLY on data that was actually collected.
+        lines.append("\nCheck the detailed options below for all available choices.")
 
-            TRIP DETAILS:
-            - Destination: {preferences.destination}
-            - Dates: {preferences.departure_date} to {preferences.return_date}
-            - Budget: ${preferences.budget.total_budget}
-            - Travelers: {preferences.num_travelers}
-
-            DATA COLLECTED:
-            - Flights: {len(flights)} options reviewed
-            - Hotels: {len(hotels)} options reviewed
-            - Restaurants: {len(restaurants)} options reviewed
-            - Activities: {len(activities)} options reviewed
-            - Weather: {len(weather)} forecasts
-            {structured_picks}
-
-            AGENT RECOMMENDATIONS:
-            {chr(10).join(agent_recs) if agent_recs else "No agent recommendations available"}
-
-            INSTRUCTIONS:
-            1. **Only include sections for data that exists**
-            - If flights were reviewed, include flight recommendation
-            - If hotels were reviewed, include hotel recommendation
-            - If NO data exists for a category, skip that section entirely
-
-            2. For each category WITH data:
-            - Provide specific recommendation with details
-            - Explain why it's the best choice
-            - Include pricing if available
-
-            3. Budget breakdown:
-            - Only include items that have actual data
-            - Note which items still need to be booked
-
-            4. Travel tips:
-            - General helpful advice for {preferences.destination}
-            - Best practices for the trip dates
-
-            5. Format professionally with headers and bullet points
-
-            CRITICAL: Do NOT invent data. If hotels weren't reviewed, don't recommend a hotel.
-            If no events were collected, don't suggest events. Only use actual data from agents.
-            """
-
-        try:
-            client = openai.OpenAI(api_key=settings.openai_api_key)
-
-            response = client.chat.completions.create(
-                model=settings.llm_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a professional travel planner who ONLY "
-                            "uses provided data and never invents information."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.3,
-                max_tokens=1500,
-            )
-
-            return response.choices[0].message.content.strip()
-
-        except Exception as e:
-            log_agent_raw(
-                f"⚠️ Final recommendation generation failed: {str(e)}",
-                agent_name="OrchestratorAgent",
-            )
-
-            fallback = f"""
-            ### Your {preferences.destination} Trip Summary
-
-            """
-            if flights:
-                fallback += f"✅ **Flights**: {len(flights)} options reviewed\n"
-            if hotels:
-                fallback += f"✅ **Hotels**: {len(hotels)} options reviewed\n"
-            if restaurants:
-                fallback += f"✅ **Restaurants**: {len(restaurants)} options reviewed\n"
-            if activities:
-                fallback += f"✅ **Activities**: {len(activities)} options reviewed\n"
-            if weather:
-                fallback += f"✅ **Weather**: {len(weather)} day forecast\n"
-
-            fallback += (
-                "\nCheck the detailed options below for all available choices."
-            )
-
-            return fallback
+        return "\n".join(lines)
 
     # ─────────────────────────────────────────────────────────────────────
     # HELPER METHODS

@@ -1,5 +1,11 @@
 // frontend/src/pages/Dashboard.tsx
 //
+// Changes (v6 — Structured Daily Schedule):
+//   - Replaced inline daily schedule rendering with DailySchedulePanel component
+//   - Removed dayBlocks parsing logic, renderBold helper, dayAccents array
+//   - DailySchedulePanel handles both structured_v1 (JSON) and text_v8 (legacy)
+//   - Added destination prop pass-through for dynamic journal title
+//
 // Changes (v5 — Three-Column Planning Layout):
 //   - Replaced 2-col NL Input + Preferences grid with 3-col layout
 //   - New right column: AgentFeedColumn (live streaming agent activity)
@@ -29,6 +35,7 @@ import { FlightCard } from '../components/flight/FlightCard';
 import { HotelCard } from '../components/hotel/HotelCard';
 import { RestaurantCard } from '../components/restaurant/RestaurantCard';
 import { ActivityCard } from '../components/activity/ActivityCard';
+import { DailySchedulePanel } from '../components/recommendation/DailySchedulePanel';
 import { useTripData } from '../hooks/useTripData';
 import { useItinerary } from '../hooks/useItinerary';
 import { useTripSearch } from '../hooks/useTripSearch';
@@ -255,7 +262,6 @@ export const Dashboard: React.FC = () => {
   const handleItineraryItemClick = (tab: 'flights' | 'hotels' | 'restaurants' | 'activities', itemId?: string) => {
     setActiveResultsTab(tab);
     setFocusedItemId(itemId || null);
-    // Clear focus after a short delay so re-clicking the same item works
     if (itemId) {
       setTimeout(() => setFocusedItemId(null), 1500);
     }
@@ -493,64 +499,6 @@ export const Dashboard: React.FC = () => {
         }));
 
         const dailyPlanRec = recommendations['daily_plan'];
-        const planText: string = dailyPlanRec?.reason || '';
-
-        const dayBlocks: { title: string; body: string }[] = [];
-        if (planText) {
-          const hashSections = planText.split(/(?=###\s)/);
-          const hasHashHeadings = hashSections.some((s: string) => s.trim().startsWith('###'));
-
-          if (hasHashHeadings) {
-            for (const section of hashSections) {
-              const trimmed = section.trim();
-              if (!trimmed) continue;
-              const newlineIdx = trimmed.indexOf('\n');
-              if (newlineIdx === -1) {
-                dayBlocks.push({ title: trimmed.replace(/^#+\s*/, ''), body: '' });
-              } else {
-                const heading = trimmed.slice(0, newlineIdx).replace(/^#+\s*/, '').trim();
-                const body = trimmed.slice(newlineIdx + 1).trim();
-                dayBlocks.push({ title: heading, body });
-              }
-            }
-          } else {
-            const boldDaySections = planText.split(/(?=\*\*Day\s+\d)/);
-            for (const section of boldDaySections) {
-              const trimmed = section.trim();
-              if (!trimmed) continue;
-              const titleMatch = trimmed.match(/^\*\*(.+?)\*\*:?\s*/);
-              if (titleMatch) {
-                const title = titleMatch[1].trim();
-                const body = trimmed.slice(titleMatch[0].length).trim();
-                dayBlocks.push({ title, body });
-              } else {
-                const colonIdx = trimmed.indexOf(':');
-                if (colonIdx > 0 && colonIdx < 80) {
-                  dayBlocks.push({
-                    title: trimmed.slice(0, colonIdx).replace(/\*\*/g, ''),
-                    body: trimmed.slice(colonIdx + 1).trim(),
-                  });
-                } else {
-                  dayBlocks.push({ title: 'Schedule', body: trimmed });
-                }
-              }
-            }
-          }
-        }
-
-        const dayAccents = [
-          'border-l-purple-400', 'border-l-pink-400', 'border-l-indigo-400',
-          'border-l-teal-400', 'border-l-orange-400', 'border-l-rose-400',
-        ];
-
-        const renderBold = (text: string) => {
-          const parts = text.split(/\*\*(.*?)\*\*/g);
-          return parts.map((part, i) =>
-            i % 2 === 1
-              ? <strong key={i} className="font-semibold text-gray-800">{part}</strong>
-              : <span key={i}>{part}</span>
-          );
-        };
 
         return (
           <div className="px-6 lg:px-[10%] pb-8">
@@ -631,35 +579,12 @@ export const Dashboard: React.FC = () => {
                   </div>
                 </div>
 
-                {/* RIGHT: Daily Schedule */}
+                {/* RIGHT: Daily Schedule — v6: DailySchedulePanel component */}
                 <div className="lg:col-span-3">
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="text-[18px]">📅</span>
-                    <h4 className="handwritten text-[14px] font-semibold uppercase tracking-wide text-gray-500">Daily Schedule</h4>
-                    {dailyPlanRec?.metadata?.num_days && (
-                      <span className="text-[12px] bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full font-medium">
-                        {dailyPlanRec.metadata.num_days} days
-                      </span>
-                    )}
-                  </div>
-                  {dayBlocks.length > 0 ? (
-                    <div className="space-y-3 max-h-[400px] overflow-y-auto pr-1">
-                      {dayBlocks.map((day, idx) => {
-                        const accent = dayAccents[idx % dayAccents.length];
-                        return (
-                          <div key={idx} className={`bg-gray-50 rounded-lg border border-gray-200 border-l-4 ${accent} px-4 py-3 transition-shadow hover:shadow-sm`}>
-                            <p className="text-[13px] font-bold text-gray-800 mb-1">{day.title}</p>
-                            <p className="text-[12.5px] text-gray-600 leading-relaxed">{renderBold(day.body)}</p>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="bg-gray-50 rounded-lg border border-dashed border-gray-300 p-8 text-center">
-                      <span className="text-3xl mb-2 block">📅</span>
-                      <p className="text-[14px] text-gray-400 italic">Daily schedule will appear after planning...</p>
-                    </div>
-                  )}
+                  <DailySchedulePanel
+                    dailyPlanRec={dailyPlanRec || null}
+                    destination={tripData.destination}
+                  />
                 </div>
               </div>
             </div>

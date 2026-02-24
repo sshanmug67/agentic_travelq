@@ -2,6 +2,17 @@
 Flight Agent - Real API with Centralized Storage
 Location: backend/agents/flight_agent.py
 
+Changes (v8):
+  - Retry logic: _search_flights_api() retries up to MAX_API_RETRIES times
+    on transient failures (5xx, timeouts) with exponential backoff before
+    falling back to mock data
+  - Fuzzy carrier resolution: _resolve_carrier_codes() now matches partial
+    and normalized names (e.g. "Delta" → "DL" via "Delta Air Lines")
+    Fixes silent skip of common shorthand names
+  - Richer mock data: _generate_mock_flights() returns 3-5 diverse flights
+    adapted to the actual route, with varied carriers, prices, and stops
+  - IATA code detection fix: len(name) == 2 instead of <= 3
+
 Changes (v7):
   - Granular status updates: _update_status() sends real-time progress messages
     to Redis via trip_storage, enabling the frontend PlanningStatus component
@@ -46,6 +57,7 @@ import time
 import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+from difflib import SequenceMatcher
 
 from agents.base_agent import TravelQBaseAgent
 from services.storage.storage_base import TripStorageInterface
@@ -56,6 +68,15 @@ from models.trip import Flight, FlightSegment, SegmentDetail, FlightAmenity
 from utils.logging_config import log_agent_raw, log_agent_json
 from config.settings import settings
 import openai
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# v8: RETRY CONFIGURATION
+# ─────────────────────────────────────────────────────────────────────────
+
+MAX_API_RETRIES = 2          # Number of retries after initial attempt (so 3 total)
+RETRY_BASE_DELAY = 1.5       # Seconds — first retry waits 1.5s, second waits 3s
+RETRYABLE_STATUS_CODES = {500, 502, 503, 504}  # Transient server errors
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -201,30 +222,153 @@ AIRLINE_NAMES: Dict[str, str] = {
 AIRLINE_CODES: Dict[str, str] = {name.lower(): code for code, name in AIRLINE_NAMES.items()}
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# v8: COMMON SHORT NAMES → IATA CODE (explicit aliases for fuzzy matching)
+# Handles cases where users type "Delta" instead of "Delta Air Lines", etc.
+# ─────────────────────────────────────────────────────────────────────────
+
+AIRLINE_ALIASES: Dict[str, str] = {
+    "delta": "DL",
+    "united": "UA",
+    "american": "AA",
+    "jetblue": "B6",
+    "southwest": "WN",
+    "alaska": "AS",
+    "spirit": "NK",
+    "frontier": "F9",
+    "hawaiian": "HA",
+    "air canada": "AC",
+    "westjet": "WS",
+    "porter": "PD",
+    "british airways": "BA",
+    "virgin atlantic": "VS",
+    "air france": "AF",
+    "klm": "KL",
+    "lufthansa": "LH",
+    "swiss": "LX",
+    "austrian": "OS",
+    "brussels": "SN",
+    "iberia": "IB",
+    "tap": "TP",
+    "turkish": "TK",
+    "turkish airlines": "TK",
+    "finnair": "AY",
+    "icelandair": "FI",
+    "norwegian": "DY",
+    "ryanair": "FR",
+    "easyjet": "U2",
+    "wizz air": "W6",
+    "vueling": "VY",
+    "aer lingus": "EI",
+    "sas": "SK",
+    "emirates": "EK",
+    "qatar": "QR",
+    "qatar airways": "QR",
+    "etihad": "EY",
+    "saudia": "SV",
+    "air india": "AI",
+    "cathay": "CX",
+    "cathay pacific": "CX",
+    "singapore": "SQ",
+    "singapore airlines": "SQ",
+    "ana": "NH",
+    "jal": "JL",
+    "japan airlines": "JL",
+    "korean air": "KE",
+    "qantas": "QF",
+    "air new zealand": "NZ",
+    "thai": "TG",
+    "thai airways": "TG",
+    "aeromexico": "AM",
+    "avianca": "AV",
+    "copa": "CM",
+    "latam": "LA",
+    "air china": "CA",
+    "china southern": "CZ",
+    "china eastern": "MU",
+    "hainan": "HU",
+}
+
+
 def _resolve_carrier_codes(carrier_names: List[str]) -> List[str]:
     """
     Convert airline display names to IATA carrier codes for Amadeus API.
 
-    Accepts both display names ("United Airlines") and raw codes ("UA").
-    Unrecognized names are silently skipped with a log warning.
+    v8: Three-tier resolution:
+      1. Exact 2-letter IATA code (e.g. "UA")
+      2. Exact display name match from AIRLINE_CODES (e.g. "Delta Air Lines")
+      3. Alias/shorthand match from AIRLINE_ALIASES (e.g. "Delta")
+      4. Fuzzy match — best match above 0.6 similarity threshold
 
     Returns:
         List of unique IATA codes, e.g. ["UA", "BA", "DL"]
     """
     codes: List[str] = []
     for name in carrier_names:
-        # Already a 2-letter code?
-        if len(name) <= 3 and name.upper() in AIRLINE_NAMES:
-            codes.append(name.upper())
-        else:
-            code = AIRLINE_CODES.get(name.lower())
+        resolved = False
+        name_stripped = name.strip()
+        name_lower = name_stripped.lower()
+
+        # 1. Already a 2-letter IATA code?
+        if len(name_stripped) == 2 and name_stripped.upper() in AIRLINE_NAMES:
+            codes.append(name_stripped.upper())
+            resolved = True
+
+        # 2. Exact display name match (e.g. "Delta Air Lines")
+        if not resolved:
+            code = AIRLINE_CODES.get(name_lower)
             if code:
                 codes.append(code)
-            else:
+                resolved = True
+
+        # 3. Alias/shorthand match (e.g. "Delta", "United", "JetBlue")
+        if not resolved:
+            alias_code = AIRLINE_ALIASES.get(name_lower)
+            if alias_code:
+                codes.append(alias_code)
                 log_agent_raw(
-                    f"⚠️ Could not resolve carrier name '{name}' to IATA code — skipping",
+                    f"   ✓ Resolved '{name}' → {alias_code} (via alias)",
                     agent_name="FlightAgent"
                 )
+                resolved = True
+
+        # 4. Fuzzy match — find best match above threshold
+        if not resolved:
+            best_match = None
+            best_score = 0.0
+            best_code = None
+
+            # Search display names
+            for display_name, iata_code in AIRLINE_CODES.items():
+                score = SequenceMatcher(None, name_lower, display_name).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_match = display_name
+                    best_code = iata_code
+
+            # Search aliases too
+            for alias, iata_code in AIRLINE_ALIASES.items():
+                score = SequenceMatcher(None, name_lower, alias).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_match = alias
+                    best_code = iata_code
+
+            if best_score >= 0.6 and best_code:
+                codes.append(best_code)
+                log_agent_raw(
+                    f"   ✓ Fuzzy resolved '{name}' → {best_code} "
+                    f"(matched '{best_match}', score={best_score:.2f})",
+                    agent_name="FlightAgent"
+                )
+                resolved = True
+
+        if not resolved:
+            log_agent_raw(
+                f"⚠️ Could not resolve carrier name '{name}' to IATA code — skipping",
+                agent_name="FlightAgent"
+            )
+
     # Deduplicate while preserving order
     seen = set()
     unique = []
@@ -239,6 +383,7 @@ class FlightAgent(TravelQBaseAgent):
     """
     Flight Agent with real Amadeus API + centralized storage
     
+    v8: Retry logic, fuzzy carrier resolution, richer mock data
     v7: Granular status updates for frontend PlanningStatus component
     """
     
@@ -314,6 +459,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
         """
         Generate reply: Call API, store options, return recommendation.
 
+        v8: Retry logic on transient API failures, fuzzy carrier resolution.
         v7: Granular status updates at every workflow step.
         v6: Wide search + LLM curation:
           1. Single API call for 50 results (no carrier filter)
@@ -387,7 +533,7 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             # v7: Status with resolved codes
             self._update_status(f"Airports resolved: {origin_code} → {destination_code}")
             
-            # ── v5: Resolve carrier preferences to IATA codes ────────────
+            # ── v5/v8: Resolve carrier preferences to IATA codes ─────
             preferred_carriers = preferences.flight_prefs.preferred_carriers or []
             interested_carriers = preferences.flight_prefs.interested_carriers or []
             all_carrier_names = preferred_carriers + interested_carriers
@@ -463,27 +609,11 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                     new_pri = tag_priority[new_tag]
 
                     if new_pri < existing_pri:
-                        # log_agent_raw(
-                        #     f"   🔄 Codeshare upgrade: {existing.airline} {existing_tag} → "
-                        #     f"{f.airline} {new_tag} (same route)",
-                        #     agent_name="FlightAgent"
-                        # )
                         seen_ids.add(f.id)
                         all_flights[existing_idx] = f
                     elif new_pri == existing_pri and f.price < existing.price:
-                        # log_agent_raw(
-                        #     f"   🔄 Codeshare swap (cheaper): {existing.airline} ${existing.price:.2f} → "
-                        #     f"{f.airline} ${f.price:.2f}",
-                        #     agent_name="FlightAgent"
-                        # )
                         seen_ids.add(f.id)
                         all_flights[existing_idx] = f
-                    # else:
-                        # log_agent_raw(
-                        #     f"   🔗 Codeshare skip: {f.airline} ({f.airline_code}) "
-                        #     f"= same route as {existing.airline} ({existing.airline_code})",
-                        #     agent_name="FlightAgent"
-                        # )
                     codeshare_dupes += 1
                 else:
                     seen_ids.add(f.id)
@@ -504,17 +634,6 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 tag = self._tag_flight(f, preferred_codes, interested_codes)
                 key = f"{f.airline} ({f.airline_code}) {tag}"
                 carrier_breakdown[key] = carrier_breakdown.get(key, 0) + 1
-
-            # log_agent_json(
-            #     carrier_breakdown,
-            #     label="Deduped Flight Pool by Carrier",
-            #     agent_name="FlightAgent"
-            # )
-            # log_agent_raw(
-            #     f"✅ {len(raw_flights)} raw → {len(all_flights)} unique "
-            #     f"({codeshare_dupes} codeshare dupes removed) in {api_duration:.2f}s",
-            #     agent_name="FlightAgent"
-            # )
 
             # Step 3: LLM curates top N from the full deduped pool
             # v7: Status — LLM curation starting
@@ -577,14 +696,6 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
                 f"Flight search complete — {len(curated_flights)} options ready"
             )
             
-            # Log outgoing
-            # self.log_conversation_message(
-            #     message_type="OUTGOING",
-            #     content=recommendation,
-            #     sender="chat_manager",
-            #     truncate=1000
-            # )
-            
             return self.signal_completion(recommendation) 
             
         except Exception as e:
@@ -607,6 +718,10 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
     ) -> List[Flight]:
         """
         Call Amadeus API to search flights.
+
+        v8: Retries up to MAX_API_RETRIES times on transient failures (5xx,
+        timeouts) with exponential backoff. Only falls back to mock data
+        after all retries are exhausted.
 
         v5 additions:
           included_airlines — list of IATA carrier codes to filter by
@@ -651,66 +766,121 @@ You MUST respond with valid JSON only — no markdown, no backticks, no extra te
             f"Calling Amadeus API for {origin}→{destination} ({cabin_class_upper})..."
         )
 
-        try:
-            # Build kwargs dynamically so we only send params that are set
-            search_kwargs = {
-                "originLocationCode": origin,
-                "destinationLocationCode": destination,
-                "departureDate": departure_date,
-                "returnDate": return_date,
-                "adults": adults,
-                "travelClass": cabin_class_upper,
-                "max": max_results,
-            }
-            if included_airlines:
-                search_kwargs["includedAirlineCodes"] = ",".join(included_airlines)
-            if non_stop is True:
-                search_kwargs["nonStop"] = "true"
+        # ── v8: Retry loop with exponential backoff ──────────────────
+        last_exception = None
+        total_attempts = 1 + MAX_API_RETRIES  # initial + retries
 
-            response = self.amadeus_service.client.shopping.flight_offers_search.get(
-                **search_kwargs
-            )
-            
-            log_agent_raw(f"✅ Amadeus API SUCCESS - Received {len(response.data)} offers", 
-                        agent_name="FlightAgent")
+        for attempt in range(total_attempts):
+            try:
+                # Build kwargs dynamically so we only send params that are set
+                search_kwargs = {
+                    "originLocationCode": origin,
+                    "destinationLocationCode": destination,
+                    "departureDate": departure_date,
+                    "returnDate": return_date,
+                    "adults": adults,
+                    "travelClass": cabin_class_upper,
+                    "max": max_results,
+                }
+                if included_airlines:
+                    search_kwargs["includedAirlineCodes"] = ",".join(included_airlines)
+                if non_stop is True:
+                    search_kwargs["nonStop"] = "true"
 
-            # v7: Status — parsing results
-            self._update_status(f"Parsing {len(response.data)} flight offers...")
-
-            flights = []
-            for offer in response.data:
-                # log_agent_json(offer, label="\n\nFlight Details from Amadeus: ", 
-                #       agent_name="FlightAgent")
-
-                flight = self._parse_amadeus_offer(offer)
-                if flight:
-                    flights.append(flight)
-            
-            # v7: Status — parsing complete
-            self._update_status(f"Parsed {len(flights)} valid flight offers")
-            
-            return flights
-
-        except Exception as e:
-            log_agent_raw(f"❌ Amadeus API FAILED: {type(e).__name__}: {str(e)}", agent_name="FlightAgent")
-            
-            if hasattr(e, 'response'):
-                log_agent_raw(f"Response Status: {getattr(e.response, 'status_code', 'N/A')}", 
+                response = self.amadeus_service.client.shopping.flight_offers_search.get(
+                    **search_kwargs
+                )
+                
+                log_agent_raw(f"✅ Amadeus API SUCCESS - Received {len(response.data)} offers", 
                             agent_name="FlightAgent")
-            
-            # If the carrier-filtered search failed, return empty (Phase 2 will catch it)
-            if included_airlines:
+
+                # v7: Status — parsing results
+                self._update_status(f"Parsing {len(response.data)} flight offers...")
+
+                flights = []
+                for offer in response.data:
+                    flight = self._parse_amadeus_offer(offer)
+                    if flight:
+                        flights.append(flight)
+                
+                # v7: Status — parsing complete
+                self._update_status(f"Parsed {len(flights)} valid flight offers")
+                
+                return flights
+
+            except Exception as e:
+                last_exception = e
+                status_code = getattr(getattr(e, 'response', None), 'status_code', None)
+
                 log_agent_raw(
-                    f"⚠️ Carrier-filtered search failed for {included_airlines} — "
-                    f"returning empty (open search will cover this)",
+                    f"❌ Amadeus API attempt {attempt + 1}/{total_attempts} FAILED: "
+                    f"{type(e).__name__}: {str(e)}",
                     agent_name="FlightAgent"
                 )
-                self._update_status(f"Carrier search failed for {','.join(included_airlines)}")
-                return []
 
-            log_agent_raw("⚠️ Falling back to mock data", agent_name="FlightAgent")
-            self._update_status("API unavailable — using sample flight data")
-            return self._generate_mock_flights(origin, destination, departure_date)
+                if status_code:
+                    log_agent_raw(
+                        f"Response Status: {status_code}",
+                        agent_name="FlightAgent"
+                    )
+
+                # v8: Check if this is a retryable error
+                is_retryable = (
+                    status_code in RETRYABLE_STATUS_CODES
+                    if status_code
+                    else self._is_retryable_exception(e)
+                )
+
+                if is_retryable and attempt < total_attempts - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)  # 1.5s, 3s
+                    log_agent_raw(
+                        f"🔄 Retryable error (status={status_code}) — "
+                        f"retrying in {delay:.1f}s (attempt {attempt + 2}/{total_attempts})",
+                        agent_name="FlightAgent"
+                    )
+                    self._update_status(
+                        f"API error — retrying in {delay:.0f}s "
+                        f"(attempt {attempt + 2}/{total_attempts})..."
+                    )
+                    time.sleep(delay)
+                    continue
+
+                # Non-retryable error or last attempt — break out
+                break
+
+        # ── All retries exhausted ────────────────────────────────────
+        log_agent_raw(
+            f"❌ Amadeus API FAILED after {total_attempts} attempts: "
+            f"{type(last_exception).__name__}: {str(last_exception)}",
+            agent_name="FlightAgent"
+        )
+
+        # If the carrier-filtered search failed, return empty (Phase 2 will catch it)
+        if included_airlines:
+            log_agent_raw(
+                f"⚠️ Carrier-filtered search failed for {included_airlines} — "
+                f"returning empty (open search will cover this)",
+                agent_name="FlightAgent"
+            )
+            self._update_status(f"Carrier search failed for {','.join(included_airlines)}")
+            return []
+
+        log_agent_raw("⚠️ Falling back to mock data", agent_name="FlightAgent")
+        self._update_status("API unavailable — using sample flight data")
+        return self._generate_mock_flights(origin, destination, departure_date)
+
+    def _is_retryable_exception(self, e: Exception) -> bool:
+        """
+        v8: Determine if an exception without a status code is retryable.
+        Covers timeouts, connection errors, and generic server errors.
+        """
+        retryable_keywords = [
+            "timeout", "timed out", "connection", "reset", "refused",
+            "temporarily unavailable", "server error", "internal error",
+            "502", "503", "504", "500"
+        ]
+        error_str = str(e).lower()
+        return any(keyword in error_str for keyword in retryable_keywords)
     
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1149,12 +1319,10 @@ CRITICAL RULES:
             )
 
             raw_response = response.choices[0].message.content.strip()
-            # log_agent_raw(f"📥 LLM curation response: {raw_response}", agent_name="FlightAgent")
 
             result = self._parse_llm_json(raw_response)
 
             if not result or "selected_ids" not in result:
-                # log_agent_raw("⚠️ Failed to parse curation JSON, using fallback", agent_name="FlightAgent")
                 self._update_status("AI curation parse failed — using smart fallback...")
                 return self._fallback_curate_and_recommend(
                     all_flights, preferences, preferred_codes, interested_codes, display_max
@@ -1169,7 +1337,6 @@ CRITICAL RULES:
             # Filter to valid IDs only
             valid_selected = [sid for sid in selected_ids if sid in valid_ids]
             if not valid_selected:
-                # log_agent_raw("⚠️ No valid IDs in LLM selection, using fallback", agent_name="FlightAgent")
                 self._update_status("AI returned invalid selections — using smart fallback...")
                 return self._fallback_curate_and_recommend(
                     all_flights, preferences, preferred_codes, interested_codes, display_max
@@ -1182,10 +1349,6 @@ CRITICAL RULES:
             # Validate recommended_id is in the curated set
             curated_ids = [str(f.id) for f in curated]
             if recommended_id not in curated_ids:
-                # log_agent_raw(
-                #     f"⚠️ recommended_id '{recommended_id}' not in curated set, using first",
-                #     agent_name="FlightAgent"
-                # )
                 recommended_id = curated_ids[0]
                 reason = "Best option from curated selection"
 
@@ -1196,19 +1359,6 @@ CRITICAL RULES:
                 f"AI selected {len(curated)} flights — "
                 f"top pick: {recommended_flight.airline} at ${recommended_flight.price:.0f}"
             )
-
-            # ── Log carrier diversity in curated set ─────────────────
-            curated_carriers = {}
-            for f in curated:
-                tag = self._tag_flight(f, preferred_codes, interested_codes)
-                key = f"{f.airline} ({f.airline_code}) {tag}"
-                curated_carriers[key] = curated_carriers.get(key, 0) + 1
-
-            # log_agent_json(
-            #     curated_carriers,
-            #     label=f"LLM Curated Top {len(curated)} — Carrier Diversity",
-            #     agent_name="FlightAgent"
-            # )
 
             # ── Store recommendation ─────────────────────────────────
             is_direct = self._is_direct_flight(recommended_flight)
@@ -1332,12 +1482,6 @@ CRITICAL RULES:
                 "is_fallback": True
             }
         )
-
-        # log_agent_raw(
-        #     f"⭐ Fallback curated {len(curated)} flights, picked #{pick.id} {tag} "
-        #     f"({pick.airline} ${pick.price:.2f})",
-        #     agent_name="FlightAgent"
-        # )
 
         # v7: Status
         self._update_status(
@@ -1707,51 +1851,153 @@ CRITICAL RULES:
     def _flight_to_dict(self, flight: Flight) -> Dict:
         """Convert Flight object to dict for storage"""
         return flight.model_dump(mode='json')
-    
+
+    # ─────────────────────────────────────────────────────────────────────
+    # v8: ROUTE-AWARE MOCK FLIGHTS
+    # ─────────────────────────────────────────────────────────────────────
+
     def _generate_mock_flights(self, origin: str, dest: str, date: str) -> List[Flight]:
-        """Generate mock flights when API is unavailable"""
+        """
+        Generate diverse mock flights when API is unavailable.
+
+        v8: Returns 5 flights with varied carriers, prices, stops, and times
+        adapted to the actual route. Provides a realistic fallback experience
+        so the user can still see flight cards and the LLM curation works.
+        """
         from datetime import timedelta
+        import random
         
         dep_date = datetime.fromisoformat(date)
+
+        # ── Route-aware carrier selection ────────────────────────────
+        # Pick carriers that actually fly common routes
+        ROUTE_CARRIERS = {
+            # Transatlantic
+            ("JFK", "LHR"): [
+                ("BA", "British Airways"), ("VS", "Virgin Atlantic"),
+                ("AA", "American Airlines"), ("DL", "Delta Air Lines"),
+                ("UA", "United Airlines"),
+            ],
+            ("JFK", "CDG"): [
+                ("AF", "Air France"), ("DL", "Delta Air Lines"),
+                ("AA", "American Airlines"), ("UA", "United Airlines"),
+                ("NK", "Spirit Airlines"),
+            ],
+            # Transpacific
+            ("JFK", "NRT"): [
+                ("JL", "Japan Airlines"), ("NH", "ANA All Nippon Airways"),
+                ("DL", "Delta Air Lines"), ("UA", "United Airlines"),
+                ("AA", "American Airlines"),
+            ],
+            ("JFK", "HND"): [
+                ("JL", "Japan Airlines"), ("NH", "ANA All Nippon Airways"),
+                ("DL", "Delta Air Lines"), ("AA", "American Airlines"),
+                ("UA", "United Airlines"),
+            ],
+            ("LAX", "NRT"): [
+                ("JL", "Japan Airlines"), ("NH", "ANA All Nippon Airways"),
+                ("SQ", "Singapore Airlines"), ("UA", "United Airlines"),
+                ("AA", "American Airlines"),
+            ],
+        }
+
+        # Try exact route match, then fall back to generic international carriers
+        route_key = (origin, dest)
+        reverse_key = (dest, origin)
         
-        return [
-            Flight(
-                id="FL001",
-                airline="British Airways",
-                airline_code="BA",
-                is_round_trip=True,
-                outbound=FlightSegment(
-                    departure_airport=origin,
-                    arrival_airport=dest,
-                    departure_time=dep_date.replace(hour=8, minute=30),
-                    arrival_time=dep_date.replace(hour=8, minute=30) + timedelta(hours=7),
-                    duration="7h 0m",
-                    airline="British Airways",
-                    airline_code="BA",
-                    flight_number="BA117",
-                    stops=0,
-                    layovers=[]
-                ),
-                return_flight=FlightSegment(
-                    departure_airport=dest,
-                    arrival_airport=origin,
-                    departure_time=(dep_date + timedelta(days=5)).replace(hour=10, minute=0),
-                    arrival_time=(dep_date + timedelta(days=5)).replace(hour=18, minute=30),
-                    duration="8h 30m",
-                    airline="British Airways",
-                    airline_code="BA",
-                    flight_number="BA118",
-                    stops=0,
-                    layovers=[]
-                ),
-                total_duration="7h 0m + 8h 30m",
-                price=850,
-                currency="USD",
-                cabin_class="economy",
-                checked_bags={"quantity": 1, "weight": 23, "weight_unit": "KG"},
-                cabin_bags={"quantity": 1, "weight": 7, "weight_unit": "KG"}
-            )
+        if route_key in ROUTE_CARRIERS:
+            carriers = ROUTE_CARRIERS[route_key]
+        elif reverse_key in ROUTE_CARRIERS:
+            carriers = ROUTE_CARRIERS[reverse_key]
+        else:
+            # Generic fallback carriers
+            carriers = [
+                ("BA", "British Airways"), ("DL", "Delta Air Lines"),
+                ("UA", "United Airlines"), ("AA", "American Airlines"),
+                ("AF", "Air France"),
+            ]
+
+        # ── Build 5 diverse mock flights ─────────────────────────────
+        mock_flights: List[Flight] = []
+
+        flight_templates = [
+            # (price_base, stops, depart_hour, outbound_hours, return_hours, flight_suffix)
+            (850, 0, 8, 7, 8, "117"),      # Morning direct — premium
+            (620, 1, 14, 10, 11, "302"),    # Afternoon 1-stop — mid-range
+            (480, 1, 21, 12, 13, "415"),    # Evening 1-stop — budget
+            (750, 0, 11, 7, 8, "201"),      # Late morning direct — mid-premium
+            (550, 1, 6, 9, 10, "088"),      # Early morning 1-stop — value
         ]
+
+        # Add some randomness to prices (±10%)
+        random.seed(f"{origin}{dest}{date}")  # Deterministic per route+date
+
+        for i, (carrier_code, carrier_name) in enumerate(carriers[:5]):
+            price_base, stops, depart_hour, out_hours, ret_hours, suffix = flight_templates[i]
+            
+            # Vary price slightly
+            price = round(price_base * random.uniform(0.9, 1.1), 2)
+            
+            layover_city = ""
+            layovers = []
+            if stops > 0:
+                # Pick a plausible connection city
+                connection_options = ["ORD", "IAD", "BOS", "DFW", "ATL", "SFO", "YYZ"]
+                layover_city = random.choice(connection_options)
+                layovers = [layover_city]
+
+            dep_time = dep_date.replace(hour=depart_hour, minute=30)
+            arr_time = dep_time + timedelta(hours=out_hours)
+            ret_dep_time = (dep_date + timedelta(days=5)).replace(hour=10, minute=0)
+            ret_arr_time = ret_dep_time + timedelta(hours=ret_hours)
+
+            flight_num = f"{carrier_code}{suffix}"
+
+            mock_flights.append(
+                Flight(
+                    id=f"FL{i + 1:03d}",
+                    airline=carrier_name,
+                    airline_code=carrier_code,
+                    is_round_trip=True,
+                    outbound=FlightSegment(
+                        departure_airport=origin,
+                        arrival_airport=dest,
+                        departure_time=dep_time,
+                        arrival_time=arr_time,
+                        duration=f"{out_hours}h 0m",
+                        airline=carrier_name,
+                        airline_code=carrier_code,
+                        flight_number=flight_num,
+                        stops=stops,
+                        layovers=layovers,
+                    ),
+                    return_flight=FlightSegment(
+                        departure_airport=dest,
+                        arrival_airport=origin,
+                        departure_time=ret_dep_time,
+                        arrival_time=ret_arr_time,
+                        duration=f"{ret_hours}h 0m",
+                        airline=carrier_name,
+                        airline_code=carrier_code,
+                        flight_number=f"{carrier_code}{int(suffix) + 1:03d}",
+                        stops=stops,
+                        layovers=layovers,
+                    ),
+                    total_duration=f"{out_hours}h 0m + {ret_hours}h 0m",
+                    price=price,
+                    currency="USD",
+                    cabin_class="ECONOMY",
+                    checked_bags={"quantity": 1, "weight": 23, "weight_unit": "KG"},
+                    cabin_bags={"quantity": 1, "weight": 7, "weight_unit": "KG"},
+                )
+            )
+
+        log_agent_raw(
+            f"🎭 Generated {len(mock_flights)} route-aware mock flights for {origin}→{dest}",
+            agent_name="FlightAgent"
+        )
+
+        return mock_flights
 
 
 def create_flight_agent(trip_id: str, trip_storage: TripStorageInterface, **kwargs) -> FlightAgent:
