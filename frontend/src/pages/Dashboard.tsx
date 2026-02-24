@@ -37,7 +37,7 @@ const LEFT_NUGGET_IDS = new Set(['packing_tips', 'local_events', 'seasonal_tip',
 const BOTTOM_NUGGET_IDS = new Set<string>();
 
 // ─── Weather helpers ─────────────────────────────────────────────────────
-interface DayWeatherData { day: number; date: string; icon: string; high: number; low: number; desc: string; }
+interface DayWeatherData { day: number; date: string; icon: string; high: number; low: number; desc: string; precipProb?: number; }
 
 function extractWeatherFromDailyPlan(dailyPlanRec: Record<string, any> | null): DayWeatherData[] {
   if (!dailyPlanRec) return [];
@@ -49,52 +49,114 @@ function extractWeatherFromDailyPlan(dailyPlanRec: Record<string, any> | null): 
       day: d.day, date: d.date, icon: d.weather!.icon,
       high: Math.round(d.weather!.temp_high), low: Math.round(d.weather!.temp_low),
       desc: d.weather!.description,
+      precipProb: d.weather!.precipitation_prob,
     }));
 }
 
-// ─── Vertical Mercury Thermometer Component ─────────────────────────────
-const THERMO_HEIGHT = 80; // px height of the tube
-const VerticalThermometer: React.FC<{ low: number; high: number; globalMin: number; globalMax: number; icon: string; dayLabel: string }> = ({ low, high, globalMin, globalMax, icon, dayLabel }) => {
-  const range = globalMax - globalMin || 1;
-  // Mercury fills from bottom (globalMin) to "high" temp
-  const mercuryPct = Math.max(12, ((high - globalMin) / range) * 100);
-  // Mark where "low" sits on the scale
-  const lowMarkPct = ((low - globalMin) / range) * 100;
+// ─── SVG Temperature Range Chart + Daily Cards ──────────────────────────
+const WeatherChart: React.FC<{ days: DayWeatherData[]; globalMin: number; globalMax: number }> = ({ days, globalMin, globalMax }) => {
+  if (days.length === 0) return null;
+  const W = 280; const H = 80;
+  const padX = 24; const padY = 12;
+  const chartW = W - padX * 2; const chartH = H - padY * 2;
+  const range = (globalMax - globalMin) || 1;
+
+  const toY = (temp: number) => padY + chartH - ((temp - globalMin) / range) * chartH;
+  const toX = (i: number) => padX + (days.length === 1 ? chartW / 2 : (i / (days.length - 1)) * chartW);
+
+  // Build smooth curve paths
+  const highPts = days.map((d, i) => ({ x: toX(i), y: toY(d.high) }));
+  const lowPts = days.map((d, i) => ({ x: toX(i), y: toY(d.low) }));
+
+  const smoothLine = (pts: { x: number; y: number }[]) => {
+    if (pts.length === 1) return `M${pts[0].x},${pts[0].y}`;
+    let d = `M${pts[0].x},${pts[0].y}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const cx = (pts[i].x + pts[i + 1].x) / 2;
+      d += ` C${cx},${pts[i].y} ${cx},${pts[i + 1].y} ${pts[i + 1].x},${pts[i + 1].y}`;
+    }
+    return d;
+  };
+
+  const highPath = smoothLine(highPts);
+  const lowPath = smoothLine(lowPts);
+  // Area between curves
+  const areaPath = highPath + ` L${lowPts[lowPts.length - 1].x},${lowPts[lowPts.length - 1].y}` +
+    smoothLine([...lowPts].reverse()).replace('M', ' L') + ' Z';
 
   return (
-    <div className="flex flex-col items-center gap-1" style={{ minWidth: 48 }}>
-      {/* Day label */}
-      <span className="text-[11px] font-extrabold text-gray-500 uppercase tracking-wide">{dayLabel}</span>
-      {/* Weather icon */}
-      <span style={{ fontSize: 20 }}>{icon}</span>
-      {/* High temp */}
-      <span className="text-[11px] font-bold text-red-500">{high}°</span>
-      {/* Thermometer tube */}
-      <div className="relative rounded-full overflow-hidden" style={{ width: 14, height: THERMO_HEIGHT, background: '#F1F5F9', border: '1.5px solid #E2E8F0' }}>
-        {/* Mercury fill from bottom */}
-        <div
-          className="absolute bottom-0 left-0 right-0 rounded-full"
-          style={{
-            height: `${mercuryPct}%`,
-            background: 'linear-gradient(to top, #DC2626, #EF4444, #F87171)',
-            transition: 'height 0.6s ease',
-          }}
-        />
-        {/* Low temp marker line */}
-        <div
-          className="absolute left-0 right-0"
-          style={{
-            bottom: `${lowMarkPct}%`,
-            height: 2,
-            background: '#1E40AF',
-            opacity: 0.5,
-          }}
-        />
+    <div>
+      {/* SVG Chart */}
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} style={{ overflow: 'visible' }}>
+        <defs>
+          <linearGradient id="tempBand" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#F59E0B" stopOpacity="0.25" />
+            <stop offset="100%" stopColor="#3B82F6" stopOpacity="0.15" />
+          </linearGradient>
+          <linearGradient id="highLine" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#F59E0B" /><stop offset="100%" stopColor="#EF4444" />
+          </linearGradient>
+          <linearGradient id="lowLine" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stopColor="#60A5FA" /><stop offset="100%" stopColor="#3B82F6" />
+          </linearGradient>
+        </defs>
+        {/* Grid lines */}
+        {[0, 0.5, 1].map((pct, i) => (
+          <line key={i} x1={padX} x2={W - padX} y1={padY + chartH * (1 - pct)} y2={padY + chartH * (1 - pct)} stroke="#E2E8F0" strokeWidth="0.5" strokeDasharray="3,3" />
+        ))}
+        {/* Temperature band area */}
+        <path d={areaPath} fill="url(#tempBand)" />
+        {/* High temp line */}
+        <path d={highPath} fill="none" stroke="url(#highLine)" strokeWidth="2.5" strokeLinecap="round" />
+        {/* Low temp line */}
+        <path d={lowPath} fill="none" stroke="url(#lowLine)" strokeWidth="2.5" strokeLinecap="round" />
+        {/* Data points + labels */}
+        {days.map((d, i) => {
+          const x = toX(i); const yH = toY(d.high); const yL = toY(d.low);
+          return (
+            <g key={i}>
+              <circle cx={x} cy={yH} r="4" fill="white" stroke="#F59E0B" strokeWidth="2" />
+              <circle cx={x} cy={yL} r="4" fill="white" stroke="#3B82F6" strokeWidth="2" />
+              <text x={x} y={yH - 8} textAnchor="middle" style={{ fontSize: 9, fontWeight: 700, fill: '#D97706' }}>{d.high}°</text>
+              <text x={x} y={yL + 14} textAnchor="middle" style={{ fontSize: 9, fontWeight: 700, fill: '#2563EB' }}>{d.low}°</text>
+            </g>
+          );
+        })}
+      </svg>
+
+      {/* Daily forecast cards */}
+      <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+        {days.map((d, i) => {
+          let dayName = ''; let dateName = '';
+          try {
+            const dt = new Date(d.date + 'T12:00:00');
+            dayName = dt.toLocaleDateString('en-US', { weekday: 'short' });
+            dateName = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+          } catch {}
+          const precipPct = d.precipProb != null ? d.precipProb : null;
+
+          return (
+            <div
+              key={i}
+              style={{
+                flex: 1, borderRadius: 12, padding: '8px 4px', textAlign: 'center',
+                background: i === 0 ? 'linear-gradient(135deg, rgba(139,92,246,0.08), rgba(236,72,153,0.06))' : 'rgba(241,245,249,0.6)',
+                border: i === 0 ? '1.5px solid rgba(139,92,246,0.15)' : '1px solid rgba(226,232,240,0.5)',
+              }}
+            >
+              <div style={{ fontSize: 10, fontWeight: 700, color: '#475569', textTransform: 'uppercase' }}>{dayName}</div>
+              <div style={{ fontSize: 8, color: '#94A3B8', marginBottom: 2 }}>{dateName}</div>
+              <div style={{ fontSize: 20 }}>{d.icon}</div>
+              <div style={{ fontSize: 8, color: '#64748B', fontWeight: 600, marginTop: 2, lineHeight: 1.2, minHeight: 18 }}>{d.desc}</div>
+              {precipPct != null && precipPct > 0 && (
+                <div style={{ fontSize: 8, color: '#3B82F6', fontWeight: 700, marginTop: 2 }}>
+                  💧 {Math.round(precipPct)}%
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
-      {/* Bulb */}
-      <div className="rounded-full" style={{ width: 20, height: 20, background: 'linear-gradient(135deg, #DC2626, #B91C1C)', border: '1.5px solid #E2E8F0', marginTop: -6, boxShadow: '0 1px 4px rgba(220,38,38,0.3)' }} />
-      {/* Low temp */}
-      <span className="text-[11px] font-bold text-blue-500" style={{ marginTop: -2 }}>{low}°</span>
     </div>
   );
 };
@@ -137,6 +199,8 @@ export const Dashboard: React.FC = () => {
     const results: Record<string, any> = response.results || response.options || {};
     const flightResults = results.flights || []; const hotelResults = results.hotels || []; const restaurantResults = results.restaurants || []; const activityResults = results.activities || [];
     setFlights(flightResults); setHotels(hotelResults); setRestaurants(restaurantResults); setActivities(activityResults); setWeather(results.weather || []);
+    // Clear itinerary RIGHT BEFORE adding new AI picks — avoids stale closure issues
+    useItinerary.getState().clearItinerary();
     if (flightResults.length > 0) { const recFlightId = response.recommendations?.flight?.recommended_id; const aiPick = recFlightId ? flightResults.find((f: any) => String(f.id) === String(recFlightId)) : null; const s = aiPick || flightResults[0]; setAiRecommendedFlightId(s.id); selectFlight(s, 'ai'); }
     if (hotelResults.length > 0) { const recHotelId = response.recommendations?.hotel?.recommended_id; const aiPick = recHotelId ? hotelResults.find((h: any) => String(h.id) === String(recHotelId)) : null; const s = aiPick || hotelResults[0]; setAiRecommendedHotelId(s.id); selectHotel(s, 'ai'); }
     if (restaurantResults.length > 0) { const rec = response.recommendations?.restaurant; const ids: string[] = rec?.metadata?.all_recommended_ids || []; setAiRecommendedRestaurantIds(ids); if (ids.length > 0) { for (const id of ids) { const m = restaurantResults.find((r: any) => String(r.id) === String(id)); if (m) toggleRestaurant(m); } } else { const n = Math.min(3, restaurantResults.length); const fb: string[] = []; for (let i = 0; i < n; i++) { toggleRestaurant(restaurantResults[i]); fb.push(restaurantResults[i].id); } setAiRecommendedRestaurantIds(fb); } }
@@ -165,7 +229,24 @@ export const Dashboard: React.FC = () => {
   const handleSelectHotel = (hotel: any) => selectHotel(hotel, hotel.id === aiRecommendedHotelId ? 'ai' : 'user');
   const handleToggleRestaurant = (restaurant: any) => toggleRestaurant(restaurant);
   const handleToggleActivity = (activity: any) => toggleActivity(activity);
-  const handleItineraryItemClick = (tab: 'flights' | 'hotels' | 'restaurants' | 'activities', itemId?: string) => { setActiveResultsTab(tab); setFocusedItemId(itemId || null); if (itemId) setTimeout(() => setFocusedItemId(null), 1500); };
+  const handleItineraryItemClick = (tab: 'flights' | 'hotels' | 'restaurants' | 'activities', itemId?: string) => {
+    setActiveResultsTab(tab);
+    setFocusedItemId(itemId || null);
+    if (itemId) {
+      // Give React a tick to switch tabs, then scroll to the card
+      requestAnimationFrame(() => {
+        setTimeout(() => {
+          const el = document.querySelector(`[data-item-id="${itemId}"]`);
+          if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            el.classList.add('ring-2', 'ring-purple-400', 'ring-offset-2');
+            setTimeout(() => el.classList.remove('ring-2', 'ring-purple-400', 'ring-offset-2'), 2000);
+          }
+        }, 100);
+      });
+      setTimeout(() => setFocusedItemId(null), 2500);
+    }
+  };
 
   const resultsTabs: { id: ResultsTab; label: string; icon: string; count: number }[] = [
     { id: 'flights', label: 'Flights', icon: '✈️', count: flights.length }, { id: 'hotels', label: 'Hotels', icon: '🏨', count: hotels.length },
@@ -358,26 +439,23 @@ export const Dashboard: React.FC = () => {
                             <div className="text-[17px] font-bold text-gray-800">{tempMin != null && tempMax != null ? `${tempMin}°F – ${tempMax}°F` : 'Forecast available'}</div>
                           </div>
                         </div>
+                        {/* Legend */}
+                        <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-1"><div style={{ width: 12, height: 3, borderRadius: 2, background: 'linear-gradient(90deg, #F59E0B, #EF4444)' }} /><span style={{ fontSize: 9, color: '#94A3B8', fontWeight: 600 }}>High</span></div>
+                          <div className="flex items-center gap-1"><div style={{ width: 12, height: 3, borderRadius: 2, background: 'linear-gradient(90deg, #60A5FA, #3B82F6)' }} /><span style={{ fontSize: 9, color: '#94A3B8', fontWeight: 600 }}>Low</span></div>
+                        </div>
                       </div>
 
-                      {/* Vertical thermometers per day */}
+                      {/* Temperature range chart + daily cards */}
                       {dailyWeather.length > 0 && (
-                        <div className="px-4 pb-2 pt-1">
-                          <div className="flex items-end justify-around gap-2">
-                            {dailyWeather.map((dw, i) => {
-                              let shortDay = `D${dw.day}`;
-                              try { const d = new Date(dw.date + 'T12:00:00'); shortDay = d.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase(); } catch {}
-                              return (
-                                <VerticalThermometer key={i} low={dw.low} high={dw.high} globalMin={globalMin} globalMax={globalMax} icon={dw.icon} dayLabel={shortDay} />
-                              );
-                            })}
-                          </div>
+                        <div className="px-3 pb-2">
+                          <WeatherChart days={dailyWeather} globalMin={globalMin} globalMax={globalMax} />
                         </div>
                       )}
 
                       {weatherRec.reason && (
-                        <div className="px-4 pb-3 pt-1.5">
-                          <p className="text-[13px] text-gray-500 leading-relaxed">{weatherRec.reason}</p>
+                        <div className="px-4 pb-3 pt-1">
+                          <p className="text-[12px] text-gray-500 leading-relaxed">{weatherRec.reason}</p>
                         </div>
                       )}
                     </div>
@@ -453,20 +531,67 @@ export const Dashboard: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <div className="lg:col-span-3">
             {hasResults ? (
-              <div className="bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden">
-                <div className="flex border-b bg-gradient-to-r from-purple-50 to-pink-50">
-                  {resultsTabs.map((tab) => (
-                    <button key={tab.id} onClick={() => setActiveResultsTab(tab.id)} className={`flex-1 px-4 py-3 text-[15px] font-medium transition-all duration-300 relative ${activeResultsTab === tab.id ? 'text-purple-700 bg-white' : 'text-gray-600 hover:text-purple-600 hover:bg-white/50'}`}>
-                      <span className="flex items-center justify-center gap-2"><span className="text-[19px]">{tab.icon}</span><span>{tab.label}</span>{tab.count > 0 && <span className={`text-[13px] px-2 py-0.5 rounded-full ${activeResultsTab === tab.id ? 'bg-purple-100 text-purple-700' : 'bg-gray-200 text-gray-600'}`}>{tab.count}</span>}</span>
-                      {activeResultsTab === tab.id && <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-600 to-pink-600" />}
+              <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden">
+                {/* ── Pill tab bar (compact, matching day pills) ── */}
+                <div style={{ display: 'flex', gap: 3, margin: '10px 12px 0', background: 'rgba(255,255,255,0.7)', borderRadius: 14, padding: 3, backdropFilter: 'blur(12px)', border: '1px solid rgba(139,92,246,0.08)' }}>
+                  {resultsTabs.map((tab) => {
+                    const tabColors: Record<string, string> = { flights: '#F59E0B', hotels: '#3B82F6', restaurants: '#EF4444', activities: '#10B981' };
+                    const tc = tabColors[tab.id] || '#8B5CF6';
+                    const isActive = activeResultsTab === tab.id;
+                    return (
+                    <button
+                      key={tab.id}
+                      onClick={() => setActiveResultsTab(tab.id)}
+                      style={{
+                        flex: 1, padding: '7px 6px', cursor: 'pointer',
+                        borderRadius: 11,
+                        fontSize: 12, fontWeight: 700, fontFamily: "'DM Sans', 'Plus Jakarta Sans', sans-serif",
+                        background: isActive ? 'linear-gradient(135deg, #8B5CF6, #7C3AED)' : `${tc}08`,
+                        color: isActive ? 'white' : '#4B5563',
+                        border: isActive ? 'none' : `1.5px solid ${tc}25`,
+                        boxShadow: isActive ? '0 3px 12px rgba(139,92,246,0.3)' : `0 1px 3px ${tc}10`,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4,
+                        transition: 'all 0.25s ease',
+                      }}
+                    >
+                      <span style={{ fontSize: 13 }}>{tab.icon}</span>
+                      {tab.label}
+                      {tab.count > 0 && (
+                        <span style={{
+                          fontSize: 9, fontWeight: 700,
+                          background: isActive ? 'rgba(255,255,255,0.25)' : `${tc}15`,
+                          color: isActive ? 'white' : `${tc}`,
+                          padding: '1px 6px', borderRadius: 6,
+                        }}>{tab.count}</span>
+                      )}
                     </button>
-                  ))}
+                    );
+                  })}
                 </div>
-                <div className="p-6">
-                  {activeResultsTab === 'flights' && (<div><div className="flex items-center justify-between mb-4"><h2 className="text-[19px] font-bold text-gray-800">✈️ Available Flights</h2><div className="flex items-center gap-3">{selectedFlight && <span className="text-[13px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium">Selected: {selectedFlight.airline_code} {selectedFlight.outbound?.flight_number} — ${selectedFlight.price}</span>}<span className="text-[15px] text-gray-500">{flights.length} option{flights.length !== 1 ? 's' : ''}</span></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4">{flights.map((flight, index) => (<FlightCard key={flight.id || index} flight={flight} isSelected={selectedFlight?.id === flight.id} isAiRecommended={flight.id === aiRecommendedFlightId} onSelect={() => handleSelectFlight(flight)} focusedItemId={focusedItemId} />))}</div></div>)}
-                  {activeResultsTab === 'hotels' && (<div><div className="flex items-center justify-between mb-4"><h2 className="text-[19px] font-bold text-gray-800">🏨 Available Hotels</h2><div className="flex items-center gap-3">{selectedHotel && <span className="text-[13px] bg-purple-100 text-purple-700 px-3 py-1 rounded-full font-medium truncate max-w-[280px]">Selected: {selectedHotel.name} — ${selectedHotel.total_price}</span>}<span className="text-[15px] text-gray-500">{hotels.length} option{hotels.length !== 1 ? 's' : ''}</span></div></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4">{hotels.map((hotel, index) => (<HotelCard key={hotel.id || index} hotel={hotel} isSelected={selectedHotel?.id === hotel.id} isAiRecommended={hotel.id === aiRecommendedHotelId} onSelect={() => handleSelectHotel(hotel)} focusedItemId={focusedItemId} />))}</div></div>)}
-                  {activeResultsTab === 'restaurants' && (<div><div className="flex items-center justify-between mb-4"><h2 className="text-[19px] font-bold text-gray-800">🍽️ Recommended Restaurants</h2><div className="flex items-center gap-3">{selectedRestaurants.length > 0 && <span className="text-[13px] bg-orange-100 text-orange-700 px-3 py-1 rounded-full font-medium">{selectedRestaurants.length} added to itinerary</span>}<span className="text-[15px] text-gray-500">{storeRestaurants.length} option{storeRestaurants.length !== 1 ? 's' : ''}</span></div></div>{storeRestaurants.length > 0 ? (<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{storeRestaurants.map((restaurant, index) => (<RestaurantCard key={`${restaurant.id}-${index}`} restaurant={restaurant} isSelected={isRestaurantSelected(restaurant.id)} isAiRecommended={isRestaurantAiRecommended(restaurant.id)} onToggle={() => handleToggleRestaurant(restaurant)} focusedItemId={focusedItemId} />))}</div>) : (<div className="text-center py-12 text-gray-500"><div className="text-4xl mb-3">🍽️</div><p className="font-semibold">No restaurant results yet</p></div>)}</div>)}
-                  {activeResultsTab === 'activities' && (<div><div className="flex items-center justify-between mb-4"><h2 className="text-[19px] font-bold text-gray-800">🎭 Things To Do</h2><div className="flex items-center gap-3">{selectedActivities.length > 0 && <span className="text-[13px] bg-blue-100 text-blue-700 px-3 py-1 rounded-full font-medium">{selectedActivities.length} added to itinerary</span>}<span className="text-[15px] text-gray-500">{storeActivities.length} option{storeActivities.length !== 1 ? 's' : ''}</span></div></div>{storeActivities.length > 0 ? (<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{storeActivities.map((activity, index) => (<ActivityCard key={`${activity.id}-${index}`} activity={activity} isSelected={isActivitySelected(activity.id)} isAiRecommended={isActivityAiRecommended(activity.id)} onToggle={() => handleToggleActivity(activity)} focusedItemId={focusedItemId} />))}</div>) : (<div className="text-center py-12 text-gray-500"><div className="text-4xl mb-3">🎭</div><p className="font-semibold">No activity results yet</p></div>)}</div>)}
+                {/* ── Selection info bar (compact) ── */}
+                <div style={{ margin: '6px 12px 0', padding: '6px 12px', borderRadius: 10, background: 'rgba(139,92,246,0.05)', border: '1px solid rgba(139,92,246,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#7C3AED' }}>
+                    {activeResultsTab === 'flights' && selectedFlight && `✈️ Selected: ${selectedFlight.airline_code} ${selectedFlight.outbound?.flight_number || ''} — $${selectedFlight.price}`}
+                    {activeResultsTab === 'hotels' && selectedHotel && `🏨 Selected: ${selectedHotel.name} — $${selectedHotel.total_price}`}
+                    {activeResultsTab === 'restaurants' && selectedRestaurants.length > 0 && `🍽️ ${selectedRestaurants.length} added to itinerary`}
+                    {activeResultsTab === 'activities' && selectedActivities.length > 0 && `🎭 ${selectedActivities.length} added to itinerary`}
+                    {activeResultsTab === 'flights' && !selectedFlight && '✈️ No flight selected'}
+                    {activeResultsTab === 'hotels' && !selectedHotel && '🏨 No hotel selected'}
+                    {activeResultsTab === 'restaurants' && selectedRestaurants.length === 0 && '🍽️ No restaurants added'}
+                    {activeResultsTab === 'activities' && selectedActivities.length === 0 && '🎭 No activities added'}
+                  </span>
+                  <span style={{ fontSize: 10, color: '#94A3B8' }}>
+                    {activeResultsTab === 'flights' && `${flights.length} option${flights.length !== 1 ? 's' : ''}`}
+                    {activeResultsTab === 'hotels' && `${hotels.length} option${hotels.length !== 1 ? 's' : ''}`}
+                    {activeResultsTab === 'restaurants' && `${storeRestaurants.length} option${storeRestaurants.length !== 1 ? 's' : ''}`}
+                    {activeResultsTab === 'activities' && `${storeActivities.length} option${storeActivities.length !== 1 ? 's' : ''}`}
+                  </span>
+                </div>
+                <div className="p-4 pt-3">
+                  {activeResultsTab === 'flights' && (<div><div className="flex items-center justify-between mb-4"><h2 className="text-[19px] font-bold text-gray-800">✈️ Available Flights</h2></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4">{flights.map((flight, index) => (<div key={flight.id || index} data-item-id={flight.id}><FlightCard flight={flight} isSelected={selectedFlight?.id === flight.id} isAiRecommended={flight.id === aiRecommendedFlightId} onSelect={() => handleSelectFlight(flight)} focusedItemId={focusedItemId} /></div>))}</div></div>)}
+                  {activeResultsTab === 'hotels' && (<div><div className="flex items-center justify-between mb-4"><h2 className="text-[19px] font-bold text-gray-800">🏨 Available Hotels</h2></div><div className="grid grid-cols-1 md:grid-cols-2 gap-4">{hotels.map((hotel, index) => (<div key={hotel.id || index} data-item-id={hotel.id}><HotelCard hotel={hotel} isSelected={selectedHotel?.id === hotel.id} isAiRecommended={hotel.id === aiRecommendedHotelId} onSelect={() => handleSelectHotel(hotel)} focusedItemId={focusedItemId} /></div>))}</div></div>)}
+                  {activeResultsTab === 'restaurants' && (<div><div className="flex items-center justify-between mb-4"><h2 className="text-[19px] font-bold text-gray-800">🍽️ Recommended Restaurants</h2></div>{storeRestaurants.length > 0 ? (<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{storeRestaurants.map((restaurant, index) => (<div key={`${restaurant.id}-${index}`} data-item-id={restaurant.id}><RestaurantCard restaurant={restaurant} isSelected={isRestaurantSelected(restaurant.id)} isAiRecommended={isRestaurantAiRecommended(restaurant.id)} onToggle={() => handleToggleRestaurant(restaurant)} focusedItemId={focusedItemId} /></div>))}</div>) : (<div className="text-center py-12 text-gray-500"><div className="text-4xl mb-3">🍽️</div><p className="font-semibold">No restaurant results yet</p></div>)}</div>)}
+                  {activeResultsTab === 'activities' && (<div><div className="flex items-center justify-between mb-4"><h2 className="text-[19px] font-bold text-gray-800">🎭 Things To Do</h2></div>{storeActivities.length > 0 ? (<div className="grid grid-cols-1 md:grid-cols-2 gap-4">{storeActivities.map((activity, index) => (<div key={`${activity.id}-${index}`} data-item-id={activity.id}><ActivityCard activity={activity} isSelected={isActivitySelected(activity.id)} isAiRecommended={isActivityAiRecommended(activity.id)} onToggle={() => handleToggleActivity(activity)} focusedItemId={focusedItemId} /></div>))}</div>) : (<div className="text-center py-12 text-gray-500"><div className="text-4xl mb-3">🎭</div><p className="font-semibold">No activity results yet</p></div>)}</div>)}
                 </div>
               </div>
             ) : (
