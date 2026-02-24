@@ -1,14 +1,15 @@
 // frontend/src/components/recommendation/DailySchedulePanel.tsx
 //
-// v7.2 — Compact day pills + bolder journal font
-//   - Day pills: single-line horizontal layout (Day N / Date on left, weather icon + temp on right)
-//   - Reduced pill height — no vertical stacking
-//   - Journal text (Caveat) now uses font-weight 700 for stronger presence
-//   - Intro narrative also bolder
+// v7.2 — Compact day pills + bolder journal font + larger timeline
+//   - Day pills: single-line horizontal layout (Day N / Date left, weather right)
+//   - Unselected pills: subtle theme-color tint background + colored border
+//   - Journal text (Caveat) font-weight 700 for stronger presence
+//   - Timeline icons: 40×40 with themed border/shadow, time labels 10px bold
+//   - Wider gap (20px) between icon column and content
+//   - Journal title: 22px, summary strip: 12px
 //
 // v7.0 — Nuggets externalized (hideNuggets prop)
 // v6.2 — Streaming support
-// v6.1 — Compact headers + larger handwritten font
 // v6.0 — Initial structured daily schedule component
 
 import React, { useState, useEffect } from 'react';
@@ -114,39 +115,29 @@ const TIME_SLOT_DEFAULT_ICONS: Record<string, string> = {
 
 function formatDayDate(dateStr: string): string {
   if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr + 'T12:00:00');
-    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  } catch { return dateStr; }
+  try { const d = new Date(dateStr + 'T12:00:00'); return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+  catch { return dateStr; }
 }
 
 function formatDayDateFull(dateStr: string): string {
   if (!dateStr) return '';
-  try {
-    const d = new Date(dateStr + 'T12:00:00');
-    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-  } catch { return dateStr; }
+  try { const d = new Date(dateStr + 'T12:00:00'); return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }); }
+  catch { return dateStr; }
 }
 
 function renderBoldMarkdown(text: string): React.ReactNode {
   const parts = text.split(/\*\*(.*?)\*\*/g);
-  return parts.map((part, i) =>
-    i % 2 === 1 ? <strong key={i} className="font-semibold text-gray-800">{part}</strong> : <span key={i}>{part}</span>
-  );
+  return parts.map((part, i) => i % 2 === 1 ? <strong key={i} className="font-semibold text-gray-800">{part}</strong> : <span key={i}>{part}</span>);
 }
 
 // ─── Exported helper: extract nuggets ────────────────────────────────────
 
 export function extractNuggets(dailyPlanRec: DailyPlanRec | null): Nugget[] {
   if (!dailyPlanRec) return [];
-  const format = dailyPlanRec.metadata?.format;
-  if (format !== 'structured_v1') return [];
+  if (dailyPlanRec.metadata?.format !== 'structured_v1') return [];
   let structuredPlan: StructuredPlan | null = null;
-  if (dailyPlanRec.metadata?.structured_data) {
-    structuredPlan = dailyPlanRec.metadata.structured_data as StructuredPlan;
-  } else if (dailyPlanRec.reason) {
-    try { structuredPlan = JSON.parse(dailyPlanRec.reason) as StructuredPlan; } catch { return []; }
-  }
+  if (dailyPlanRec.metadata?.structured_data) { structuredPlan = dailyPlanRec.metadata.structured_data as StructuredPlan; }
+  else if (dailyPlanRec.reason) { try { structuredPlan = JSON.parse(dailyPlanRec.reason) as StructuredPlan; } catch { return []; } }
   return structuredPlan?.nuggets || [];
 }
 
@@ -202,10 +193,9 @@ export const DailySchedulePanel: React.FC<Props> = ({ dailyPlanRec, destination,
   const format = dailyPlanRec.metadata?.format;
   const isStructured = format === 'structured_v1';
   let structuredPlan: StructuredPlan | null = null;
-
   if (isStructured) {
     if (dailyPlanRec.metadata?.structured_data) { structuredPlan = dailyPlanRec.metadata.structured_data as StructuredPlan; }
-    else if (dailyPlanRec.reason) { try { structuredPlan = JSON.parse(dailyPlanRec.reason) as StructuredPlan; } catch { /* fallback */ } }
+    else if (dailyPlanRec.reason) { try { structuredPlan = JSON.parse(dailyPlanRec.reason) as StructuredPlan; } catch {} }
   }
 
   // ═══ LEGACY ═══
@@ -274,7 +264,7 @@ export const DailySchedulePanel: React.FC<Props> = ({ dailyPlanRec, destination,
         )}
       </div>
 
-      {/* ── Day pills — COMPACT SINGLE-LINE with weather on right ──── */}
+      {/* ── Day pills — COMPACT SINGLE-LINE with theme tint ──── */}
       <div className="flex gap-1.5 mb-3 overflow-x-auto pb-0.5">
         {daily_schedule.map((day, i) => {
           const t = DAY_THEMES[i % DAY_THEMES.length];
@@ -293,9 +283,7 @@ export const DailySchedulePanel: React.FC<Props> = ({ dailyPlanRec, destination,
                 animation: 'dsp-pillFadeIn 0.4s ease forwards',
               }}
             >
-              {/* Single-line layout: left text + right weather */}
               <div className="flex items-center justify-between gap-1.5">
-                {/* Left: Day label + date */}
                 <div className="flex flex-col items-start leading-tight">
                   <span style={{
                     fontSize: 8, fontWeight: 700,
@@ -307,7 +295,6 @@ export const DailySchedulePanel: React.FC<Props> = ({ dailyPlanRec, destination,
                     color: isActive ? 'white' : '#1E293B',
                   }}>{formatDayDate(day.date)}</span>
                 </div>
-                {/* Right: Weather icon + temp */}
                 {day.weather && (
                   <div className="flex items-center gap-1">
                     <span style={{ fontSize: 14 }}>{day.weather.icon}</span>
