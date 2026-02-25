@@ -12,7 +12,12 @@ import React, { useState } from 'react';
 import { useTripData, getNextWeekDates } from '../../hooks/useTripData';
 import { useItinerary } from '../../hooks/useItinerary';
 
-export const TripSummaryBar: React.FC = () => {
+interface TripSummaryBarProps {
+  onPlanTrip?: () => void;
+  isPlanning?: boolean;
+}
+
+export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ onPlanTrip, isPlanning = false }) => {
   const { tripData, setTripData, resetTrip } = useTripData();
   const { clearItinerary, budget, setBudget } = useItinerary();
 
@@ -175,6 +180,31 @@ export const TripSummaryBar: React.FC = () => {
               </InlineEdit>
             </div>
 
+            {/* ── Plan My Trip button ── */}
+            {onPlanTrip && (
+              <button onClick={onPlanTrip} disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
+                style={{
+                  padding: '9px 24px', borderRadius: 14, border: 'none', flexShrink: 0,
+                  background: (isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate)
+                    ? '#D1D5DB' : 'linear-gradient(135deg, #8B5CF6, #EC4899, #F97316)',
+                  backgroundSize: '200% 100%',
+                  color: 'white', fontSize: 13, fontWeight: 700,
+                  cursor: (isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate) ? 'not-allowed' : 'pointer',
+                  boxShadow: (isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate) ? 'none' : '0 4px 16px -2px rgba(139,92,246,0.35)',
+                  display: 'flex', alignItems: 'center', gap: 7,
+                  transition: 'all 0.3s',
+                }}>
+                {isPlanning ? (
+                  <>
+                    <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'planSpin 0.8s linear infinite' }} />
+                    Planning...
+                  </>
+                ) : (
+                  <>🚀 Plan My Trip</>
+                )}
+              </button>
+            )}
+
             {/* ── Right icons ── */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
               <button style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🔔</button>
@@ -218,6 +248,7 @@ export const TripSummaryBar: React.FC = () => {
       </header>
 
       {showTripMenu && <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setShowTripMenu(false)} />}
+      <style>{`@keyframes planSpin { to { transform: rotate(360deg); } }`}</style>
     </>
   );
 };

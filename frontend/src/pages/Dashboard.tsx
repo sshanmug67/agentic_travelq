@@ -278,7 +278,7 @@ export const Dashboard: React.FC = () => {
       `}</style>
 
       {/* ══════ Header (TripSummaryBar includes logo, trip pill, budget bar) ══════ */}
-      <TripSummaryBar />
+      <TripSummaryBar onPlanTrip={() => handlePlanTrip(naturalLanguageRequest)} isPlanning={isPlanning} />
 
       {/* ══════ THREE-COLUMN PLANNING SECTION ══════ */}
       <div style={{ maxWidth: 1440, margin: '0 auto', padding: '20px 28px' }}>
@@ -301,36 +301,22 @@ export const Dashboard: React.FC = () => {
             <div className="lg:h-[380px]"><PreferencesPanel preferences={preferences} onUpdate={useTripData.getState().updatePreferences} /></div>
             <div className="lg:h-[380px]"><AgentFeedColumn pollData={pollData} isActive={isPlanning} resetKey={feedResetKey} /></div>
           </div>
-          <div className="max-w-full">
-            <button onClick={() => handlePlanTrip(naturalLanguageRequest)} disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
-              style={{
-                width: '100%', padding: 15, borderRadius: 18, border: 'none',
-                background: (isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate)
-                  ? '#D1D5DB' : 'linear-gradient(135deg, #8B5CF6, #EC4899, #F97316)',
-                backgroundSize: '200% 100%',
-                color: 'white', fontSize: 16, fontWeight: 800, cursor: (isPlanning || !tripData.destination) ? 'not-allowed' : 'pointer',
-                boxShadow: (isPlanning || !tripData.destination) ? 'none' : '0 8px 32px -4px rgba(139,92,246,0.4)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                transition: 'all 0.3s',
-              }}>
-              {isPlanning ? (<><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>Planning Your Trip...</>) : (<>🚀 Plan My Trip</>)}
-            </button>
-            {showProgressBar && !isPlanningCollapsed && (
-              <div style={{
-                marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                padding: '10px 20px', borderRadius: 14, cursor: (isComplete || isFailed) ? 'pointer' : 'default',
-                background: isComplete ? 'linear-gradient(90deg, #059669, #10B981)' : isFailed ? 'linear-gradient(90deg, #DC2626, #EF4444)' : 'linear-gradient(90deg, #6c5ce7, #a855f7)',
-                color: 'white', fontSize: 13, fontWeight: 600,
-              }} onClick={() => { if (isComplete || isFailed) setIsPlanningCollapsed(true); }}>
-                <span>
-                  {isPlanning && <span className="inline-block animate-spin mr-2" style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', verticalAlign: 'middle' }} />}
-                  {isComplete ? `✅ Trip planned in ${formatTime(elapsedTime)}` : isFailed ? '❌ Planning failed' : `${completedCount}/${totalAgents} agents complete`}
-                </span>
-                {(isComplete || isFailed) && <span style={{ cursor: 'pointer', fontSize: 12 }}>▲ Collapse</span>}
-                {isPlanning && <span style={{ fontSize: 11, opacity: 0.6, fontFamily: 'monospace' }}>{formatTime(elapsedTime)}</span>}
-              </div>
-            )}
-          </div>
+          {/* Progress bar only — Plan button is now in the header */}
+          {showProgressBar && !isPlanningCollapsed && (
+            <div style={{
+              marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 20px', borderRadius: 14, cursor: (isComplete || isFailed) ? 'pointer' : 'default',
+              background: isComplete ? 'linear-gradient(90deg, #059669, #10B981)' : isFailed ? 'linear-gradient(90deg, #DC2626, #EF4444)' : 'linear-gradient(90deg, #6c5ce7, #a855f7)',
+              color: 'white', fontSize: 13, fontWeight: 600,
+            }} onClick={() => { if (isComplete || isFailed) setIsPlanningCollapsed(true); }}>
+              <span>
+                {isPlanning && <span className="inline-block animate-spin mr-2" style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', verticalAlign: 'middle' }} />}
+                {isComplete ? `✅ Trip planned in ${formatTime(elapsedTime)}` : isFailed ? '❌ Planning failed' : `${completedCount}/${totalAgents} agents complete`}
+              </span>
+              {(isComplete || isFailed) && <span style={{ cursor: 'pointer', fontSize: 12 }}>▲ Collapse</span>}
+              {isPlanning && <span style={{ fontSize: 11, opacity: 0.6, fontFamily: 'monospace' }}>{formatTime(elapsedTime)}</span>}
+            </div>
+          )}
         </div>
       </div>
 
