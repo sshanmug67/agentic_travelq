@@ -244,7 +244,7 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
             boxShadow: '0 4px 12px rgba(239,68,68,0.3)',
           }}>🍽️</div>
 
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
             <span
               style={{ fontFamily: FONT, fontSize: 13, fontWeight: 700, color: '#991B1B', marginBottom: 6, display: 'block' }}
               className={clickable ? 'cursor-pointer hover:text-red-700' : ''}
@@ -254,14 +254,14 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
             </span>
 
             {restaurants.length > 0 ? (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, overflow: 'hidden' }}>
                 {restaurants.map((r) => {
                   const photo = getPhoto(r);
                   return (
                   <div
                     key={r.id}
                     className={`hover:shadow-md hover:-translate-y-0.5 transition-all group relative ${clickable ? 'cursor-pointer' : ''}`}
-                    style={{ borderRadius: 11, padding: 8, background: 'white', border: '1.5px solid #FEE2E2', display: 'flex', alignItems: 'center', gap: 8 }}
+                    style={{ borderRadius: 11, padding: 8, background: 'white', border: '1.5px solid #FEE2E2', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}
                     onClick={() => handleItemClick('restaurants', String(r.id))}
                   >
                     {/* Delete button */}
@@ -273,7 +273,7 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
                     {/* Info */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 20, marginBottom: 1 }}>{getRestaurantEmoji(r)}</div>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#1E293B', lineHeight: 1.2 }} className="truncate">{r.name}</div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#1E293B', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.name}</div>
                       <div style={{ fontSize: 9.5, color: '#94A3B8' }}>⭐ {r.rating || (r as any).google_rating}</div>
                     </div>
                     {/* Photo thumbnail */}
@@ -316,7 +316,7 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
             boxShadow: '0 4px 12px rgba(16,185,129,0.3)',
           }}>🎭</div>
 
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
             <span
               style={{ fontFamily: FONT, fontSize: 13, fontWeight: 700, color: '#065F46', marginBottom: 6, display: 'block' }}
               className={clickable ? 'cursor-pointer hover:text-emerald-700' : ''}
@@ -326,14 +326,14 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
             </span>
 
             {activities.length > 0 ? (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, overflow: 'hidden' }}>
                 {activities.map((a) => {
                   const photo = getPhoto(a);
                   return (
                   <div
                     key={a.id}
                     className={`hover:shadow-md hover:-translate-y-0.5 transition-all group relative ${clickable ? 'cursor-pointer' : ''}`}
-                    style={{ borderRadius: 11, padding: 8, background: 'white', border: '1.5px solid #D1FAE5', display: 'flex', alignItems: 'center', gap: 8 }}
+                    style={{ borderRadius: 11, padding: 8, background: 'white', border: '1.5px solid #D1FAE5', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, overflow: 'hidden' }}
                     onClick={() => handleItemClick('activities', String(a.id))}
                   >
                     {/* Delete button */}
@@ -345,7 +345,7 @@ export const ItinerarySidebar: React.FC<ItinerarySidebarProps> = ({ onSectionCli
                     {/* Info */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 20, marginBottom: 1 }}>{getActivityEmoji(a)}</div>
-                      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#1E293B', lineHeight: 1.2 }} className="truncate">{a.name}</div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, color: '#1E293B', lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</div>
                       <div style={{ fontSize: 9.5, color: '#94A3B8' }}>⭐ {a.rating || (a as any).google_rating}</div>
                     </div>
                     {/* Photo thumbnail */}
