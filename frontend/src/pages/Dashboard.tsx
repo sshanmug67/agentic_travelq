@@ -501,7 +501,7 @@ export const Dashboard: React.FC = () => {
       })()}
 
       {/* ══════ Results + Itinerary ══════ */}
-      <div className="px-6 lg:px-[10%] pb-6">
+      <div style={{ maxWidth: 1440, margin: '0 auto', padding: '0 28px 24px' }}>
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <div className="lg:col-span-3">
             {hasResults ? (

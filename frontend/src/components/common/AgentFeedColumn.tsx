@@ -52,9 +52,31 @@ const ProgressRing = ({ progress, size = 36, stroke = 3 }: { progress: number; s
 const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive, resetKey }) => {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [viewMode, setViewMode] = useState<ViewMode>('timeline');
+  const [elapsedTime, setElapsedTime] = useState(0);
   const feedRef = useRef<HTMLDivElement>(null);
   const prevStatesRef = useRef<Record<string, string>>({});
   const prevMessagesRef = useRef<Record<string, string | null>>({});
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startRef = useRef<number>(Date.now());
+
+  // Elapsed time tracker
+  useEffect(() => {
+    if (isActive) {
+      startRef.current = Date.now();
+      setElapsedTime(0);
+      timerRef.current = setInterval(() => setElapsedTime(Math.floor((Date.now() - startRef.current) / 1000)), 1000);
+    }
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [isActive]);
+
+  // Stop timer on completion
+  useEffect(() => {
+    if (pollData?.status === 'completed' || pollData?.status === 'failed') {
+      if (timerRef.current) clearInterval(timerRef.current);
+    }
+  }, [pollData?.status]);
+
+  const fmtElapsed = (s: number) => { const m = Math.floor(s / 60); const sec = s % 60; return m > 0 ? `${m}m ${sec} secs` : `${sec} secs`; };
 
   // Reset
   useEffect(() => {
@@ -153,9 +175,12 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive, r
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ fontSize: 18 }}>🤖</span>
           <h3 style={{ fontSize: 15, fontWeight: 700, color: '#1E293B', margin: 0 }}>Agent Feed</h3>
-          {isComplete && <span style={{ fontSize: 9, fontWeight: 700, color: '#059669', background: '#ECFDF5', padding: '2px 7px', borderRadius: 7 }}>✓ Done</span>}
+          {isComplete && <span style={{ fontSize: 12, fontWeight: 700, color: '#059669', background: '#ECFDF5', padding: '3px 9px', borderRadius: 8 }}>✓ Done · {fmtElapsed(elapsedTime)}</span>}
           {isActive && !isComplete && (
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#EF4444', display: 'inline-block', animation: 'agentPulse 1.2s ease-in-out infinite', boxShadow: '0 0 6px rgba(239,68,68,0.5)' }} />
+            <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#10B981', display: 'inline-block', animation: 'agentPulse 1.2s ease-in-out infinite', boxShadow: '0 0 6px rgba(16,185,129,0.5)' }} />
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#8B5CF6' }}>Completed {completedCount}/{totalAgents} · {fmtElapsed(elapsedTime)}</span>
+            </span>
           )}
         </div>
         <ProgressRing progress={progressPct} />
@@ -241,7 +266,7 @@ const AgentFeedColumn: React.FC<AgentFeedColumnProps> = ({ pollData, isActive, r
         {/* Completion summary */}
         {isComplete && feed.length > 0 && (
           <div style={{ marginTop: 10, padding: '8px 14px', borderRadius: 12, background: 'linear-gradient(90deg, #ECFDF5, #F0FDFA)', border: '1px solid #A7F3D0', textAlign: 'center' }}>
-            <span style={{ fontSize: 12, fontWeight: 600, color: '#059669' }}>✓ All {completedCount} agents finished — {feed.length} events</span>
+            <span style={{ fontSize: 12, fontWeight: 600, color: '#059669' }}>✓ All {completedCount} agents finished in {fmtElapsed(elapsedTime)} — {feed.length} events</span>
           </div>
         )}
       </div>
