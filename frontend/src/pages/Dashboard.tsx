@@ -11,7 +11,6 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ItinerarySidebar } from '../components/itinerary/ItinerarySidebar';
 import { NaturalLanguageInput } from '../components/common/NaturalLanguageInput';
 import { PreferencesPanel } from '../components/common/PreferencesPanel';
-import { PreferencesSummary } from '../components/common/PreferencesSummary';
 import { TripSummaryBar } from '../components/common/TripSummaryBar';
 import AgentFeedColumn from '../components/common/AgentFeedColumn';
 import { FlightCard } from '../components/flight/FlightCard';
@@ -222,7 +221,9 @@ export const Dashboard: React.FC = () => {
     if (!tripData.destination) { alert('Please enter a destination'); return; }
     if (!tripData.startDate || !tripData.endDate) { alert('Please enter travel dates'); return; }
     clearTrip(); setFeedResetKey((k) => k + 1);
-    await submitTrip({ tripId: tripData.id, userRequest, tripDetails: { origin: tripData.origin, destination: tripData.destination, startDate: tripData.startDate, endDate: tripData.endDate, travelers: tripData.travelers, budget: tripData.totalBudget }, preferences, currentItinerary: { flight: selectedFlight, hotel: selectedHotel, restaurants: selectedRestaurants, activities: selectedActivities } });
+    // Always create a fresh trip — don't send stale tripId from a previous search.
+    // The new trip_id is returned by the backend and stored via processResults → setTripData({ id }).
+    await submitTrip({ userRequest, tripDetails: { origin: tripData.origin, destination: tripData.destination, startDate: tripData.startDate, endDate: tripData.endDate, travelers: tripData.travelers, budget: tripData.totalBudget }, preferences, currentItinerary: { flight: selectedFlight, hotel: selectedHotel, restaurants: selectedRestaurants, activities: selectedActivities } });
   };
 
   const handleSelectFlight = (flight: any) => selectFlight(flight, flight.id === aiRecommendedFlightId ? 'ai' : 'user');
@@ -267,7 +268,7 @@ export const Dashboard: React.FC = () => {
   const showProgressBar = isPlanning || isComplete || isFailed;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-purple-50 via-pink-50 to-orange-50">
+    <div style={{ minHeight: '100vh', background: 'linear-gradient(160deg, #FAF5FF 0%, #FDF4FF 25%, #FFF7ED 55%, #FFFBEB 100%)' }}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@400;500;600;700&display=swap');
         .journal-text { font-family: 'Caveat', cursive; }
@@ -277,38 +278,58 @@ export const Dashboard: React.FC = () => {
         .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
       `}</style>
 
-      {/* ══════ Header ══════ */}
-      <div className="bg-white shadow-md sticky top-0 z-40">
-        <div className="px-6 lg:px-[10%] py-3 flex items-center justify-between">
-          <h1 className="text-[25px] font-bold bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">TravelQ</h1>
-          <div className="flex items-center gap-4"><button className="text-gray-600 hover:text-gray-800">🔍</button><button className="text-gray-600 hover:text-gray-800">🔔</button><button className="text-gray-600 hover:text-gray-800">👤 Profile</button><button className="text-gray-600 hover:text-gray-800">⚙️</button></div>
-        </div>
-      </div>
+      {/* ══════ Header (TripSummaryBar includes logo, trip pill, budget bar) ══════ */}
       <TripSummaryBar />
-      <PreferencesSummary preferences={preferences} />
 
       {/* ══════ THREE-COLUMN PLANNING SECTION ══════ */}
-      <div className="px-6 lg:px-[10%] py-4">
+      <div style={{ maxWidth: 1440, margin: '0 auto', padding: '20px 28px' }}>
         {showProgressBar && (
-          <div className="overflow-hidden transition-all duration-500 ease-in-out" style={{ maxHeight: isPlanningCollapsed ? '36px' : '0px', opacity: isPlanningCollapsed ? 1 : 0, marginBottom: isPlanningCollapsed ? '12px' : '0px' }}>
-            <div onClick={() => setIsPlanningCollapsed(false)} className="relative h-8 overflow-hidden cursor-pointer shadow-lg rounded-xl" style={{ background: isComplete ? '#0d1f0d' : isFailed ? '#2e1a1a' : '#1a1a2e' }}>
-              <div className="absolute top-0 left-0 h-full transition-all duration-700" style={{ width: `${progressPercent}%`, background: isComplete ? 'linear-gradient(90deg, #10b981, #34d399)' : isFailed ? 'linear-gradient(90deg, #ef4444, #f87171)' : 'linear-gradient(90deg, #6c5ce7, #a855f7, #ec4899)' }} />
-              <div className="relative z-10 flex items-center justify-between h-full px-4"><div className="flex items-center gap-2">{isComplete && <span className="text-emerald-400 font-bold text-xs">✓</span>}{isFailed && <span className="text-red-400 font-bold text-xs">✕</span>}<span className="text-white text-xs font-medium">{isComplete ? `Trip planned in ${formatTime(elapsedTime)}` : isFailed ? 'Planning failed' : `Planning... ${completedCount}/${totalAgents}`}</span></div><span className="text-white font-bold text-[11px] tracking-wide drop-shadow-sm">Click to expand ▼</span></div>
+          <div className="overflow-hidden transition-all duration-500 ease-in-out" style={{ maxHeight: isPlanningCollapsed ? '44px' : '0px', opacity: isPlanningCollapsed ? 1 : 0, marginBottom: isPlanningCollapsed ? '12px' : '0px' }}>
+            <div onClick={() => setIsPlanningCollapsed(false)} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 20px', borderRadius: 14, cursor: 'pointer',
+              background: isComplete ? 'linear-gradient(90deg, #059669, #10B981)' : isFailed ? 'linear-gradient(90deg, #DC2626, #EF4444)' : 'linear-gradient(90deg, #6c5ce7, #a855f7)',
+              color: 'white', fontSize: 13, fontWeight: 600,
+            }}>
+              <span>{isComplete ? `✅ Trip planned in ${formatTime(elapsedTime)}` : isFailed ? '❌ Planning failed' : `Planning... ${completedCount}/${totalAgents}`}</span>
+              <span style={{ fontSize: 12 }}>Click to expand ▼</span>
             </div>
           </div>
         )}
         <div className="transition-all duration-500 ease-in-out overflow-hidden" style={{ maxHeight: isPlanningCollapsed ? '0px' : '600px', opacity: isPlanningCollapsed ? 0 : 1 }}>
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-5">
-            <div className="lg:h-[380px]"><div className="bg-white rounded-xl shadow-lg border-2 border-gray-300 overflow-hidden h-full flex flex-col"><NaturalLanguageInput value={naturalLanguageRequest} onChange={setNaturalLanguageRequest} onSubmit={handlePlanTrip} isProcessing={isPlanning} /></div></div>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 mb-5">
+            <div className="lg:h-[380px]"><NaturalLanguageInput value={naturalLanguageRequest} onChange={setNaturalLanguageRequest} onSubmit={handlePlanTrip} isProcessing={isPlanning} /></div>
             <div className="lg:h-[380px]"><PreferencesPanel preferences={preferences} onUpdate={useTripData.getState().updatePreferences} /></div>
             <div className="lg:h-[380px]"><AgentFeedColumn pollData={pollData} isActive={isPlanning} resetKey={feedResetKey} /></div>
           </div>
           <div className="max-w-full">
-            <button onClick={() => handlePlanTrip(naturalLanguageRequest)} disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate} className="w-full bg-gradient-to-r from-purple-600 via-pink-600 to-orange-600 hover:from-purple-700 hover:via-pink-700 hover:to-orange-700 disabled:from-gray-400 disabled:via-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed text-white font-bold text-[17px] py-2.5 px-8 rounded-xl shadow-2xl transition-all duration-300 transform hover:scale-[1.02] disabled:hover:scale-100 flex items-center justify-center gap-3">
+            <button onClick={() => handlePlanTrip(naturalLanguageRequest)} disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
+              style={{
+                width: '100%', padding: 15, borderRadius: 18, border: 'none',
+                background: (isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate)
+                  ? '#D1D5DB' : 'linear-gradient(135deg, #8B5CF6, #EC4899, #F97316)',
+                backgroundSize: '200% 100%',
+                color: 'white', fontSize: 16, fontWeight: 800, cursor: (isPlanning || !tripData.destination) ? 'not-allowed' : 'pointer',
+                boxShadow: (isPlanning || !tripData.destination) ? 'none' : '0 8px 32px -4px rgba(139,92,246,0.4)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                transition: 'all 0.3s',
+              }}>
               {isPlanning ? (<><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>Planning Your Trip...</>) : (<>🚀 Plan My Trip</>)}
             </button>
             {showProgressBar && !isPlanningCollapsed && (
-              <div className="mt-2"><div className="relative h-7 overflow-hidden shadow-lg rounded-xl cursor-pointer" style={{ background: isComplete ? '#0d1f0d' : isFailed ? '#2e1a1a' : '#1a1a2e' }} onClick={() => { if (isComplete || isFailed) setIsPlanningCollapsed(true); }}><div className="absolute top-0 left-0 h-full transition-all duration-700 ease-out" style={{ width: `${isPlanning ? Math.max(progressPercent, 5) : progressPercent}%`, background: isComplete ? 'linear-gradient(90deg, #10b981, #34d399)' : isFailed ? 'linear-gradient(90deg, #ef4444, #f87171)' : 'linear-gradient(90deg, #6c5ce7 0%, #a855f7 50%, #ec4899 100%)' }} /><div className="relative z-10 flex items-center justify-between h-full px-4"><div className="flex items-center gap-2">{isPlanning && <div className="animate-spin w-3.5 h-3.5 border-2 border-white/20 border-t-white rounded-full" />}{isComplete && <span className="text-emerald-400 font-bold text-sm">✓</span>}{isFailed && <span className="text-red-400 font-bold text-sm">✕</span>}<span className="text-white text-xs font-medium">{isComplete ? `Trip planned in ${formatTime(elapsedTime)}` : isFailed ? 'Planning failed' : `${completedCount}/${totalAgents} agents complete`}</span></div><div className="flex items-center gap-3">{isPlanning && <span className="text-white/50 text-[11px] font-mono tabular-nums">{formatTime(elapsedTime)}</span>}{(isComplete || isFailed) && <span className="text-white font-bold text-[11px] tracking-wide drop-shadow-sm">▲ Collapse</span>}</div></div></div></div>
+              <div style={{
+                marginTop: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '10px 20px', borderRadius: 14, cursor: (isComplete || isFailed) ? 'pointer' : 'default',
+                background: isComplete ? 'linear-gradient(90deg, #059669, #10B981)' : isFailed ? 'linear-gradient(90deg, #DC2626, #EF4444)' : 'linear-gradient(90deg, #6c5ce7, #a855f7)',
+                color: 'white', fontSize: 13, fontWeight: 600,
+              }} onClick={() => { if (isComplete || isFailed) setIsPlanningCollapsed(true); }}>
+                <span>
+                  {isPlanning && <span className="inline-block animate-spin mr-2" style={{ width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', verticalAlign: 'middle' }} />}
+                  {isComplete ? `✅ Trip planned in ${formatTime(elapsedTime)}` : isFailed ? '❌ Planning failed' : `${completedCount}/${totalAgents} agents complete`}
+                </span>
+                {(isComplete || isFailed) && <span style={{ cursor: 'pointer', fontSize: 12 }}>▲ Collapse</span>}
+                {isPlanning && <span style={{ fontSize: 11, opacity: 0.6, fontFamily: 'monospace' }}>{formatTime(elapsedTime)}</span>}
+              </div>
             )}
           </div>
         </div>
@@ -336,8 +357,8 @@ export const Dashboard: React.FC = () => {
         const borderClrs: Record<string, string> = { sky: 'rgba(56,189,248,0.25)', purple: 'rgba(167,139,250,0.25)', orange: 'rgba(251,146,60,0.25)', green: 'rgba(74,222,128,0.25)', emerald: 'rgba(52,211,153,0.25)' };
 
         return (
-          <div className="px-6 lg:px-[10%] pb-8">
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-4">
+          <div style={{ maxWidth: 1440, margin: '0 auto', padding: '0 28px 32px' }}>
+            <div style={{ background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)', borderRadius: 24, padding: 28, border: '1px solid rgba(139,92,246,0.1)' }}>
 
               {/* Header */}
               <div className="flex items-center gap-3 mb-4">

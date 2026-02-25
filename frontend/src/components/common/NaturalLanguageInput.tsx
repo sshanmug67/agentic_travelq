@@ -1,6 +1,11 @@
 // frontend/src/components/common/NaturalLanguageInput.tsx
 //
-// v2: Compact header matching Agent Feed / Preferences panel height
+// v3 — Glass card matching TravelQ v3 mockup:
+//   - Glass card: rgba(255,255,255,0.85) + blur(20px), rounded-20
+//   - No heavy header bar — just inline icon + title
+//   - Lighter textarea: rounded-14, subtle border
+//   - Suggestion chips as individual rounded pills with hover-to-purple effect
+//   - Shorter example prompts matching mockup
 
 import React from 'react';
 
@@ -18,10 +23,10 @@ export const NaturalLanguageInput: React.FC<NaturalLanguageInputProps> = ({
   isProcessing,
 }) => {
   const examplePrompts = [
-    "Find cheaper flights",
-    "Add Italian restaurants near my hotel",
-    "Show museums within walking distance",
-    "I prefer direct flights only",
+    'Find cheaper flights',
+    'Italian restaurants near hotel',
+    'Museums within walking distance',
+    'Direct flights only',
   ];
 
   const handleSubmit = async () => {
@@ -30,56 +35,73 @@ export const NaturalLanguageInput: React.FC<NaturalLanguageInputProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Compact header — matches Agent Feed / Preferences header height */}
-      <div className="px-4 py-2.5 border-b-2 border-gray-200 flex items-center gap-2 flex-shrink-0 bg-gradient-to-r from-gray-50 to-white">
-        <span className="text-base">💬</span>
-        <span className="text-[15px] font-bold text-gray-800">Refine Your Search</span>
-        <span className="text-[12px] text-gray-400 font-medium">(Optional)</span>
+    <div style={{
+      background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+      borderRadius: 20, padding: 22, height: '100%', display: 'flex', flexDirection: 'column',
+      border: '1px solid rgba(139,92,246,0.08)',
+      transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+    }}>
+      {/* Title */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <span style={{ fontSize: 18 }}>💬</span>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: '#1E293B', margin: 0 }}>Refine Your Search</h3>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 p-4 space-y-3 overflow-y-auto">
-        {/* Input Box */}
-        <div className="relative">
-          <textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onKeyPress={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                handleSubmit();
-              }
-            }}
-            placeholder='e.g., "Add Italian restaurants", "Direct flights only"'
-            className="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 resize-none transition-all text-[14px]"
-            rows={4}
-            disabled={isProcessing}
-          />
-        </div>
+      {/* Textarea */}
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            handleSubmit();
+          }
+        }}
+        placeholder='e.g. "Add Italian restaurants" or "Direct flights only"'
+        disabled={isProcessing}
+        style={{
+          width: '100%', height: 72, padding: 12, borderRadius: 14,
+          border: '2px solid #F1F5F9', fontSize: 13, resize: 'none', outline: 'none',
+          color: '#475569', background: 'rgba(241,245,249,0.5)', boxSizing: 'border-box',
+          transition: 'border-color 0.2s',
+        }}
+        onFocus={(e) => { e.currentTarget.style.borderColor = '#C4B5FD'; }}
+        onBlur={(e) => { e.currentTarget.style.borderColor = '#F1F5F9'; }}
+      />
 
-        {/* Example Prompts */}
-        {value === '' && !isProcessing && (
-          <div className="bg-purple-50 p-3 rounded-lg border border-purple-200">
-            <p className="text-[13px] font-semibold text-purple-900 mb-2">💡 Try asking:</p>
-            <div className="space-y-0.5">
-              {examplePrompts.map((prompt, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => onChange(prompt)}
-                  className="block text-left w-full text-[13px] text-purple-700 hover:text-purple-900 hover:bg-purple-100 px-2 py-1 rounded transition-colors"
-                >
-                  • {prompt}
-                </button>
-              ))}
-            </div>
+      {/* Suggestion chips */}
+      {value === '' && !isProcessing && (
+        <div style={{ marginTop: 14, flex: 1 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, color: '#8B5CF6' }}>💡 Try asking:</span>
+          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 5 }}>
+            {examplePrompts.map((prompt, i) => (
+              <button
+                key={i}
+                onClick={() => onChange(prompt)}
+                style={{
+                  padding: '7px 12px', borderRadius: 10, fontSize: 12, fontWeight: 500,
+                  color: '#6D28D9', background: 'rgba(139,92,246,0.06)',
+                  border: '1px solid rgba(139,92,246,0.1)',
+                  cursor: 'pointer', textAlign: 'left',
+                  transition: 'all 0.2s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#8B5CF6';
+                  e.currentTarget.style.color = 'white';
+                  e.currentTarget.style.transform = 'scale(1.02)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = 'rgba(139,92,246,0.06)';
+                  e.currentTarget.style.color = '#6D28D9';
+                  e.currentTarget.style.transform = 'scale(1)';
+                }}
+              >
+                {prompt}
+              </button>
+            ))}
           </div>
-        )}
-
-        <p className="text-[11px] text-gray-500 italic">
-          💡 Tip: Leave empty to use only trip details and preferences, or add specific requests to refine your search.
-        </p>
-      </div>
+        </div>
+      )}
     </div>
   );
 };

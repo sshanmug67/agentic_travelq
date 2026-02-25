@@ -250,7 +250,7 @@ export const DailySchedulePanel: React.FC<Props> = ({ dailyPlanRec, destination,
       {/* Section header */}
       <div className="flex items-center gap-1.5 mb-2.5">
         <span style={{ fontSize: 15 }}>📅</span>
-        <h4 className="journal-text text-[22px] font-bold text-gray-800">
+        <h4 className="journal-text text-[20px] font-bold text-gray-800">
           Your {displayDestination} Journal
         </h4>
         <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full">
@@ -334,7 +334,7 @@ export const DailySchedulePanel: React.FC<Props> = ({ dailyPlanRec, destination,
       {isStreaming && (
         <div className="flex items-center gap-2 mb-3 px-1">
           <div className="animate-spin w-3.5 h-3.5 border-2 border-purple-200 border-t-purple-600 rounded-full flex-shrink-0" />
-          <span className="journal-text text-purple-600" style={{ fontSize: 21, fontWeight: 700 }}>
+          <span className="journal-text text-purple-600" style={{ fontSize: 17, fontWeight: 700 }}>
             ✏️ Planning day {Math.min(daysComplete + 1, daysTotal)} of {daysTotal}...
           </span>
         </div>
@@ -371,7 +371,7 @@ export const DailySchedulePanel: React.FC<Props> = ({ dailyPlanRec, destination,
           {/* Journal intro — BOLDER */}
           {currentDay.intro && (
             <div className="px-4 pt-3 pb-2" style={{ borderBottom: `1px dashed ${theme.color}15` }}>
-              <p className="journal-text leading-relaxed" style={{ fontSize: '22px', fontWeight: 700, color: '#3D2E1E', lineHeight: 1.45 }}>
+              <p className="journal-text leading-relaxed" style={{ fontSize: '18px', fontWeight: 700, color: '#3D2E1E', lineHeight: 1.45 }}>
                 ✏️ {currentDay.intro}
               </p>
             </div>
@@ -434,7 +434,7 @@ export const DailySchedulePanel: React.FC<Props> = ({ dailyPlanRec, destination,
                       )}
                     </div>
                     {slot.narrative && (
-                      <p className="journal-text mt-1 leading-relaxed" style={{ fontSize: '22px', fontWeight: 700, color: '#4A3728', lineHeight: 1.4 }}>
+                      <p className="journal-text mt-1 leading-relaxed" style={{ fontSize: '18px', fontWeight: 700, color: '#4A3728', lineHeight: 1.4 }}>
                         {slot.narrative}
                       </p>
                     )}

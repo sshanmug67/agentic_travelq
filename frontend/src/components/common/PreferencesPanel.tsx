@@ -1,19 +1,17 @@
 // frontend/src/components/common/PreferencesPanel.tsx
 //
-// v6 — Compact controls matching Agent Feed density
-//   - Tab row: smaller text, tighter padding, reduced icon size
-//   - Chips: smaller padding, smaller font, inline star/remove
-//   - Input row: shorter height, smaller font
-//   - Suggestions: tighter pills
-//   - Activity/Restaurant settings: condensed spacing
-//   - Overall: less vertical padding between sections
+// v7 — Glass card matching TravelQ v3 mockup:
+//   - Glass card: rgba(255,255,255,0.85) + blur(20px), rounded-20
+//   - Segmented tab control: #F8FAFC tray, white active pill with shadow
+//   - Count badges: purple when active, gray inactive
+//   - Selected chips: star + name + PRIORITY badge + × remove
+//   - Add input + purple gradient button
+//   - Suggestion chips: dashed border with + prefix
+//   - Activity/Restaurant settings: preserved as compact pill groups
 
 import React, { useState } from 'react';
 
-interface Preference {
-  name: string;
-  preferred?: boolean;
-}
+interface Preference { name: string; preferred?: boolean; }
 
 interface ActivityPrefs {
   pace: string;
@@ -32,11 +30,7 @@ interface PreferencesData {
   hotelChains: Preference[];
   cuisines: Preference[];
   activities: Preference[];
-  budget: {
-    meals: string;
-    accommodation: string;
-    activities: string;
-  };
+  budget: { meals: string; accommodation: string; activities: string; };
   activityPrefs: ActivityPrefs;
   restaurantPrefs: RestaurantPrefs;
 }
@@ -52,16 +46,13 @@ const tabToKey = (tab: TabType): keyof PreferencesData =>
   tab === 'restaurant' ? 'cuisines' : tab === 'hotels' ? 'hotelChains' : tab;
 
 const SUGGESTIONS: Record<TabType, string[]> = {
-  airlines: ['United Airlines', 'Delta', 'American Airlines', 'British Airways', 'Southwest', 'JetBlue', 'Emirates', 'Lufthansa'],
-  hotels: ['Marriott', 'Hilton', 'Hyatt', 'IHG', 'Best Western', 'Radisson', 'Wyndham', 'Four Seasons'],
-  activities: ['Museums', 'Historic Landmarks', 'Walking Tours', 'Theater', 'Parks & Gardens', 'Shopping', 'Nightlife', 'Food Tours', 'Art Galleries', 'Outdoor Adventures'],
-  restaurant: ['British', 'Indian', 'Italian', 'Chinese', 'Japanese', 'Mexican', 'French', 'Thai', 'Mediterranean', 'American'],
+  airlines: ['American Airlines', 'Southwest', 'JetBlue', 'Emirates', 'Lufthansa', 'Delta', 'British Airways'],
+  hotels: ['Marriott', 'Hilton', 'Hyatt', 'IHG', 'Best Western', 'Four Seasons', 'Radisson'],
+  activities: ['Museums', 'Historic Landmarks', 'Walking Tours', 'Theater', 'Parks & Gardens', 'Shopping', 'Nightlife', 'Food Tours'],
+  restaurant: ['British', 'Indian', 'Italian', 'Chinese', 'Japanese', 'French', 'Thai', 'Mediterranean'],
 };
 
-export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
-  preferences,
-  onUpdate,
-}) => {
+export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({ preferences, onUpdate }) => {
   const [activeTab, setActiveTab] = useState<TabType>('airlines');
   const [newItem, setNewItem] = useState('');
 
@@ -69,292 +60,139 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
     { id: 'airlines', label: 'Airlines', icon: '✈️' },
     { id: 'hotels', label: 'Hotels', icon: '🏨' },
     { id: 'activities', label: 'Activities', icon: '🎭' },
-    { id: 'restaurant', label: 'Restaurant', icon: '🍽️' },
+    { id: 'restaurant', label: 'Cuisine', icon: '🍽️' },
   ];
 
   const storeKey = tabToKey(activeTab);
   const items = (preferences[storeKey] as Preference[]) || [];
   const itemNames = new Set(items.map((i) => i.name.toLowerCase()));
-
-  const availableSuggestions = SUGGESTIONS[activeTab].filter(
-    (s) => !itemNames.has(s.toLowerCase())
-  );
+  const availableSuggestions = SUGGESTIONS[activeTab].filter((s) => !itemNames.has(s.toLowerCase()));
 
   const addItem = (name: string, preferred = false) => {
-    if (!name.trim()) return;
-    if (itemNames.has(name.trim().toLowerCase())) return;
+    if (!name.trim() || itemNames.has(name.trim().toLowerCase())) return;
     onUpdate(storeKey, [...items, { name: name.trim(), preferred }]);
     setNewItem('');
   };
+  const removeItem = (name: string) => onUpdate(storeKey, items.filter((p) => p.name !== name));
+  const togglePreferred = (name: string) => onUpdate(storeKey, items.map((p) => p.name === name ? { ...p, preferred: !p.preferred } : p));
+  const getTabCount = (tab: TabType) => ((preferences[tabToKey(tab)] as Preference[]) || []).length;
 
-  const removeItem = (name: string) => {
-    onUpdate(storeKey, items.filter((p) => p.name !== name));
-  };
-
-  const togglePreferred = (name: string) => {
-    onUpdate(
-      storeKey,
-      items.map((p) =>
-        p.name === name ? { ...p, preferred: !p.preferred } : p
-      )
-    );
-  };
-
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') addItem(newItem);
-  };
-
-  const getTabCount = (tab: TabType) => {
-    const key = tabToKey(tab);
-    return ((preferences[key] as Preference[]) || []).length;
-  };
-
-  // ── Shared compact pill button style ──────────────────────────
-  const pillClass = (isSelected: boolean) =>
-    `text-[10px] px-2 py-1 rounded-full font-medium transition-all border leading-none ${
-      isSelected
-        ? 'bg-purple-100 border-purple-300 text-purple-800'
-        : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-100'
-    }`;
+  /* ── Compact settings pill ── */
+  const SettingsPill = ({ label, selected, onClick }: { label: string; selected: boolean; onClick: () => void }) => (
+    <button onClick={onClick} style={{
+      fontSize: 10, padding: '4px 8px', borderRadius: 20, fontWeight: 500, cursor: 'pointer', border: 'none',
+      background: selected ? '#EDE9FE' : '#F8FAFC', color: selected ? '#7C3AED' : '#94A3B8',
+      transition: 'all 0.2s',
+    }}>{label}</button>
+  );
 
   return (
-    <div className="bg-white rounded-xl shadow-lg border-2 border-gray-300 overflow-hidden flex flex-col h-full">
-      {/* ── Header ─────────────────────────────────────────────── */}
-      <div className="px-4 py-2.5 border-b-2 border-gray-200 flex items-center gap-2 flex-shrink-0 bg-gradient-to-r from-gray-50 to-white">
-        <span className="text-base">⚙️</span>
-        <span className="text-[15px] font-bold text-gray-800">Preferences</span>
+    <div style={{
+      background: 'rgba(255,255,255,0.85)', backdropFilter: 'blur(20px)', WebkitBackdropFilter: 'blur(20px)',
+      borderRadius: 20, padding: 22, height: '100%', display: 'flex', flexDirection: 'column',
+      border: '1px solid rgba(139,92,246,0.08)',
+      transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+      overflow: 'hidden',
+    }}>
+      {/* Title */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, flexShrink: 0 }}>
+        <span style={{ fontSize: 18 }}>⚙️</span>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: '#1E293B', margin: 0 }}>Preferences</h3>
       </div>
 
-      {/* ── Tab Headers (compact) ──────────────────────────────── */}
-      <div className="flex border-b bg-gradient-to-r from-purple-50 to-pink-50 flex-shrink-0">
-        {tabs.map((tab) => {
-          const count = getTabCount(tab.id);
+      {/* ── Segmented tab control ── */}
+      <div style={{ display: 'flex', gap: 2, marginBottom: 14, background: '#F8FAFC', borderRadius: 14, padding: 3, flexShrink: 0 }}>
+        {tabs.map((t) => {
+          const count = getTabCount(t.id);
+          const isActive = activeTab === t.id;
           return (
-            <button
-              key={tab.id}
-              onClick={() => {
-                setActiveTab(tab.id);
-                setNewItem('');
-              }}
-              className={`flex-1 px-2 py-2 text-[11px] font-medium transition-all duration-300 relative ${
-                activeTab === tab.id
-                  ? 'text-purple-700 bg-white'
-                  : 'text-gray-600 hover:text-purple-600 hover:bg-white/50'
-              }`}
-            >
-              <span className="flex items-center justify-center gap-1">
-                <span className="text-sm">{tab.icon}</span>
-                <span className="hidden sm:inline">{tab.label}</span>
-                {count > 0 && (
-                  <span
-                    className={`text-[9px] min-w-[15px] h-[15px] flex items-center justify-center rounded-full font-semibold ${
-                      activeTab === tab.id
-                        ? 'bg-purple-200 text-purple-800'
-                        : 'bg-gray-200 text-gray-600'
-                    }`}
-                  >
-                    {count}
-                  </span>
-                )}
-              </span>
-              {activeTab === tab.id && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-purple-600 to-pink-600" />
+            <button key={t.id} onClick={() => { setActiveTab(t.id); setNewItem(''); }} style={{
+              flex: 1, padding: '7px 4px', border: 'none', cursor: 'pointer', borderRadius: 12,
+              fontSize: 11.5, fontWeight: 600,
+              background: isActive ? 'white' : 'transparent',
+              color: isActive ? '#7C3AED' : '#94A3B8',
+              boxShadow: isActive ? '0 2px 8px rgba(0,0,0,0.06)' : 'none',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 3,
+              transition: 'all 0.25s ease',
+            }}>
+              <span style={{ fontSize: 12 }}>{t.icon}</span>
+              {t.label}
+              {count > 0 && (
+                <span style={{
+                  background: isActive ? '#8B5CF6' : '#E2E8F0',
+                  color: isActive ? 'white' : '#94A3B8',
+                  fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 8,
+                }}>{count}</span>
               )}
             </button>
           );
         })}
       </div>
 
-      {/* ── Tab Content (scrollable) ─────────────────────────── */}
-      <div
-        className="flex-1 overflow-y-auto px-3 py-2.5"
-        style={{ scrollbarWidth: 'thin', scrollbarColor: '#CBD5E1 transparent' }}
-      >
-        {/* ── Activity Settings (compact) ──────────────────────── */}
+      {/* ── Scrollable content ── */}
+      <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10, scrollbarWidth: 'thin' as any, scrollbarColor: '#C4B5FD transparent' }}>
+
+        {/* Activity Settings */}
         {activeTab === 'activities' && (() => {
-          const ap = preferences.activityPrefs || {
-            pace: 'moderate',
-            preferredTimes: ['morning', 'afternoon'],
-            entertainmentHoursPerDay: 6,
+          const ap = preferences.activityPrefs || { pace: 'moderate', preferredTimes: ['morning', 'afternoon'], entertainmentHoursPerDay: 6 };
+          const updateAP = (patch: Partial<ActivityPrefs>) => onUpdate('activityPrefs' as keyof PreferencesData, { ...ap, ...patch });
+          const toggleTime = (t: string) => {
+            const cur = ap.preferredTimes || [];
+            if (t === 'all_day') { updateAP({ preferredTimes: cur.includes('all_day') ? [] : ['all_day'] }); return; }
+            const wo = cur.filter((x) => x !== 'all_day');
+            updateAP({ preferredTimes: wo.includes(t) ? wo.filter((x) => x !== t) : [...wo, t] });
           };
-
-          const paceOptions = [
-            { value: 'relaxed', label: '🐢 Relaxed' },
-            { value: 'moderate', label: '🚶 Moderate' },
-            { value: 'aggressive', label: '⚡ Aggressive' },
-          ];
-
-          const timeOptions = [
-            { value: 'morning', label: '🌅 Morning' },
-            { value: 'afternoon', label: '☀️ Afternoon' },
-            { value: 'evening', label: '🌙 Evening' },
-            { value: 'all_day', label: '📅 All Day' },
-          ];
-
-          const hoursOptions = [
-            { value: 4, label: '4h' },
-            { value: 6, label: '6h' },
-            { value: 8, label: '8h' },
-            { value: 10, label: '10h' },
-          ];
-
-          const updateActivityPrefs = (patch: Partial<ActivityPrefs>) => {
-            onUpdate('activityPrefs' as keyof PreferencesData, { ...ap, ...patch });
-          };
-
-          const toggleTime = (time: string) => {
-            const current = ap.preferredTimes || [];
-            if (time === 'all_day') {
-              updateActivityPrefs({
-                preferredTimes: current.includes('all_day') ? [] : ['all_day'],
-              });
-              return;
-            }
-            const withoutAllDay = current.filter((t) => t !== 'all_day');
-            const updated = withoutAllDay.includes(time)
-              ? withoutAllDay.filter((t) => t !== time)
-              : [...withoutAllDay, time];
-            updateActivityPrefs({ preferredTimes: updated });
-          };
-
           return (
-            <div className="mb-2 border border-gray-200 rounded-lg p-2 space-y-2">
-              <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider">
-                Activity Settings
-              </div>
-
-              <div className="flex items-start justify-between gap-3">
+            <div style={{ padding: 8, border: '1px solid #F1F5F9', borderRadius: 12 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: '#94A3B8', letterSpacing: 1, textTransform: 'uppercase' as const, marginBottom: 6 }}>Activity Settings</div>
+              <div style={{ display: 'flex', gap: 12, marginBottom: 6 }}>
                 <div>
-                  <div className="text-[9px] text-gray-500 mb-1">Hours / Day</div>
-                  <div className="flex flex-wrap gap-1">
-                    {hoursOptions.map((opt) => (
-                      <button
-                        key={opt.value}
-                        onClick={() => updateActivityPrefs({ entertainmentHoursPerDay: opt.value })}
-                        className={pillClass(ap.entertainmentHoursPerDay === opt.value)}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
+                  <div style={{ fontSize: 9, color: '#94A3B8', marginBottom: 3 }}>Hours / Day</div>
+                  <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                    {[4, 6, 8, 10].map((h) => <SettingsPill key={h} label={`${h}h`} selected={ap.entertainmentHoursPerDay === h} onClick={() => updateAP({ entertainmentHoursPerDay: h })} />)}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[9px] text-gray-500 mb-1">Pace</div>
-                  <div className="flex flex-wrap gap-1">
-                    {paceOptions.map((opt) => (
-                      <button
-                        key={opt.value}
-                        onClick={() => updateActivityPrefs({ pace: opt.value })}
-                        className={pillClass(ap.pace === opt.value)}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
+                  <div style={{ fontSize: 9, color: '#94A3B8', marginBottom: 3 }}>Pace</div>
+                  <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                    {[{ v: 'relaxed', l: '🐢 Relaxed' }, { v: 'moderate', l: '🚶 Moderate' }, { v: 'aggressive', l: '⚡ Fast' }].map((o) => <SettingsPill key={o.v} label={o.l} selected={ap.pace === o.v} onClick={() => updateAP({ pace: o.v })} />)}
                   </div>
                 </div>
               </div>
-
-              <div>
-                <div className="text-[9px] text-gray-500 mb-1">Preferred Time</div>
-                <div className="flex flex-wrap gap-1">
-                  {timeOptions.map((opt) => {
-                    const isSelected = (ap.preferredTimes || []).includes(opt.value);
-                    return (
-                      <button
-                        key={opt.value}
-                        onClick={() => toggleTime(opt.value)}
-                        className={pillClass(isSelected)}
-                      >
-                        {opt.label}
-                      </button>
-                    );
-                  })}
-                </div>
+              <div style={{ fontSize: 9, color: '#94A3B8', marginBottom: 3 }}>Time</div>
+              <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                {[{ v: 'morning', l: '🌅 AM' }, { v: 'afternoon', l: '☀️ PM' }, { v: 'evening', l: '🌙 Eve' }, { v: 'all_day', l: '📅 All' }].map((o) => (
+                  <SettingsPill key={o.v} label={o.l} selected={(ap.preferredTimes || []).includes(o.v)} onClick={() => toggleTime(o.v)} />
+                ))}
               </div>
             </div>
           );
         })()}
 
-        {/* ── Restaurant Settings (compact) ────────────────────── */}
+        {/* Restaurant Settings */}
         {activeTab === 'restaurant' && (() => {
-          const rp = preferences.restaurantPrefs || {
-            meals: ['lunch', 'dinner'],
-            priceLevel: ['moderate'],
-          };
-
-          const mealOptions = [
-            { value: 'breakfast', label: '🥐 Breakfast' },
-            { value: 'brunch', label: '🍳 Brunch' },
-            { value: 'lunch', label: '🥗 Lunch' },
-            { value: 'dinner', label: '🍽️ Dinner' },
-          ];
-
-          const priceOptions = [
-            { value: 'budget', label: '$ Budget' },
-            { value: 'moderate', label: '$$ Mid' },
-            { value: 'upscale', label: '$$$ Up' },
-            { value: 'fine_dining', label: '$$$$ Fine' },
-          ];
-
-          const updateRestaurantPrefs = (patch: Partial<RestaurantPrefs>) => {
-            onUpdate('restaurantPrefs' as keyof PreferencesData, { ...rp, ...patch });
-          };
-
-          const toggleMeal = (meal: string) => {
-            const current = rp.meals || [];
-            const updated = current.includes(meal)
-              ? current.filter((m: string) => m !== meal)
-              : [...current, meal];
-            updateRestaurantPrefs({ meals: updated });
-          };
-
-          const togglePrice = (price: string) => {
-            const current = rp.priceLevel || [];
-            const updated = current.includes(price)
-              ? current.filter((p: string) => p !== price)
-              : [...current, price];
-            updateRestaurantPrefs({ priceLevel: updated });
-          };
-
+          const rp = preferences.restaurantPrefs || { meals: ['lunch', 'dinner'], priceLevel: ['moderate'] };
+          const updateRP = (patch: Partial<RestaurantPrefs>) => onUpdate('restaurantPrefs' as keyof PreferencesData, { ...rp, ...patch });
+          const toggleMeal = (m: string) => { const c = rp.meals || []; updateRP({ meals: c.includes(m) ? c.filter((x: string) => x !== m) : [...c, m] }); };
+          const togglePrice = (p: string) => { const c = rp.priceLevel || []; updateRP({ priceLevel: c.includes(p) ? c.filter((x: string) => x !== p) : [...c, p] }); };
           return (
-            <div className="mb-2 border border-gray-200 rounded-lg p-2 space-y-2">
-              <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider">
-                Dining Settings
-              </div>
-
-              <div className="flex items-start justify-between gap-3">
+            <div style={{ padding: 8, border: '1px solid #F1F5F9', borderRadius: 12 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, color: '#94A3B8', letterSpacing: 1, textTransform: 'uppercase' as const, marginBottom: 6 }}>Dining Settings</div>
+              <div style={{ display: 'flex', gap: 12, marginBottom: 4 }}>
                 <div>
-                  <div className="text-[9px] text-gray-500 mb-1">Meals</div>
-                  <div className="flex flex-wrap gap-1">
-                    {mealOptions.map((opt) => {
-                      const isSelected = (rp.meals || []).includes(opt.value);
-                      return (
-                        <button
-                          key={opt.value}
-                          onClick={() => toggleMeal(opt.value)}
-                          className={pillClass(isSelected)}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
+                  <div style={{ fontSize: 9, color: '#94A3B8', marginBottom: 3 }}>Meals</div>
+                  <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                    {[{ v: 'breakfast', l: '🥐 Brkfst' }, { v: 'brunch', l: '🍳 Brunch' }, { v: 'lunch', l: '🥗 Lunch' }, { v: 'dinner', l: '🍽️ Dinner' }].map((o) => (
+                      <SettingsPill key={o.v} label={o.l} selected={(rp.meals || []).includes(o.v)} onClick={() => toggleMeal(o.v)} />
+                    ))}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[9px] text-gray-500 mb-1">Price Level</div>
-                  <div className="flex flex-wrap gap-1">
-                    {priceOptions.map((opt) => {
-                      const isSelected = (rp.priceLevel || []).includes(opt.value);
-                      return (
-                        <button
-                          key={opt.value}
-                          onClick={() => togglePrice(opt.value)}
-                          className={pillClass(isSelected)}
-                        >
-                          {opt.label}
-                        </button>
-                      );
-                    })}
+                  <div style={{ fontSize: 9, color: '#94A3B8', marginBottom: 3 }}>Price</div>
+                  <div style={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                    {[{ v: 'budget', l: '$' }, { v: 'moderate', l: '$$' }, { v: 'upscale', l: '$$$' }, { v: 'fine_dining', l: '$$$$' }].map((o) => (
+                      <SettingsPill key={o.v} label={o.l} selected={(rp.priceLevel || []).includes(o.v)} onClick={() => togglePrice(o.v)} />
+                    ))}
                   </div>
                 </div>
               </div>
@@ -362,95 +200,65 @@ export const PreferencesPanel: React.FC<PreferencesPanelProps> = ({
           );
         })()}
 
-        {/* ── Selected Items (compact chips) ───────────────────── */}
-        {items.length > 0 ? (
-          <div className="mb-2">
-            <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
-              Selected
-            </div>
-            <div className="flex flex-wrap gap-1.5 border border-gray-200 rounded-lg p-2">
+        {/* ── Selected items ── */}
+        <div>
+          <span style={{ fontSize: 9, fontWeight: 700, color: '#94A3B8', letterSpacing: 1, textTransform: 'uppercase' as const }}>Selected</span>
+          {items.length > 0 ? (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7, marginTop: 6 }}>
               {items.map((item) => (
-                <div
-                  key={item.name}
-                  className={`group inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium transition-all duration-200 border leading-none ${
-                    item.preferred
-                      ? 'bg-purple-100 border-purple-300 text-purple-800'
-                      : 'bg-gray-100 border-gray-200 text-gray-700 hover:border-gray-300'
-                  }`}
-                >
-                  <button
-                    onClick={() => togglePreferred(item.name)}
-                    className="text-xs leading-none transition-transform hover:scale-125"
-                    title={item.preferred ? 'Remove priority' : 'Mark as priority'}
-                  >
+                <div key={item.name} style={{
+                  display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 11,
+                  background: item.preferred ? 'linear-gradient(135deg, #FEF3C7, #FDE68A)' : 'white',
+                  border: item.preferred ? '1.5px solid #F59E0B' : '1.5px solid #E2E8F0',
+                  fontSize: 12, fontWeight: 600, color: '#1E293B',
+                  transition: 'all 0.2s ease',
+                }}>
+                  <button onClick={() => togglePreferred(item.name)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 11, lineHeight: 1 }} title={item.preferred ? 'Remove priority' : 'Set as priority'}>
                     {item.preferred ? '⭐' : '☆'}
                   </button>
-
-                  <span>{item.name}</span>
-
-                  {item.preferred && (
-                    <span className="text-[8px] bg-yellow-200 text-yellow-800 px-1 py-0.5 rounded-full font-semibold leading-none">
-                      Priority
-                    </span>
-                  )}
-
-                  <button
-                    onClick={() => removeItem(item.name)}
-                    className="text-gray-400 hover:text-red-500 transition-colors text-xs leading-none"
-                    title="Remove"
-                  >
-                    ×
-                  </button>
+                  {item.name}
+                  {item.preferred && <span style={{ fontSize: 8, fontWeight: 700, color: '#92400E', background: 'rgba(245,158,11,0.2)', padding: '1px 5px', borderRadius: 5 }}>PRIORITY</span>}
+                  <button onClick={() => removeItem(item.name)} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontSize: 13, color: '#94A3B8', lineHeight: 1 }} title="Remove">×</button>
                 </div>
               ))}
             </div>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center py-4 text-gray-400 mb-2">
-            <div className="text-2xl mb-1">
-              {tabs.find((t) => t.id === activeTab)?.icon}
+          ) : (
+            <div style={{ textAlign: 'center', padding: '12px 0', color: '#CBD5E1' }}>
+              <span style={{ fontSize: 20 }}>{tabs.find(t => t.id === activeTab)?.icon}</span>
+              <p style={{ fontSize: 11, margin: '4px 0 0' }}>No {activeTab === 'restaurant' ? 'cuisine' : activeTab} set</p>
             </div>
-            <p className="text-[11px]">
-              No {activeTab === 'restaurant' ? 'cuisine' : activeTab} preferences yet
-            </p>
-          </div>
-        )}
-
-        {/* ── Add Input (compact) ──────────────────────────────── */}
-        <div className="flex gap-1.5 items-center">
-          <input
-            type="text"
-            value={newItem}
-            onChange={(e) => setNewItem(e.target.value)}
-            onKeyPress={handleKeyPress}
-            placeholder={`Add ${activeTab === 'restaurant' ? 'cuisine' : activeTab === 'hotels' ? 'hotel chain' : activeTab}...`}
-            className="flex-1 text-[11px] px-2.5 py-1.5 border border-gray-300 rounded-lg focus:border-purple-500 focus:ring-1 focus:ring-purple-200 outline-none transition-all"
-          />
-          <button
-            onClick={() => addItem(newItem)}
-            disabled={!newItem.trim()}
-            className="bg-gradient-to-r from-purple-600 to-pink-600 disabled:from-gray-300 disabled:to-gray-300 text-white px-3 py-1.5 rounded-lg hover:from-purple-700 hover:to-pink-700 transition-all duration-300 font-semibold text-[11px] disabled:cursor-not-allowed leading-none"
-          >
-            Add
-          </button>
+          )}
         </div>
 
-        {/* ── Quick-Add Suggestions (compact) ──────────────────── */}
+        {/* ── Add input ── */}
+        <div style={{ display: 'flex', gap: 7 }}>
+          <input value={newItem} onChange={(e) => setNewItem(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && addItem(newItem)}
+            placeholder={`Add ${activeTab === 'restaurant' ? 'cuisine' : activeTab === 'hotels' ? 'hotel chain' : activeTab}...`}
+            style={{ flex: 1, padding: '7px 12px', borderRadius: 11, border: '2px solid #F1F5F9', fontSize: 12, outline: 'none', transition: 'border-color 0.2s' }}
+            onFocus={(e) => { e.currentTarget.style.borderColor = '#C4B5FD'; }}
+            onBlur={(e) => { e.currentTarget.style.borderColor = '#F1F5F9'; }}
+          />
+          <button onClick={() => addItem(newItem)} disabled={!newItem.trim()} style={{
+            padding: '7px 16px', borderRadius: 11, border: 'none',
+            background: newItem.trim() ? 'linear-gradient(135deg, #8B5CF6, #7C3AED)' : '#E2E8F0',
+            color: newItem.trim() ? 'white' : '#94A3B8', fontWeight: 700, fontSize: 11.5, cursor: newItem.trim() ? 'pointer' : 'default',
+          }}>Add</button>
+        </div>
+
+        {/* ── Suggestions ── */}
         {availableSuggestions.length > 0 && (
-          <div className="mt-2">
-            <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
-              Suggestions
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {availableSuggestions.slice(0, 6).map((suggestion) => (
-                <button
-                  key={suggestion}
-                  onClick={() => addItem(suggestion)}
-                  className="inline-flex items-center gap-0.5 text-[10px] px-2 py-0.5 rounded-full border border-dashed border-purple-300 text-purple-600 hover:bg-purple-50 hover:border-purple-400 transition-all duration-200 leading-snug"
-                >
-                  <span className="text-purple-400">+</span>
-                  {suggestion}
-                </button>
+          <div>
+            <span style={{ fontSize: 9, fontWeight: 700, color: '#94A3B8', letterSpacing: 1, textTransform: 'uppercase' as const }}>Suggestions</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginTop: 6 }}>
+              {availableSuggestions.slice(0, 5).map((s) => (
+                <button key={s} onClick={() => addItem(s)} style={{
+                  padding: '4px 10px', borderRadius: 9, fontSize: 11, color: '#7C3AED',
+                  background: 'rgba(139,92,246,0.06)', border: '1px dashed rgba(139,92,246,0.2)',
+                  fontWeight: 500, cursor: 'pointer', transition: 'all 0.2s',
+                }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = '#8B5CF6'; e.currentTarget.style.color = 'white'; e.currentTarget.style.borderStyle = 'solid'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = 'rgba(139,92,246,0.06)'; e.currentTarget.style.color = '#7C3AED'; e.currentTarget.style.borderStyle = 'dashed'; }}
+                >+ {s}</button>
               ))}
             </div>
           </div>

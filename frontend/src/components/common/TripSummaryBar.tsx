@@ -1,22 +1,22 @@
 // frontend/src/components/common/TripSummaryBar.tsx
 //
-// v4: Only spacing changes — all font sizes identical to original
-//   - py-4 → py-2
-//   - mb-2 → mb-1
-//   - mt-3 → mt-1
-//   - Budget bar h-2 → h-1.5
-//   - Everything else: UNCHANGED from original
+// v5 — Glass header matching TravelQ v3 mockup:
+//   - Replaces old header + gradient bar + PreferencesSummary
+//   - Glass backdrop: rgba(255,255,255,0.75) + blur(24px)
+//   - Gradient top line (purple → pink → orange)
+//   - TravelQ logo left, trip pill center, icon buttons right
+//   - Budget progress bar with gradient fill
+//   - All inline-edit functionality preserved
 
 import React, { useState } from 'react';
-import { useTripData, getNextWeekDates  } from '../../hooks/useTripData';
+import { useTripData, getNextWeekDates } from '../../hooks/useTripData';
 import { useItinerary } from '../../hooks/useItinerary';
 
 export const TripSummaryBar: React.FC = () => {
   const { tripData, setTripData, resetTrip } = useTripData();
   const { clearItinerary, budget, setBudget } = useItinerary();
-  
+
   const [showTripMenu, setShowTripMenu] = useState(false);
-  const [showOrigin, setShowOrigin] = useState(true); // Always show origin
   const [editMode, setEditMode] = useState<{
     field: 'origin' | 'destination' | 'dates' | 'travelers' | 'budget' | null;
   }>({ field: null });
@@ -31,443 +31,193 @@ export const TripSummaryBar: React.FC = () => {
 
   const handleSave = (field: string) => {
     switch (field) {
-      case 'origin':
-        setTripData({ origin: tempValues.origin });
-        if (!tempValues.origin) {
-          setShowOrigin(false);
-        }
-        break;
-      case 'destination':
-        setTripData({ destination: tempValues.destination });
-        break;
-      case 'dates':
-        setTripData({ 
-          startDate: tempValues.startDate, 
-          endDate: tempValues.endDate 
-        });
-        break;
-      case 'travelers':
-        setTripData({ travelers: tempValues.travelers });
-        break;
-      case 'budget':
-        setTripData({ totalBudget: tempValues.budget });
-        setBudget(tempValues.budget);
-        break;
+      case 'origin': setTripData({ origin: tempValues.origin }); break;
+      case 'destination': setTripData({ destination: tempValues.destination }); break;
+      case 'dates': setTripData({ startDate: tempValues.startDate, endDate: tempValues.endDate }); break;
+      case 'travelers': setTripData({ travelers: tempValues.travelers }); break;
+      case 'budget': setTripData({ totalBudget: tempValues.budget }); setBudget(tempValues.budget); break;
     }
     setEditMode({ field: null });
   };
 
   const handleNewTrip = () => {
-    const confirmed = window.confirm(
-      'Start a new trip? This will clear your current itinerary.'
-    );
-    if (confirmed) {
-      const { startDate, endDate } = getNextWeekDates();  // ← dynamic
-      resetTrip();
-      clearItinerary();
-      setTempValues({
-        origin: 'New York',
-        destination: 'London, UK',
-        startDate,    // ← was hardcoded '2026-02-20'
-        endDate,      // ← was hardcoded '2026-02-25'
-        travelers: 1,
-        budget: 4000,
-      });
-      setShowOrigin(true);
+    if (window.confirm('Start a new trip? This will clear your current itinerary.')) {
+      const { startDate, endDate } = getNextWeekDates();
+      resetTrip(); clearItinerary();
+      setTempValues({ origin: 'New York', destination: 'London, UK', startDate, endDate, travelers: 1, budget: 4000 });
       setEditMode({ field: 'destination' });
     }
     setShowTripMenu(false);
   };
 
-  
   const handleClearItinerary = () => {
-    const confirmed = window.confirm(
-      'Clear all selected items? Trip details will be kept.'
-    );
-    if (confirmed) {
-      clearItinerary();
-    }
+    if (window.confirm('Clear all selected items? Trip details will be kept.')) clearItinerary();
     setShowTripMenu(false);
   };
 
-  const toggleOriginField = () => {
-    if (showOrigin && tripData.origin) {
-      const confirmed = window.confirm('Remove origin location?');
-      if (confirmed) {
-        setTripData({ origin: '' });
-        setShowOrigin(false);
-      }
-    } else {
-      setShowOrigin(true);
-      setEditMode({ field: 'origin' });
-    }
+  const fmtDate = (d: string) => {
+    try { return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); }
+    catch { return d; }
   };
 
-  return (
-    <div className="bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 text-white shadow-xl">
-      <div className="px-6 py-2">
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold opacity-90">
-              {tripData.id ? 'Current Trip' : 'New Trip'}
-            </h2>
-            {/* Show trip ID badge only for existing trips */}
-            {tripData.id && (
-              <span className="text-xs bg-white/20 px-2 py-0.5 rounded-full opacity-70">
-                {tripData.id}
-              </span>
-            )}
-          </div>
-          
-          {/* Trip Actions Menu */}
-          <div className="relative">
-            <button
-              onClick={() => setShowTripMenu(!showTripMenu)}
-              className="p-2 hover:bg-white/20 rounded-lg transition-all"
-              title="Trip Actions"
-            >
-              ⋮
-            </button>
-            
-            {showTripMenu && (
-              <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-2xl border border-gray-200 py-1 z-50">
-                <button
-                  onClick={toggleOriginField}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-2"
-                >
-                  {showOrigin ? '➖ Remove Origin' : '➕ Add Origin Location'}
-                </button>
-                <hr className="my-1" />
-                <button
-                  onClick={handleNewTrip}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-purple-50 flex items-center gap-2"
-                >
-                  ✨ New Trip
-                </button>
-                <button
-                  onClick={handleClearItinerary}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-red-50 flex items-center gap-2"
-                >
-                  🗑️ Clear Itinerary
-                </button>
-                <hr className="my-1" />
-                <button
-                  onClick={() => {
-                    alert('My Trips feature coming soon!');
-                    setShowTripMenu(false);
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-blue-50 flex items-center gap-2"
-                >
-                  📋 My Trips
-                </button>
-                <button
-                  onClick={() => {
-                    if (!tripData.id) {
-                      alert('Plan a trip first before saving!');
-                    } else {
-                      alert('Save Trip feature coming soon!');
-                    }
-                    setShowTripMenu(false);
-                  }}
-                  className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-green-50 flex items-center gap-2"
-                >
-                  💾 Save Trip
-                </button>
-              </div>
-            )}
-          </div>
+  const startEdit = (field: typeof editMode.field) => {
+    setTempValues({
+      origin: tripData.origin || '', destination: tripData.destination,
+      startDate: tripData.startDate, endDate: tripData.endDate,
+      travelers: tripData.travelers, budget: tripData.totalBudget,
+    });
+    setEditMode({ field });
+  };
+
+  const budgetPct = budget.total > 0 ? Math.min((budget.selected / budget.total) * 100, 100) : 0;
+
+  /* ── Inline edit mini-component ── */
+  const InlineEdit = ({ field, children }: { field: 'origin' | 'destination' | 'dates' | 'travelers' | 'budget'; children: React.ReactNode }) => {
+    if (editMode.field !== field) return <>{children}</>;
+
+    if (field === 'dates') {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <input type="date" value={tempValues.startDate} onChange={(e) => setTempValues({ ...tempValues, startDate: e.target.value })}
+            style={{ border: '1.5px solid #C4B5FD', borderRadius: 8, padding: '4px 6px', fontSize: 12, outline: 'none', width: 120 }} />
+          <span style={{ color: '#94A3B8', fontSize: 12 }}>–</span>
+          <input type="date" value={tempValues.endDate} onChange={(e) => setTempValues({ ...tempValues, endDate: e.target.value })}
+            style={{ border: '1.5px solid #C4B5FD', borderRadius: 8, padding: '4px 6px', fontSize: 12, outline: 'none', width: 120 }} />
+          <button onClick={() => handleSave('dates')} style={{ color: '#059669', fontWeight: 700, fontSize: 14, background: 'none', border: 'none', cursor: 'pointer' }}>✓</button>
+          <button onClick={() => setEditMode({ field: null })} style={{ color: '#EF4444', fontSize: 13, background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
         </div>
+      );
+    }
 
-        <div className="flex flex-wrap items-center gap-4 text-sm">
-          {/* Origin (Optional) */}
-          {showOrigin && (
-            <>
-              <div className="flex items-center gap-2 font-semibold group relative">
-                <span className="text-2xl">🏠</span>
-                {editMode.field === 'origin' ? (
-                  <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-1">
-                    <input
-                      type="text"
-                      value={tempValues.origin}
-                      onChange={(e) =>
-                        setTempValues({ ...tempValues, origin: e.target.value })
-                      }
-                      onKeyPress={(e) => e.key === 'Enter' && handleSave('origin')}
-                      className="bg-transparent border-none outline-none text-white placeholder-white/60 w-48"
-                      placeholder="From (e.g., New York)"
-                      autoFocus
-                    />
-                    <button
-                      onClick={() => handleSave('origin')}
-                      className="text-green-300 hover:text-green-100"
-                    >
-                      ✓
-                    </button>
-                    <button
-                      onClick={() => {
-                        setEditMode({ field: null });
-                        if (!tripData.origin) setShowOrigin(false);
-                      }}
-                      className="text-red-300 hover:text-red-100"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setTempValues({ ...tempValues, origin: tripData.origin || '' });
-                      setEditMode({ field: 'origin' });
-                    }}
-                    className="text-base hover:underline cursor-pointer opacity-90"
-                  >
-                    {tripData.origin || 'Click to set origin'}
-                  </button>
-                )}
-              </div>
-              <span className="text-white/80 text-xl">→</span>
-            </>
-          )}
+    const cfg: Record<string, any> = {
+      origin: { value: tempValues.origin, set: (v: string) => setTempValues({ ...tempValues, origin: v }), w: 110, ph: 'Origin city' },
+      destination: { value: tempValues.destination, set: (v: string) => setTempValues({ ...tempValues, destination: v }), w: 130, ph: 'Destination' },
+      travelers: { value: tempValues.travelers, set: (v: string) => setTempValues({ ...tempValues, travelers: parseInt(v) || 1 }), w: 50, type: 'number', min: 1 },
+      budget: { value: tempValues.budget, set: (v: string) => setTempValues({ ...tempValues, budget: parseInt(v) || 0 }), w: 80, type: 'number', min: 0 },
+    };
+    const c = cfg[field];
 
-          {/* Destination */}
-          <div className="flex items-center gap-2 font-semibold group relative">
-            <span className="text-2xl">📍</span>
-            {editMode.field === 'destination' ? (
-              <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-1">
-                <input
-                  type="text"
-                  value={tempValues.destination}
-                  onChange={(e) =>
-                    setTempValues({ ...tempValues, destination: e.target.value })
-                  }
-                  onKeyPress={(e) => e.key === 'Enter' && handleSave('destination')}
-                  className="bg-transparent border-none outline-none text-white placeholder-white/60 w-48"
-                  placeholder="Enter destination"
-                  autoFocus
-                />
-                <button
-                  onClick={() => handleSave('destination')}
-                  className="text-green-300 hover:text-green-100"
-                >
-                  ✓
-                </button>
-                <button
-                  onClick={() => setEditMode({ field: null })}
-                  className="text-red-300 hover:text-red-100"
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => {
-                  setTempValues({ ...tempValues, destination: tripData.destination });
-                  setEditMode({ field: 'destination' });
-                }}
-                className="text-lg hover:underline cursor-pointer"
-              >
-                {tripData.destination || 'Click to add destination'}
-              </button>
-            )}
-          </div>
-
-          <span className="text-white/60">•</span>
-
-          {/* Dates */}
-          <div className="flex items-center gap-2 group">
-            <span className="text-xl">📅</span>
-            {editMode.field === 'dates' ? (
-              <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-1">
-                <input
-                  type="date"
-                  value={tempValues.startDate}
-                  onChange={(e) =>
-                    setTempValues({ ...tempValues, startDate: e.target.value })
-                  }
-                  className="bg-transparent border-none outline-none text-white [color-scheme:dark]"
-                />
-                <span>-</span>
-                <input
-                  type="date"
-                  value={tempValues.endDate}
-                  onChange={(e) =>
-                    setTempValues({ ...tempValues, endDate: e.target.value })
-                  }
-                  className="bg-transparent border-none outline-none text-white [color-scheme:dark]"
-                />
-                <button
-                  onClick={() => handleSave('dates')}
-                  className="text-green-300 hover:text-green-100 ml-2"
-                >
-                  ✓
-                </button>
-                <button
-                  onClick={() => setEditMode({ field: null })}
-                  className="text-red-300 hover:text-red-100"
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => {
-                  setTempValues({
-                    ...tempValues,
-                    startDate: tripData.startDate,
-                    endDate: tripData.endDate,
-                  });
-                  setEditMode({ field: 'dates' });
-                }}
-                className="hover:underline cursor-pointer"
-              >
-                {tripData.startDate && tripData.endDate ? (
-                  <>
-                    {new Date(tripData.startDate).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                    })}{' '}
-                    -{' '}
-                    {new Date(tripData.endDate).toLocaleDateString('en-US', {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
-                    })}
-                  </>
-                ) : (
-                  'Click to add dates'
-                )}
-              </button>
-            )}
-          </div>
-
-          <span className="text-white/60">•</span>
-
-          {/* Travelers */}
-          <div className="flex items-center gap-2 group">
-            <span className="text-xl">👤</span>
-            {editMode.field === 'travelers' ? (
-              <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-1">
-                <input
-                  type="number"
-                  min="1"
-                  value={tempValues.travelers}
-                  onChange={(e) =>
-                    setTempValues({
-                      ...tempValues,
-                      travelers: parseInt(e.target.value) || 1,
-                    })
-                  }
-                  onKeyPress={(e) => e.key === 'Enter' && handleSave('travelers')}
-                  className="bg-transparent border-none outline-none text-white w-16"
-                  autoFocus
-                />
-                <button
-                  onClick={() => handleSave('travelers')}
-                  className="text-green-300 hover:text-green-100"
-                >
-                  ✓
-                </button>
-                <button
-                  onClick={() => setEditMode({ field: null })}
-                  className="text-red-300 hover:text-red-100"
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => {
-                  setTempValues({ ...tempValues, travelers: tripData.travelers });
-                  setEditMode({ field: 'travelers' });
-                }}
-                className="hover:underline cursor-pointer"
-              >
-                {tripData.travelers} Traveler{tripData.travelers > 1 ? 's' : ''}
-              </button>
-            )}
-          </div>
-
-          <span className="text-white/60">•</span>
-
-          {/* Budget */}
-          <div className="flex items-center gap-2 group">
-            <span className="text-xl">💰</span>
-            {editMode.field === 'budget' ? (
-              <div className="flex items-center gap-2 bg-white/20 rounded-lg px-3 py-1">
-                <span>$</span>
-                <input
-                  type="number"
-                  min="0"
-                  value={tempValues.budget}
-                  onChange={(e) =>
-                    setTempValues({
-                      ...tempValues,
-                      budget: parseInt(e.target.value) || 0,
-                    })
-                  }
-                  onKeyPress={(e) => e.key === 'Enter' && handleSave('budget')}
-                  className="bg-transparent border-none outline-none text-white w-24"
-                  autoFocus
-                />
-                <button
-                  onClick={() => handleSave('budget')}
-                  className="text-green-300 hover:text-green-100"
-                >
-                  ✓
-                </button>
-                <button
-                  onClick={() => setEditMode({ field: null })}
-                  className="text-red-300 hover:text-red-100"
-                >
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => {
-                  setTempValues({ ...tempValues, budget: tripData.totalBudget });
-                  setEditMode({ field: 'budget' });
-                }}
-                className="hover:underline cursor-pointer"
-              >
-                {tripData.totalBudget > 0
-                  ? `Budget: $${tripData.totalBudget.toLocaleString()}`
-                  : 'Set budget'}
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Budget Progress Bar */}
-        {budget.total > 0 && (
-          <div className="mt-1">
-            <div className="flex justify-between text-xs mb-1">
-              <span>Spent: ${budget.selected.toLocaleString()}</span>
-              <span>Remaining: ${budget.remaining.toLocaleString()}</span>
-            </div>
-            <div className="h-1.5 bg-white/30 rounded-full overflow-hidden">
-              <div
-                className={`h-full transition-all duration-500 ${
-                  budget.selected / budget.total >= 0.9
-                    ? 'bg-red-400'
-                    : budget.selected / budget.total >= 0.75
-                    ? 'bg-orange-400'
-                    : 'bg-green-400'
-                }`}
-                style={{ width: `${Math.min((budget.selected / budget.total) * 100, 100)}%` }}
-              />
-            </div>
-          </div>
-        )}
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        {field === 'budget' && <span style={{ fontSize: 12, color: '#64748B' }}>$</span>}
+        <input value={c.value} onChange={(e) => c.set(e.target.value)} onKeyDown={(e: React.KeyboardEvent) => e.key === 'Enter' && handleSave(field)}
+          type={c.type} min={c.min} placeholder={c.ph} autoFocus
+          style={{ border: '1.5px solid #C4B5FD', borderRadius: 8, padding: '4px 8px', fontSize: 12, outline: 'none', width: c.w }} />
+        <button onClick={() => handleSave(field)} style={{ color: '#059669', fontWeight: 700, fontSize: 14, background: 'none', border: 'none', cursor: 'pointer' }}>✓</button>
+        <button onClick={() => setEditMode({ field: null })} style={{ color: '#EF4444', fontSize: 13, background: 'none', border: 'none', cursor: 'pointer' }}>✕</button>
       </div>
+    );
+  };
 
-      {/* Click outside to close menu */}
-      {showTripMenu && (
-        <div
-          className="fixed inset-0 z-40"
-          onClick={() => setShowTripMenu(false)}
-        />
-      )}
-    </div>
+  const Divider = () => <div style={{ width: 1, height: 20, background: '#E2E8F0', flexShrink: 0 }} />;
+
+  return (
+    <>
+      <header style={{
+        position: 'sticky', top: 0, zIndex: 50,
+        background: 'rgba(255,255,255,0.75)', backdropFilter: 'blur(24px)', WebkitBackdropFilter: 'blur(24px)',
+        borderBottom: '1px solid rgba(139,92,246,0.1)',
+      }}>
+        {/* Gradient top accent */}
+        <div style={{ height: 3, background: 'linear-gradient(90deg, #8B5CF6, #EC4899, #F97316, #8B5CF6)', backgroundSize: '200% 100%' }} />
+
+        <div style={{ maxWidth: 1440, margin: '0 auto', padding: '12px 28px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+
+            {/* ── Logo ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <span style={{ fontSize: 26, fontWeight: 800, background: 'linear-gradient(135deg, #7C3AED, #DB2777)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>TravelQ</span>
+              <span style={{ fontSize: 10, fontWeight: 700, color: '#8B5CF6', background: '#F3E8FF', padding: '2px 8px', borderRadius: 20 }}>BETA</span>
+            </div>
+
+            {/* ── Trip details pill ── */}
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap',
+              background: 'rgba(139,92,246,0.04)', border: '1px solid rgba(139,92,246,0.1)',
+              borderRadius: 16, padding: '8px 20px',
+            }}>
+              <InlineEdit field="origin">
+                <span onClick={() => startEdit('origin')} style={{ fontSize: 14, fontWeight: 700, color: '#1E293B', cursor: 'pointer' }} title="Click to edit">
+                  🗽 {tripData.origin || 'Origin'}
+                </span>
+              </InlineEdit>
+
+              <span style={{ color: '#8B5CF6', fontWeight: 700, fontSize: 14 }}>→</span>
+
+              <InlineEdit field="destination">
+                <span onClick={() => startEdit('destination')} style={{ fontSize: 14, fontWeight: 700, color: '#1E293B', cursor: 'pointer' }} title="Click to edit">
+                  🇬🇧 {tripData.destination || 'Destination'}
+                </span>
+              </InlineEdit>
+
+              <Divider />
+
+              <InlineEdit field="dates">
+                <span onClick={() => startEdit('dates')} style={{ fontSize: 13, color: '#64748B', cursor: 'pointer' }} title="Click to edit">
+                  📅 {tripData.startDate && tripData.endDate ? `${fmtDate(tripData.startDate)}–${fmtDate(tripData.endDate)}` : 'Set dates'}
+                </span>
+              </InlineEdit>
+
+              <Divider />
+
+              <InlineEdit field="travelers">
+                <span onClick={() => startEdit('travelers')} style={{ fontSize: 13, color: '#64748B', cursor: 'pointer' }} title="Click to edit">
+                  👤 {tripData.travelers}
+                </span>
+              </InlineEdit>
+
+              <Divider />
+
+              <InlineEdit field="budget">
+                <span onClick={() => startEdit('budget')} style={{ fontSize: 13, fontWeight: 600, color: '#059669', cursor: 'pointer' }} title="Click to edit">
+                  💰 ${tripData.totalBudget > 0 ? tripData.totalBudget.toLocaleString() : '0'}
+                </span>
+              </InlineEdit>
+            </div>
+
+            {/* ── Right icons ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+              <button style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🔔</button>
+              <div style={{ position: 'relative' }}>
+                <button onClick={() => setShowTripMenu(!showTripMenu)} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Settings">⚙️</button>
+                {showTripMenu && (
+                  <div style={{ position: 'absolute', right: 0, top: 42, width: 200, background: 'white', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', border: '1px solid #E2E8F0', padding: 6, zIndex: 100 }}>
+                    {[
+                      { label: '✨ New Trip', action: handleNewTrip },
+                      { label: '🗑️ Clear Itinerary', action: handleClearItinerary },
+                      { label: '📋 My Trips', action: () => { alert('My Trips coming soon!'); setShowTripMenu(false); } },
+                      { label: '💾 Save Trip', action: () => { alert(tripData.id ? 'Save coming soon!' : 'Plan first!'); setShowTripMenu(false); } },
+                    ].map((item, i) => (
+                      <button key={i} onClick={item.action} style={{ width: '100%', textAlign: 'left' as const, padding: '10px 14px', border: 'none', background: 'transparent', borderRadius: 10, fontSize: 13, fontWeight: 500, color: '#374151', cursor: 'pointer' }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#F5F3FF')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                      >{item.label}</button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div style={{ width: 36, height: 36, borderRadius: 12, background: 'linear-gradient(135deg, #8B5CF6, #EC4899)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>J</div>
+            </div>
+          </div>
+
+          {/* ── Budget bar ── */}
+          {budget.total > 0 && (
+            <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#64748B', minWidth: 90, whiteSpace: 'nowrap' }}>
+                Spent: <span style={{ color: '#8B5CF6' }}>${budget.selected.toLocaleString()}</span>
+              </span>
+              <div style={{ flex: 1, height: 6, background: '#F1F5F9', borderRadius: 10, overflow: 'hidden' }}>
+                <div style={{ width: `${budgetPct}%`, height: '100%', borderRadius: 10, background: 'linear-gradient(90deg, #8B5CF6, #EC4899, #F97316)', transition: 'width 0.5s ease' }} />
+              </div>
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#059669', minWidth: 100, textAlign: 'right' as const, whiteSpace: 'nowrap' }}>
+                Remaining: ${budget.remaining.toLocaleString()}
+              </span>
+            </div>
+          )}
+        </div>
+      </header>
+
+      {showTripMenu && <div style={{ position: 'fixed', inset: 0, zIndex: 40 }} onClick={() => setShowTripMenu(false)} />}
+    </>
   );
 };
