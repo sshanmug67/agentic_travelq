@@ -1,21 +1,25 @@
 // frontend/src/components/common/AirportAutocomplete.tsx
 //
-// Drop-in autocomplete for airport selection in TripSummaryBar.
-// Searches by IATA code, city name, airport name, and country.
-// Displays: "City (CODE)" — stores the IATA code as value.
+// v2 — Auto-confirm on selection:
+//   Added `onSelect(display, code)` prop that fires when the user picks an
+//   airport from the dropdown (click, Enter, or Tab). The parent can use this
+//   to save immediately — no need for the user to click ✓ afterwards.
+//   The ✓ / ✕ buttons are still rendered for manual typed entries or cancel.
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import airports, { Airport, CITY_ALIASES } from '../../data/airports';
 
 interface AirportAutocompleteProps {
-  value: string;                          // Current IATA code or city name
-  onChange: (value: string) => void;      // Called with "City (CODE)" display string
-  onCodeChange?: (code: string) => void;  // Called with just the IATA code
-  onConfirm: () => void;                  // Save / ✓ button
-  onCancel: () => void;                   // Cancel / ✕ button
+  value: string;
+  onChange: (value: string) => void;
+  onCodeChange?: (code: string) => void;
+  /** Fires when the user picks an airport from the dropdown — use to auto-save */
+  onSelect?: (display: string, code: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
   placeholder?: string;
   autoFocus?: boolean;
-  className?: string;                     // Additional classes for the wrapper
+  className?: string;
 }
 
 // ─── Scoring function: higher = better match ────────────────────────────
@@ -26,34 +30,16 @@ function scoreMatch(airport: Airport, query: string): number {
   const name = airport.name.toLowerCase();
   const country = airport.country.toLowerCase();
 
-  // Exact IATA code match → highest priority
   if (code === q) return 1000;
-
-  // Code starts with query
   if (code.startsWith(q)) return 800;
-
-  // Exact city match
   if (city === q) return 700;
-
-  // City starts with query
   if (city.startsWith(q)) return 600;
-
-  // City word starts with query (e.g., "fort" matches "Fort Lauderdale")
   const cityWords = city.split(/[\s\-\/]+/);
   if (cityWords.some(w => w.startsWith(q))) return 500;
-
-  // Airport name contains query
   if (name.includes(q)) return 300;
-
-  // Country code match
   if (country === q) return 200;
-
-  // Partial code match anywhere
   if (code.includes(q)) return 150;
-
-  // Partial city match anywhere
   if (city.includes(q)) return 100;
-
   return 0;
 }
 
@@ -62,26 +48,19 @@ function searchAirports(query: string, maxResults = 8): Airport[] {
   if (!query || query.trim().length === 0) return [];
 
   let q = query.toLowerCase().trim();
-
-  // Resolve aliases: "nyc" → "new york", "sf" → "san francisco"
-  if (CITY_ALIASES[q]) {
-    q = CITY_ALIASES[q].toLowerCase();
-  }
+  if (CITY_ALIASES[q]) q = CITY_ALIASES[q].toLowerCase();
 
   const scored = airports
     .map(airport => ({ airport, score: scoreMatch(airport, q) }))
     .filter(item => item.score > 0)
     .sort((a, b) => {
-      // Primary: score descending
       if (b.score !== a.score) return b.score - a.score;
-      // Secondary: shorter city name first (prefer "Miami" over "Miami Beach")
       return a.airport.city.length - b.airport.city.length;
     });
 
   return scored.slice(0, maxResults).map(item => item.airport);
 }
 
-// ─── Format display string ──────────────────────────────────────────────
 function formatAirport(airport: Airport): string {
   return `${airport.city} (${airport.code})`;
 }
@@ -98,6 +77,7 @@ const AirportAutocomplete: React.FC<AirportAutocompleteProps> = ({
   value,
   onChange,
   onCodeChange,
+  onSelect,
   onConfirm,
   onCancel,
   placeholder = 'City or airport code',
@@ -112,7 +92,7 @@ const AirportAutocomplete: React.FC<AirportAutocompleteProps> = ({
   const dropdownRef = useRef<HTMLDivElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  // Initialize: if value is an IATA code, resolve it to display format
+  // Initialize: if value is an IATA code, resolve to display format
   useEffect(() => {
     if (value && value.length === 3 && value === value.toUpperCase()) {
       const found = airports.find(a => a.code === value);
@@ -124,7 +104,6 @@ const AirportAutocomplete: React.FC<AirportAutocompleteProps> = ({
     setInputValue(value);
   }, []); // Only on mount
 
-  // Search when input changes
   const handleInputChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setInputValue(val);
@@ -140,7 +119,7 @@ const AirportAutocomplete: React.FC<AirportAutocompleteProps> = ({
     }
   }, []);
 
-  // Select an airport from dropdown
+  // Select an airport from dropdown → notify parent + auto-confirm
   const selectAirport = useCallback((airport: Airport) => {
     const display = formatAirport(airport);
     setInputValue(display);
@@ -149,10 +128,13 @@ const AirportAutocomplete: React.FC<AirportAutocompleteProps> = ({
     setIsOpen(false);
     setResults([]);
     setActiveIndex(-1);
-    inputRef.current?.focus();
-  }, [onChange, onCodeChange]);
 
-  // Keyboard navigation
+    // Auto-confirm: tell parent the user made a selection
+    if (onSelect) {
+      onSelect(display, airport.code);
+    }
+  }, [onChange, onCodeChange, onSelect]);
+
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (!isOpen || results.length === 0) {
       if (e.key === 'Enter') {
