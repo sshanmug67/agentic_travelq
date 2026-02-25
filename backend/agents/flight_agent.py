@@ -1835,17 +1835,31 @@ CRITICAL RULES:
     # ─────────────────────────────────────────────────────────────────────
 
     def _resolve_location(self, location: str) -> Optional[str]:
-        """Resolve city name to airport code"""
+        """Resolve city name, airport code, or 'City (CODE)' display string to IATA code"""
+        if not location:
+            return None
+
+        location = location.strip()
+
+        # 1) Extract IATA code from "City (CODE)" format — e.g. "Pittsburgh (PIT)" → "PIT"
+        match = re.match(r'.*\(([A-Z]{3})\)\s*$', location)
+        if match:
+            code = match.group(1)
+            log_agent_raw(f"   ✓ Extracted '{code}' from '{location}'", agent_name="FlightAgent")
+            return code
+
+        # 2) Already a valid 3-letter IATA code?
         if self.airport_lookup.validate_airport_code(location):
             return location
-        
+
+        # 3) Try city-name → code lookup (static mapping)
         airport_code = self.airport_lookup.convert_to_airport_code(location)
-        
+
         if airport_code:
             log_agent_raw(f"   ✓ Converted '{location}' → {airport_code}", agent_name="FlightAgent")
         else:
             log_agent_raw(f"   ❌ Could not resolve '{location}'", agent_name="FlightAgent")
-        
+
         return airport_code
     
     def _flight_to_dict(self, flight: Flight) -> Dict:

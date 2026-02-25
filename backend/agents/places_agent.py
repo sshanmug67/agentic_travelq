@@ -1,6 +1,16 @@
 """
-Structured Daily Plan — PlacesAgent v9.4 (Scalable Pipeline)
+Structured Daily Plan — PlacesAgent v9.5 (Retry + Smart Planner)
 Location: backend/agents/places_agent.py
+
+Changes (v9.5 — Retry + Smart Planner):
+  - _search_text_with_retry(): retry wrapper for Google Places text search
+    with up to 2 retries + linear backoff on transient 500 errors
+  - _fetch_restaurants_async(): uses retry wrapper + broader backfill
+    queries when pool is still short after primary searches
+  - _fetch_activities_async(): uses retry wrapper on all text search calls
+  - _run_planner(): dynamic RULES — when venue pool < slots needed,
+    instructs LLM to spread repeats across non-consecutive days instead
+    of block-copying day groups
 
 Changes (v9.4 — Scalable Writers + Dedicated Nuggets):
   - Writers now scale dynamically: ceil(num_days / 3) writers, each ≤3 days
@@ -123,11 +133,14 @@ EMIT_NUGGETS_TOOL = {
 
 class PlacesAgent(TravelQBaseAgent):
     """
-    Places Agent v9.4 — Scalable Pipeline with Dedicated Nuggets.
+    Places Agent v9.5 — Retry + Smart Planner.
 
     Phase 1: Parallel API fetches (weather + restaurants + activities)
+      - v9.5: Text search calls use retry wrapper for transient 500 errors
+      - v9.5: Broader backfill queries when pool is still short
     Phase 2: Three-phase LLM pipeline:
       - Planner: assigns venues to slots for ALL days (~4s)
+        - v9.5: Dynamic rules handle small pools gracefully
       - N Writers (parallel): ceil(num_days/3) writers, each ≤3 days
       - Nuggets (parallel with writers): dedicated LLM call, guaranteed output
     """
@@ -167,7 +180,7 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
         self.trip_storage = trip_storage
         self.google_places = get_google_places_service()
         self.weather_service = get_weather_service()
-        log_agent_raw("Places Agent v9.4 initialized (scalable pipeline + dedicated nuggets)", agent_name="PlacesAgent")
+        log_agent_raw("Places Agent v9.5 initialized (retry + smart planner)", agent_name="PlacesAgent")
 
     # ─────────────────────────────────────────────────────────────────────
     # STATUS HELPERS
@@ -204,12 +217,48 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
         except (ValueError, AttributeError):
             return 5
 
+    # ─── v9.5: Retry wrapper for transient Google API failures ───────
+    MAX_SEARCH_RETRIES = 2
+    SEARCH_RETRY_DELAY = 1.0  # seconds
+
+    def _search_text_with_retry(self, **kwargs) -> list:
+        """
+        Wrapper around google_places.search_places_by_text() with retry
+        logic for transient 500 errors.
+
+        Google Places API occasionally returns 500 on text search — these
+        are transient and succeed on retry. Without this, ~50% of searches
+        can fail on a bad run, leaving the restaurant/activity pool too small.
+
+        Retries up to MAX_SEARCH_RETRIES times with linear backoff.
+        """
+        import time as _time
+
+        for attempt in range(1 + self.MAX_SEARCH_RETRIES):
+            results = self.google_places.search_places_by_text(**kwargs)
+
+            if results:  # Got results — return immediately
+                return results
+
+            # Empty results could be a 500 or genuinely no matches
+            if attempt < self.MAX_SEARCH_RETRIES:
+                delay = self.SEARCH_RETRY_DELAY * (attempt + 1)  # 1s, 2s
+                query = kwargs.get("query", "?")
+                log_agent_raw(
+                    f"🔄 Text search empty for '{query}' — "
+                    f"retrying in {delay:.0f}s ({attempt + 2}/{1 + self.MAX_SEARCH_RETRIES})",
+                    agent_name="PlacesAgent",
+                )
+                _time.sleep(delay)
+
+        return []
+
     # ─────────────────────────────────────────────────────────────────────
     # MAIN ENTRY POINT
     # ─────────────────────────────────────────────────────────────────────
 
     def generate_reply(self, messages=None, sender=None, config=None) -> str:
-        log_agent_raw("PlacesAgent v9.4 processing request...", agent_name="PlacesAgent")
+        log_agent_raw("PlacesAgent v9.5 processing request...", agent_name="PlacesAgent")
         self._update_weather_status("Initializing weather forecast...")
         self._update_restaurant_status("Initializing restaurant search...")
         self._update_activity_status("Initializing activity search...")
@@ -285,7 +334,7 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
             self._update_activity_status(f"Activity search complete — {len(activities)} options ready")
 
             total_duration = time.time() - start_time
-            log_agent_raw(f"✅ PlacesAgent v9.4 complete in {total_duration:.1f}s (API: {api_duration:.1f}s, LLM: {total_duration - api_duration:.1f}s)", agent_name="PlacesAgent")
+            log_agent_raw(f"✅ PlacesAgent v9.5 complete in {total_duration:.1f}s (API: {api_duration:.1f}s, LLM: {total_duration - api_duration:.1f}s)", agent_name="PlacesAgent")
             self.log_conversation_message(message_type="OUTGOING", content=recommendation, sender="chat_manager", truncate=1000)
             return self.signal_completion(recommendation)
 
@@ -363,6 +412,10 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
             log_agent_raw(f"⚠️ Weather parse error: {e}", agent_name="PlacesAgent")
             return None
 
+    # ─────────────────────────────────────────────────────────────────────
+    # v9.5: RESTAURANT FETCH — retry wrapper + broader backfill
+    # ─────────────────────────────────────────────────────────────────────
+
     async def _fetch_restaurants_async(self, preferences, num_days):
         destination = preferences.destination
         preferred = preferences.restaurant_prefs.preferred_cuisines
@@ -382,28 +435,77 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
             self._update_restaurant_status("Google Places not configured")
             return []
 
+        # ── Preferred cuisines (v9.5: with retry) ────────────────────
         preferred_per = max(3, target_count // max(len(preferred) + len(interested), 1))
         for cuisine in preferred:
             self._update_restaurant_status(f"Searching {cuisine} restaurants in {destination}...")
-            results = self.google_places.search_places_by_text(query=f"{cuisine} restaurant in {destination}", location=destination, included_type="restaurant", min_rating=3.5, max_results=preferred_per, agent_logger=self.logger)
+            results = self._search_text_with_retry(
+                query=f"{cuisine} restaurant in {destination}",
+                location=destination, included_type="restaurant",
+                min_rating=3.5, max_results=preferred_per,
+                agent_logger=self.logger,
+            )
             _add(results, cuisine)
 
+        # ── Interested cuisines (v9.5: with retry) ───────────────────
         interested_per = max(2, preferred_per // 2)
         for cuisine in interested:
             self._update_restaurant_status(f"Searching {cuisine} restaurants in {destination}...")
-            results = self.google_places.search_places_by_text(query=f"{cuisine} restaurant in {destination}", location=destination, included_type="restaurant", min_rating=3.5, max_results=interested_per, agent_logger=self.logger)
+            results = self._search_text_with_retry(
+                query=f"{cuisine} restaurant in {destination}",
+                location=destination, included_type="restaurant",
+                min_rating=3.5, max_results=interested_per,
+                agent_logger=self.logger,
+            )
             _add(results, cuisine)
 
+        # ── Primary backfill (v9.5: with retry) ─────────────────────
         if len(all_results) < target_count:
             shortfall = target_count - len(all_results)
             self._update_restaurant_status(f"Finding {shortfall} more top-rated restaurants...")
-            results = self.google_places.search_places_by_text(query=f"best restaurant in {destination}", location=destination, included_type="restaurant", min_rating=4.0, max_results=shortfall, agent_logger=self.logger)
+            results = self._search_text_with_retry(
+                query=f"best restaurant in {destination}",
+                location=destination, included_type="restaurant",
+                min_rating=4.0, max_results=shortfall,
+                agent_logger=self.logger,
+            )
             _add(results, "General")
+
+        # ── v9.5: Broader backfill when still short (e.g. after 500s) ─
+        if len(all_results) < target_count:
+            shortfall = target_count - len(all_results)
+            log_agent_raw(
+                f"⚠️ Still {shortfall} restaurants short of target {target_count} — "
+                f"trying broader backfill queries",
+                agent_name="PlacesAgent",
+            )
+            # Strip "(CODE)" from destination for cleaner queries
+            clean_dest = re.sub(r'\s*\([A-Z]{3}\)\s*$', '', destination).strip()
+            backfill_queries = [
+                f"popular restaurant in {clean_dest}",
+                f"top rated dining in {clean_dest}",
+                f"restaurant near downtown {clean_dest}",
+            ]
+            for bq in backfill_queries:
+                if len(all_results) >= target_count:
+                    break
+                remaining = target_count - len(all_results)
+                self._update_restaurant_status(f"Backfill: {bq}...")
+                results = self._search_text_with_retry(
+                    query=bq, location=destination, included_type="restaurant",
+                    min_rating=3.5, max_results=min(remaining, 5),
+                    agent_logger=self.logger,
+                )
+                _add(results, "General")
 
         final = all_results[:target_count]
         self._update_restaurant_status(f"Restaurant search done — {len(final)} candidates found")
         log_agent_raw(f"✅ Restaurants: {len(final)} found (target: {target_count})", agent_name="PlacesAgent")
         return final
+
+    # ─────────────────────────────────────────────────────────────────────
+    # v9.5: ACTIVITY FETCH — retry wrapper on all text search calls
+    # ─────────────────────────────────────────────────────────────────────
 
     async def _fetch_activities_async(self, preferences, num_days):
         destination = preferences.destination
@@ -424,18 +526,29 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
             self._update_activity_status("Google Places not configured")
             return []
 
+        # ── Preferred interests (v9.5: with retry) ───────────────────
         preferred_per = max(3, target_count // max(len(preferred) + len(interested), 1))
         for interest in preferred:
             self._update_activity_status(f"Searching {interest} in {destination}...")
-            results = self.google_places.search_places_by_text(query=f"{interest} in {destination}", location=destination, min_rating=3.5, max_results=preferred_per, agent_logger=self.logger)
+            results = self._search_text_with_retry(
+                query=f"{interest} in {destination}",
+                location=destination, min_rating=3.5,
+                max_results=preferred_per, agent_logger=self.logger,
+            )
             _add(results, interest)
 
+        # ── Interested interests (v9.5: with retry) ──────────────────
         interested_per = max(2, preferred_per // 2)
         for interest in interested:
             self._update_activity_status(f"Searching {interest} in {destination}...")
-            results = self.google_places.search_places_by_text(query=f"{interest} in {destination}", location=destination, min_rating=3.5, max_results=interested_per, agent_logger=self.logger)
+            results = self._search_text_with_retry(
+                query=f"{interest} in {destination}",
+                location=destination, min_rating=3.5,
+                max_results=interested_per, agent_logger=self.logger,
+            )
             _add(results, interest)
 
+        # ── Seasonal events (v9.5: with retry) ───────────────────────
         try:
             trip_month = datetime.strptime(preferences.departure_date, "%Y-%m-%d").strftime("%B")
         except (ValueError, AttributeError):
@@ -443,17 +556,25 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
 
         if trip_month:
             self._update_activity_status(f"Searching {trip_month} festivals & events in {destination}...")
-            festival_results = self.google_places.search_places_by_text(query=f"{trip_month} festival event in {destination}", location=destination, min_rating=3.5, max_results=3, agent_logger=self.logger)
+            festival_results = self._search_text_with_retry(
+                query=f"{trip_month} festival event in {destination}",
+                location=destination, min_rating=3.5, max_results=3,
+                agent_logger=self.logger,
+            )
             _add(festival_results, f"{trip_month} Festival/Event")
             if festival_results:
                 log_agent_raw(f"🎉 Found {len(festival_results)} seasonal events for {trip_month}", agent_name="PlacesAgent")
 
+        # ── Nearby category search (unchanged — uses Nearby Search API, not text) ─
         categories = self._determine_categories(preferences)
         non_restaurant = [c for c in categories if c != "restaurants"]
         if non_restaurant and len(all_results) < target_count:
             self._update_activity_status(f"Searching nearby {', '.join(non_restaurant)} within 5km...")
             place_types = list(set(t for cat in non_restaurant for t in self.CATEGORY_TYPES.get(cat, [])))
-            nearby = self.google_places.search_places(location=destination, radius=5000, place_types=place_types, min_rating=3.5, max_results=8, agent_logger=self.logger)
+            nearby = self.google_places.search_places(
+                location=destination, radius=5000, place_types=place_types,
+                min_rating=3.5, max_results=8, agent_logger=self.logger,
+            )
             for ptype, places in nearby.items():
                 for pd in places:
                     pid = pd.get("place_id")
@@ -810,6 +931,7 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
 
     # ─────────────────────────────────────────────────────────────────────
     # PHASE 2a: PLANNER — assign venues to slots
+    # v9.5: Dynamic repeat rules based on pool size
     # ─────────────────────────────────────────────────────────────────────
 
     def _run_planner(self, weather_forecasts, restaurants, activities, trip_days, preferences, num_days):
@@ -817,10 +939,38 @@ day-by-day itineraries combining weather, restaurants, activities, and local eve
         Fast LLM call that assigns venues to day/time slots.
         Output: flat venue names only — Python enriches with type/category.
         ~200 output tokens, ~3-5 seconds.
+
+        v9.5: Dynamic repeat rules — when pool < slots, instructs LLM to
+        spread repeats instead of block-copying day groups.
         """
         rest_lines = [f"  {r.get('name', '?')} [{r.get('cuisine_tag', '?')}]" for r in restaurants]
         act_lines = [f"  {a.get('name', '?')} [{a.get('interest_tag', '?')}, {a.get('venue_type', 'either')}]" for a in activities]
         day_lines = [f"  Day {d['day']} ({d['date']}): {d['weather_class']}" for d in trip_days]
+
+        # ── v9.5: Dynamic repeat rules based on pool size vs slots ────
+        num_restaurant_slots = num_days * 2   # lunch + dinner per day
+        num_activity_slots = num_days * 2     # morning + afternoon per day
+
+        if len(restaurants) >= num_restaurant_slots and len(activities) >= num_activity_slots:
+            repeat_rule = "No repeats — every venue appears only once."
+        else:
+            shortages = []
+            if len(restaurants) < num_restaurant_slots:
+                shortages.append(
+                    f"{len(restaurants)} restaurants for {num_restaurant_slots} restaurant slots"
+                )
+            if len(activities) < num_activity_slots:
+                shortages.append(
+                    f"{len(activities)} activities for {num_activity_slots} activity slots"
+                )
+            repeat_rule = (
+                f"NOTE: Limited pool — {' and '.join(shortages)}. "
+                "Repeats are necessary, but SPREAD them out: "
+                "never repeat a venue on consecutive days, "
+                "use every available venue before repeating any, "
+                "and vary the time slot when repeating "
+                "(e.g. lunch on day 1 → dinner on day 4)."
+            )
 
         prompt = textwrap.dedent(f"""\
 Assign venues for a {num_days}-day trip to {preferences.destination}.
@@ -832,7 +982,8 @@ RESTAURANTS: {chr(10).join(rest_lines)}
 ACTIVITIES: {chr(10).join(act_lines)}
 
 RULES: 4 slots/day: morning=activity, lunch=restaurant, afternoon=activity, dinner=restaurant.
-EXACT names only. Rotate cuisines. Indoor activities on indoor days. No repeats.
+EXACT names only. Rotate cuisines. Indoor activities on indoor days.
+{repeat_rule}
 Preferred: {', '.join(preferences.restaurant_prefs.preferred_cuisines)} cuisines, {', '.join(preferences.activity_prefs.preferred_interests)} activities.
 
 Return JSON: {{"days":[{{"day":1,"date":"YYYY-MM-DD","morning":"venue","lunch":"venue","afternoon":"venue","dinner":"venue"}}]}}""")
