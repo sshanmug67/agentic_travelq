@@ -14,10 +14,19 @@ import { useItinerary } from '../../hooks/useItinerary';
 
 interface TripSummaryBarProps {
   onPlanTrip?: () => void;
-  isPlanning?: boolean;
+  planningStatus?: 'idle' | 'planning' | 'completed' | 'failed';
+  isPlanningCollapsed?: boolean;
+  onToggleCollapse?: () => void;
+  hasResults?: boolean;
 }
 
-export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ onPlanTrip, isPlanning = false }) => {
+export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({
+  onPlanTrip,
+  planningStatus = 'idle',
+  isPlanningCollapsed = false,
+  onToggleCollapse,
+  hasResults = false,
+}) => {
   const { tripData, setTripData, resetTrip } = useTripData();
   const { clearItinerary, budget, setBudget } = useItinerary();
 
@@ -180,36 +189,61 @@ export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ onPlanTrip, isPl
               </InlineEdit>
             </div>
 
-            {/* ── Plan My Trip button ── */}
-            {onPlanTrip && (
-              <button onClick={onPlanTrip} disabled={isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate}
-                style={{
-                  padding: '9px 24px', borderRadius: 14, border: 'none', flexShrink: 0,
-                  background: (isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate)
-                    ? '#D1D5DB' : 'linear-gradient(135deg, #8B5CF6, #EC4899, #F97316)',
-                  backgroundSize: '200% 100%',
-                  color: 'white', fontSize: 13, fontWeight: 700,
-                  cursor: (isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate) ? 'not-allowed' : 'pointer',
-                  boxShadow: (isPlanning || !tripData.destination || !tripData.startDate || !tripData.endDate) ? 'none' : '0 4px 16px -2px rgba(139,92,246,0.35)',
-                  display: 'flex', alignItems: 'center', gap: 7,
-                  transition: 'all 0.3s',
-                }}>
-                {isPlanning ? (
-                  <>
-                    <span style={{ display: 'inline-block', width: 14, height: 14, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'planSpin 0.8s linear infinite' }} />
-                    Planning...
-                  </>
-                ) : (
-                  <>🚀 Plan My Trip</>
-                )}
-              </button>
-            )}
+            {/* ── Plan My Trip + Preferences toggle ── */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+              {/* Plan button — shows spinner when planning */}
+              {onPlanTrip && (
+                <button onClick={onPlanTrip} disabled={planningStatus === 'planning' || !tripData.destination || !tripData.startDate || !tripData.endDate}
+                  style={{
+                    padding: '9px 22px', borderRadius: 14, border: 'none',
+                    background: (planningStatus === 'planning')
+                      ? 'linear-gradient(135deg, #6c5ce7, #a855f7)'
+                      : (!tripData.destination || !tripData.startDate || !tripData.endDate)
+                        ? '#D1D5DB'
+                        : 'linear-gradient(135deg, #8B5CF6, #EC4899, #F97316)',
+                    backgroundSize: '200% 100%',
+                    color: 'white', fontSize: 13, fontWeight: 700,
+                    cursor: (planningStatus === 'planning' || !tripData.destination || !tripData.startDate || !tripData.endDate) ? 'not-allowed' : 'pointer',
+                    boxShadow: (planningStatus === 'planning' || !tripData.destination || !tripData.startDate || !tripData.endDate) ? 'none' : '0 4px 16px -2px rgba(139,92,246,0.35)',
+                    display: 'flex', alignItems: 'center', gap: 7, transition: 'all 0.3s',
+                  }}>
+                  {planningStatus === 'planning' ? (
+                    <>
+                      <span style={{ display: 'inline-block', width: 14, height: 14, border: '2.5px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'planSpin 0.8s linear infinite' }} />
+                      Planning…
+                    </>
+                  ) : (
+                    <>🚀 Plan My Trip</>
+                  )}
+                </button>
+              )}
+
+              {/* Preferences expand/collapse toggle — only shown when results exist */}
+              {onToggleCollapse && hasResults && (
+                <button onClick={onToggleCollapse} style={{
+                  padding: '8px 10px', borderRadius: 10, border: '1.5px solid rgba(139,92,246,0.15)',
+                  background: isPlanningCollapsed ? 'rgba(139,92,246,0.08)' : 'rgba(139,92,246,0.04)',
+                  cursor: 'pointer', fontSize: 11, fontWeight: 600,
+                  display: 'flex', alignItems: 'center', gap: 4,
+                  color: '#7C3AED', transition: 'all 0.2s',
+                }} title={isPlanningCollapsed ? 'Show preferences & agent feed' : 'Hide preferences & agent feed'}>
+                  <span style={{ fontSize: 13 }}>⚙️</span>
+                  <span style={{ fontSize: 9, transition: 'transform 0.2s', transform: isPlanningCollapsed ? 'rotate(0deg)' : 'rotate(180deg)' }}>▼</span>
+                </button>
+              )}
+            </div>
 
             {/* ── Right icons ── */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-              <button style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>🔔</button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              <button style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Notifications">🔔</button>
+              <button style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Settings" onClick={() => alert('Settings coming soon!')}>⚙️</button>
               <div style={{ position: 'relative' }}>
-                <button onClick={() => setShowTripMenu(!showTripMenu)} style={{ width: 36, height: 36, borderRadius: 12, background: 'rgba(139,92,246,0.08)', border: 'none', cursor: 'pointer', fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Settings">⚙️</button>
+                <button onClick={() => setShowTripMenu(!showTripMenu)} style={{
+                  width: 36, height: 36, borderRadius: 12, border: 'none', cursor: 'pointer', fontSize: 18,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  background: showTripMenu ? 'rgba(139,92,246,0.15)' : 'rgba(139,92,246,0.08)',
+                  color: '#6B7280', fontWeight: 700, transition: 'background 0.2s',
+                }} title="Menu">☰</button>
                 {showTripMenu && (
                   <div style={{ position: 'absolute', right: 0, top: 42, width: 200, background: 'white', borderRadius: 14, boxShadow: '0 8px 32px rgba(0,0,0,0.12)', border: '1px solid #E2E8F0', padding: 6, zIndex: 100 }}>
                     {[
@@ -226,7 +260,6 @@ export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ onPlanTrip, isPl
                   </div>
                 )}
               </div>
-              <div style={{ width: 36, height: 36, borderRadius: 12, background: 'linear-gradient(135deg, #8B5CF6, #EC4899)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 700, fontSize: 14, cursor: 'pointer' }}>J</div>
             </div>
           </div>
 
