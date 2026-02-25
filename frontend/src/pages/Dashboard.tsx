@@ -262,7 +262,6 @@ export const Dashboard: React.FC = () => {
   const agents = pollData?.agents || {};
   const completedCount = Object.values(agents).filter((s) => s === 'completed').length;
   const totalAgents = Object.keys(agents).length || 6;
-  const progressPercent = totalAgents > 0 ? (completedCount / totalAgents) * 100 : 0;
   const isComplete = pollData?.status === 'completed';
   const isFailed = pollData?.status === 'failed';
   const showProgressBar = isPlanning || isComplete || isFailed;
